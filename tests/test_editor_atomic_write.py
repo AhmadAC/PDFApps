@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication  # noqa: E402
-_app = QApplication.instance() or QApplication([])
+_unused_app = QApplication.instance() or QApplication([])
 
 pymupdf = pytest.importorskip("pymupdf")
 fitz = pymupdf
