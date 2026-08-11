@@ -102,6 +102,70 @@ def test_default_leaves_writer_open_for_base_tools(tmp_path: Path):
         doc.close()
 
 
+# ── close-before-replace ORDERING (the Windows overwrite invariant) ──────
+#
+# The two tests above only inspect ``doc.is_closed`` AFTER the helper
+# returns. That cannot distinguish the correct save→close→replace order
+# from a regression that moved ``writer.close()`` to AFTER ``os.replace``:
+# in both cases the doc ends up closed on return. On Windows the editor
+# overwrites the very file it has open, so the handle MUST be released
+# before the rename or ``os.replace`` raises a sharing violation — but on
+# POSIX (the CI) that reorder is silent and would slip through.
+#
+# These tests pin the ordering PORTABLY by probing the writer's state at
+# the instant ``os.replace`` fires: we monkeypatch the ``os.replace`` that
+# ``app.pdf_io`` actually calls with a spy that records ``doc.is_closed``
+# as it runs, then delegates to the real rename so the write still lands.
+
+
+def test_close_writer_true_closes_doc_before_os_replace(tmp_path: Path,
+                                                        monkeypatch):
+    """close_writer=True: the fitz handle is already released at the exact
+    moment os.replace is invoked. Falsifies a save→replace→close reorder,
+    which would observe an OPEN doc here and fail the assertion (while the
+    weaker 'closed on return' test would still pass)."""
+    out = tmp_path / "out.pdf"
+    doc = _make_doc()
+
+    real_replace = os.replace
+    seen: dict = {}
+
+    def _spy(src, dst):
+        seen["closed_at_replace"] = doc.is_closed
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _spy)
+    atomic_pdf_write(doc, str(out), save_opts=_plain_opts(), close_writer=True)
+
+    assert seen["closed_at_replace"] is True   # closed BEFORE the rename
+    assert out.exists()                         # rename still completed
+
+
+def test_default_leaves_writer_open_at_os_replace(tmp_path: Path,
+                                                  monkeypatch):
+    """The inverse contract: with close_writer omitted (BasePage default)
+    the writer is STILL OPEN when os.replace fires — tool pages own the
+    doc's lifetime. Probed at the same instant so the pair fixes the exact
+    relationship between close_writer and the handle state at the rename."""
+    out = tmp_path / "out.pdf"
+    doc = _make_doc()
+
+    real_replace = os.replace
+    seen: dict = {}
+
+    def _spy(src, dst):
+        seen["closed_at_replace"] = doc.is_closed
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _spy)
+    try:
+        atomic_pdf_write(doc, str(out), save_opts=_plain_opts())
+        assert seen["closed_at_replace"] is False  # still open at the rename
+        assert out.exists()
+    finally:
+        doc.close()
+
+
 # ── AES-256 re-encryption (the encrypted editor path) ────────────────────
 
 
