@@ -141,11 +141,15 @@ def test_pipeline_save_logs_symlink_destination():
 
 def test_update_check_deferred_post_init():
     src = _read("app/window.py")
-    # The bare self._check_for_updates_async() call inside __init__ is
-    # replaced by a QTimer.singleShot.
-    init_block = src.split("self._update_release = None")[1].split("# ── Viewer property")[0]
+    # The bare update check inside __init__ is deferred via QTimer.singleShot.
+    # R4: the check moved behind self._update_controller.check_async(); the
+    # deferral wiring stays in MainWindow.__init__.
+    init_block = src.split("self._update_controller = UpdateController")[1].split("# ── Viewer property")[0]
     assert "QTimer.singleShot" in init_block, (
         "Update check must be deferred via QTimer.singleShot from __init__."
+    )
+    assert "self._update_controller.check_async()" in init_block, (
+        "The deferred call must go through the UpdateController."
     )
     # And guarded with isValid so a quick close won't crash.
     assert "isValid(self)" in init_block

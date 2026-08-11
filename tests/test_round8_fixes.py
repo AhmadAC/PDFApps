@@ -52,21 +52,34 @@ def test_encrypt_clears_password_fields():
 
 
 def test_update_worker_release_helper_exists():
-    src = _read("app/window.py")
-    assert "_release_update_worker" in src
-    # Both _on_update_found and closeEvent must invoke the helper.
-    assert src.count("_release_update_worker()") >= 2, (
-        "expected _release_update_worker to be called from both "
-        "_on_update_found and closeEvent")
-    assert "worker.deleteLater()" in src
+    # R4: the update subsystem moved to app/update_controller.py. The
+    # teardown helper (renamed release_worker) must still be invoked from
+    # BOTH the happy path (_on_update_found, now in the controller) and the
+    # shutdown path (MainWindow.closeEvent), and must deleteLater the worker.
+    ctrl = _read("app/update_controller.py")
+    assert "def release_worker" in ctrl
+    # Happy path: _on_update_found tears the worker down.
+    on_found = ctrl[ctrl.find("def _on_update_found"):
+                    ctrl.find("def release_worker")]
+    assert "self.release_worker()" in on_found, (
+        "expected _on_update_found to call release_worker (happy path)")
+    assert "worker.deleteLater()" in ctrl
+    # Shutdown path: closeEvent tears the worker down via the controller.
+    win = _read("app/window.py")
+    assert "self._update_controller.release_worker()" in win, (
+        "expected closeEvent to call the controller's release_worker")
 
 
 def test_update_ready_signal_removed():
-    src = _read("app/window.py")
-    assert "_update_ready = Signal()" not in src, (
-        "_update_ready was declared but never emitted — should be gone")
-    assert "self._update_ready.connect" not in src
-    assert "self._update_ready.emit" not in src
+    # The dead _update_ready signal must not resurface in either the window
+    # or the extracted update controller.
+    for rel in ("app/window.py", "app/update_controller.py"):
+        src = _read(rel)
+        assert "_update_ready = Signal()" not in src, (
+            f"_update_ready was declared but never emitted in {rel} — "
+            "should be gone")
+        assert "self._update_ready.connect" not in src
+        assert "self._update_ready.emit" not in src
 
 
 # ── R8-M1 ────────────────────────────────────────────────────────────────
