@@ -128,7 +128,12 @@ def test_atomic_write_uses_os_replace(tmp_path: Path, monkeypatch: pytest.Monkey
         calls.append((a, b))
         return real_replace(a, b)
 
-    monkeypatch.setattr("app.base.os.replace", spy)
+    # R3: the atomic-rename logic moved from BasePage into the low-level
+    # app.pdf_io module (BasePage._atomic_pdf_write now delegates to it),
+    # so os.replace runs in the pdf_io namespace. Patch it there — the
+    # assertion is otherwise unchanged: calling BasePage._atomic_pdf_write
+    # must still ultimately invoke os.replace for the atomic rename.
+    monkeypatch.setattr("app.pdf_io.os.replace", spy)
     BasePage._atomic_pdf_write(w, str(dst), sources=[str(src)])
     assert calls, "os.replace was not called — the rename isn't atomic"
     assert calls[-1][1] == str(dst)
