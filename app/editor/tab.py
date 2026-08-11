@@ -25,6 +25,7 @@ from app.widgets import DropFileEdit, ColorPickerButton
 from app.editor.canvas import PdfEditCanvas, _get_icon_cursor
 from app.editor.dialogs import _NoteDialog
 from app.editor.apply_edits import apply_pending_edits
+from app.pdf_io import atomic_pdf_write
 
 
 _log = logging.getLogger(__name__)
@@ -1266,37 +1267,39 @@ class TabEditar(QWidget):
             # unexplained illegibly-shrunk line.
             _apply_result = apply_pending_edits(doc, self._pending)
             text_fit_warnings = _apply_result.text_fit_warnings
-            fd, tmp = tempfile.mkstemp(prefix=".pdfapps_save_", suffix=".pdf",
-                                       dir=os.path.dirname(out) or ".")
-            os.close(fd)
-            try:
-                if encrypt_choice == "protect" and self._pdf_password:
-                    # Documented limitation: owner_pw == user_pw because we
-                    # only captured a single password from the load prompt
-                    # — the original owner password is not recoverable from
-                    # the input file. Future enhancement: ask the user for
-                    # a separate owner password.
-                    # ``_fitz_permissions_of`` already returns -1 on any
-                    # internal failure (PyMuPDF sentinel for "all perms"),
-                    # so a wrapping try/except here would be dead code.
-                    perms = self._fitz_permissions_of(doc)
-                    doc.save(
-                        tmp, garbage=4, deflate=True,
-                        encryption=fitz.PDF_ENCRYPT_AES_256,
-                        user_pw=self._pdf_password,
-                        owner_pw=self._pdf_password,
-                        permissions=perms,
-                    )
-                    _log.info(
-                        "Re-encrypted output with user password as owner")
-                else:
-                    doc.save(tmp, garbage=4, deflate=True)
-                doc.close()
-                os.replace(tmp, out)
-            except Exception:
-                try: os.unlink(tmp)
-                except OSError: pass
-                raise
+            # Atomic save via the shared low-level writer (R3): the exact
+            # tempfile + os.replace path every BasePage tool already uses,
+            # reused here instead of a duplicated mkstemp/save/replace
+            # block. ``close_writer=True`` preserves the editor's original
+            # save→close→replace ordering — ``doc`` was opened from
+            # ``self._doc_path`` so on Windows its handle must be released
+            # before the rename (the user may be overwriting the input).
+            # ``save_opts`` is built with ``dict(...)`` so the encryption
+            # kwargs (encryption=…, user_pw=…, owner_pw=…) read exactly as
+            # the direct ``doc.save`` call did before.
+            reencrypt = bool(encrypt_choice == "protect" and self._pdf_password)
+            if reencrypt:
+                # Documented limitation: owner_pw == user_pw because we
+                # only captured a single password from the load prompt
+                # — the original owner password is not recoverable from
+                # the input file. Future enhancement: ask the user for
+                # a separate owner password.
+                # ``_fitz_permissions_of`` already returns -1 on any
+                # internal failure (PyMuPDF sentinel for "all perms"),
+                # so a wrapping try/except here would be dead code.
+                perms = self._fitz_permissions_of(doc)
+                save_opts = dict(
+                    garbage=4, deflate=True,
+                    encryption=fitz.PDF_ENCRYPT_AES_256,
+                    user_pw=self._pdf_password,
+                    owner_pw=self._pdf_password,
+                    permissions=perms,
+                )
+            else:
+                save_opts = dict(garbage=4, deflate=True)
+            atomic_pdf_write(doc, out, save_opts=save_opts, close_writer=True)
+            if reencrypt:
+                _log.info("Re-encrypted output with user password as owner")
             self._pending.clear(); self._pending_list.clear()
             self._status(t("edit.status.saved", path=out))
             if text_fit_warnings:

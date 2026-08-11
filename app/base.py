@@ -1,6 +1,5 @@
 """PDFApps – BasePage: standard page layout (header + scroll + action bar)."""
 
-import contextlib
 import os
 import subprocess
 import sys
@@ -13,6 +12,7 @@ from shiboken6 import isValid
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFileDialog,
                                QPushButton, QLabel)
 
+from app import pdf_io
 from app.constants import DESKTOP, ACCENT
 from app.i18n import t
 from app.utils import ToolHeader, ActionBar, scrolled, _paint_bg
@@ -413,19 +413,15 @@ class BasePage(QWidget):
         input and output, opening the output for writing truncates the
         input before the writer's lazy stream reads complete and we
         get silent dataloss + corrupted output.
+
+        Thin wrapper around :func:`app.pdf_io.check_not_same_path`
+        (R3): the logic now lives in the low-level ``pdf_io`` module so
+        the visual editor can reuse the exact same guard without
+        importing this Qt-heavy page base. Kept as a ``@staticmethod``
+        so ``BasePage._check_not_same_path`` / ``self._check_not_same_path``
+        call sites and the unit tests stay unchanged.
         """
-        try:
-            dst_real = os.path.realpath(dst)
-        except OSError:
-            return
-        for src in (sources or ()):
-            if not src:
-                continue
-            try:
-                if os.path.realpath(src) == dst_real:
-                    raise RuntimeError(t("tool.err.same_source_output"))
-            except OSError:
-                continue
+        pdf_io.check_not_same_path(dst, sources)
 
     @staticmethod
     def _atomic_pdf_write(writer, dst: str, *,
@@ -433,11 +429,15 @@ class BasePage(QWidget):
                           save_opts: "dict | None" = None) -> None:
         """Write a PdfWriter (pypdf) or fitz.Document to ``dst`` atomically.
 
-        Two defensive layers fix the silent dataloss bug where opening
-        ``open(dst, "wb")`` truncates the input file BEFORE the writer's
-        lazy stream reads complete (PdfWriter holds references into
-        the PdfReader; same applies to fitz.Document.save() with
-        incremental flags).
+        Thin wrapper around :func:`app.pdf_io.atomic_pdf_write` (R3):
+        the tempfile + ``os.replace`` + same-source-guard logic now
+        lives in the low-level ``pdf_io`` module so ``TabEditar._run``
+        reuses the identical write path instead of duplicating it.
+        Kept as a ``@staticmethod`` with the same signature so the
+        ~20 ``self._atomic_pdf_write`` / ``BasePage._atomic_pdf_write``
+        call sites and the regression tests are untouched.
+
+        The two defensive layers are unchanged:
 
         1. Reject up-front if ``dst`` resolves to any path in
            ``sources`` (via ``os.path.realpath``) — this catches the
@@ -449,44 +449,17 @@ class BasePage(QWidget):
 
         ``writer`` may be a pypdf ``PdfWriter`` (uses ``writer.write(fh)``)
         or a PyMuPDF ``fitz.Document`` (uses ``writer.save(tmp)``).
-        Anything else with a ``.write(fh)`` method is accepted.
+        Anything else with a ``.write(fh)`` method is accepted. The
+        writer is left OPEN (BasePage tools never save back onto the
+        input handle); the editor opts into ``close_writer`` directly
+        via ``pdf_io.atomic_pdf_write``.
 
         Raises :class:`RuntimeError` with a translated message when the
         same-source check fails; the caller's existing ``show_error``
         path surfaces it as a friendly dialog.
         """
-        BasePage._check_not_same_path(dst, sources)
-
-        dst_dir = os.path.dirname(dst) or os.getcwd()
-        # mkstemp returns an OS-level fd; close via os.fdopen so the
-        # writer can stream into it. Same-volume placement guarantees
-        # os.replace() stays atomic.
-        fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=dst_dir)
-        # Detect fitz.Document via its module to avoid importing fitz
-        # at base.py load time (every page imports BasePage). Modern
-        # PyMuPDF reports module="pymupdf"; legacy versions used "fitz".
-        # Both expose Document.save(path, ...).
-        writer_mod = type(writer).__module__
-        is_fitz_doc = (writer_mod.startswith("pymupdf")
-                       or writer_mod.startswith("fitz")) and hasattr(writer, "save")
-        try:
-            if is_fitz_doc:
-                # fitz.Document.save(path, ...) accepts a filesystem
-                # path and writes through cleanly. We close the fd
-                # we opened first so save() can take exclusive access.
-                os.close(fd)
-                writer.save(tmp, **(save_opts or {}))
-            else:
-                # pypdf.PdfWriter (and anything else with .write(fh))
-                # streams into the open file handle.
-                with os.fdopen(fd, "wb") as fh:
-                    writer.write(fh)
-            os.replace(tmp, dst)
-        except Exception:
-            with contextlib.suppress(Exception):
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-            raise
+        pdf_io.atomic_pdf_write(writer, dst, sources=sources,
+                                save_opts=save_opts)
 
     # ── background-task helper ────────────────────────────────────────────
 
