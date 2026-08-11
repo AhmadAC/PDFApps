@@ -572,13 +572,13 @@ class UpdateDialog(QDialog):
         self._signals.cancelled.connect(self._dl_thread.quit)
         # Explicit cleanup so retries within the same dialog (e.g. after
         # an error toast) don't leak QThread and _Worker objects. Mirrors
-        # the pattern in window.py:_update_thread.finished -> deleteLater.
+        # the pattern in update_controller.py:_update_thread.finished -> deleteLater.
         self._dl_thread.finished.connect(self._dl_thread.deleteLater)
         # Root-cause fix for the dangling-wrapper bug: once the thread is
         # done (success, error OR cancel) drop our Python reference so the
         # pending deleteLater can free the C++ object without leaving
         # reject()/closeEvent holding a stale wrapper. Mirrors the
-        # _release_update_worker pattern in window.py.
+        # release_worker pattern in update_controller.py.
         self._dl_thread.finished.connect(self._on_dl_thread_finished)
         self._signals.finished.connect(self._dl_worker.deleteLater)
         self._signals.error.connect(self._dl_worker.deleteLater)

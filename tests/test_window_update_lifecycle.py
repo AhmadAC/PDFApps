@@ -34,13 +34,16 @@ def _read(rel: str) -> str:
 # ── M5: _notify_update None-guard ──────────────────────────────────────
 
 
-class _StubWindow:
+class _StubController:
     """Minimal stand-in exposing only the attribute the guard reads.
 
     Deliberately lacks _update_btn: pre-fix, _notify_update touched
     self._update_btn.setVisible() and self._update_release.get() with
     _update_release=None, so calling the unbound method on this stub would
-    raise. Post-fix the guard returns before any of that runs."""
+    raise. Post-fix the guard returns before any of that runs.
+
+    The R4 refactor moved _notify_update from MainWindow to
+    UpdateController; the None-guard invariant is unchanged."""
 
     def __init__(self):
         self._update_release = None
@@ -49,16 +52,16 @@ class _StubWindow:
 def test_notify_update_returns_when_release_none():
     """M5: _notify_update must return without raising when
     _update_release is None (worker torn down mid-flight)."""
-    from app.window import MainWindow
-    stub = _StubWindow()
+    from app.update_controller import UpdateController
+    stub = _StubController()
     # Must not raise AttributeError — the guard short-circuits.
-    assert MainWindow._notify_update(stub) is None
+    assert UpdateController._notify_update(stub) is None
 
 
 def test_notify_update_has_none_guard_in_source():
-    src = _read("app/window.py")
+    src = _read("app/update_controller.py")
     body = src[src.find("def _notify_update"):
-               src.find("def _show_update_dialog")]
+               src.find("def show_update_dialog")]
     assert "if not self._update_release:" in body, \
         "_notify_update must guard against a None _update_release (M5)"
 
@@ -77,8 +80,9 @@ def test_check_for_update_accepts_cancel_holder():
 
 
 def test_async_check_threads_cancel_holder_into_worker():
-    src = _read("app/window.py")
-    body = src[src.find("def _check_for_updates_async"):
+    # R4: the async check moved to UpdateController.check_async.
+    src = _read("app/update_controller.py")
+    body = src[src.find("def check_async"):
                src.find("def _on_update_found")]
     assert 'self._update_cancel = {"resp": None}' in body, \
         "the async check must create a shared cancel holder"
@@ -87,11 +91,12 @@ def test_async_check_threads_cancel_holder_into_worker():
 
 
 def test_release_update_worker_aborts_and_terminates():
-    """M4: _release_update_worker must (1) close the in-flight response,
+    """M4: release_worker must (1) close the in-flight response,
     (2) wait longer than the urlopen timeout, and (3) terminate() as a
     last resort so a running QThread is never destroyed."""
-    src = _read("app/window.py")
-    body = src[src.find("def _release_update_worker"):
+    # R4: the teardown moved to UpdateController.release_worker.
+    src = _read("app/update_controller.py")
+    body = src[src.find("def release_worker"):
                src.find("def _notify_update")]
     # (1) abort the blocked read
     assert "resp.close()" in body, \
