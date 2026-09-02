@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFileDialog,
 from app import pdf_io
 from app.constants import DESKTOP, ACCENT
 from app.i18n import t
-from app.utils import ToolHeader, ActionBar, scrolled, _paint_bg
+from app.utils import (ToolHeader, ActionBar, scrolled, _paint_bg,
+                       WrongPasswordError)
 
 # Iterable is referenced via string-typed annotations in
 # _atomic_pdf_write / _check_not_same_path; keep it importable so
@@ -302,24 +303,6 @@ class BasePage(QWidget):
 
     # ── encrypted-PDF helpers ──────────────────────────────────────────────
 
-    @staticmethod
-    def _nfc(pwd: str) -> str:
-        """Return the NFC-normalized form of ``pwd`` (R6 C1).
-
-        Thin compatibility wrapper that now delegates to
-        :func:`app.utils.normalize_password` so the codebase has a
-        single source of truth for password normalisation (the R11
-        review of PR-H flagged that tools reading ``self._pdf_password``
-        directly bypassed the per-helper normalisation). Kept around so
-        BasePage subclasses calling ``self._nfc(...)`` keep working,
-        but new code should normalise at the WRITE site of the cache
-        (see PdfViewerPanel / EditorTab._load_pdf) so every consumer
-        — including the ~30 ``self._pdf_password`` reads across
-        ``tools/*.py`` — receives a deterministic value.
-        """
-        from app.utils import normalize_password
-        return normalize_password(pwd)
-
     def _maybe_prompt_password(self, path: str) -> bool:
         """If the PDF at `path` is encrypted, prompt the user; on success
         store the password on `self._pdf_password` and return True. Plain
@@ -328,7 +311,26 @@ class BasePage(QWidget):
 
         If a password is already stored (e.g. propagated from the viewer
         in compact mode), it is tried silently first. Only if it fails
-        is the user prompted."""
+        is the user prompted.
+
+        The value stored is the exact candidate spelling that
+        authenticated (see :mod:`app.pdf_password`); it is never
+        canonicalised. Normalising it here is what used to make every
+        tool reject a password the viewer had just accepted.
+
+        Post-condition relied on elsewhere: on ``True``,
+        ``self._pdf_password`` is a spelling that opens *this* file, so
+        the ~20 bare ``doc.authenticate(self._pdf_password)`` /
+        ``reader.decrypt(...)`` calls downstream (convert, ocr, nup,
+        page_numbers, the editor and viewer canvases, the thumbnail
+        worker, presentation mode) need no candidate expansion of their
+        own. That only holds while this method — or an equivalent
+        re-anchor such as :func:`app.pdf_password.resolve_file_password`
+        — runs upstream of them on the same path. A new load path that
+        stores a raw typed password without re-anchoring silently
+        reintroduces the original bug at every one of those sites.
+        """
+        from app.pdf_password import authenticate_fitz
         try:
             import fitz
             doc = fitz.open(path)
@@ -338,47 +340,59 @@ class BasePage(QWidget):
             if not doc.needs_pass:
                 self._pdf_password = ""
                 return True
-            if self._pdf_password and doc.authenticate(self._nfc(self._pdf_password)):
-                return True
+            if self._pdf_password:
+                winner = authenticate_fitz(doc, self._pdf_password)
+                if winner is not None:
+                    # Re-anchor the cache on the spelling that worked so
+                    # the ~30 raw ``self._pdf_password`` reads under
+                    # tools/ and the render jobs all hash the same bytes.
+                    self._pdf_password = winner
+                    return True
         finally:
             doc.close()
-        from app.utils import prompt_pdf_password, normalize_password
+        from app.utils import prompt_pdf_password
         ok, pwd = prompt_pdf_password(path, self)
         if not ok:
             return False
-        # NFC-normalise at WRITE time so every downstream consumer
-        # (tools/* that read self._pdf_password directly, plus the
-        # _open_reader / _open_fitz helpers) sees a deterministic
-        # value. R11 review C2 — see utils.normalize_password.
-        self._pdf_password = normalize_password(pwd)
+        self._pdf_password = pwd
         return True
 
     def _open_reader(self, path: str):
         """Open a pypdf PdfReader, decrypting with the stored password if
         the file is encrypted.
 
-        The cached password is NFC-normalized before being passed to
-        :meth:`pypdf.PdfReader.decrypt`. See :meth:`_nfc` for the
-        rationale (R6 C1).
+        The cached password is expanded into candidate spellings and each
+        one is offered to :meth:`pypdf.PdfReader.decrypt` as raw UTF-8
+        ``bytes`` first — pypdf's ``bytes`` branch skips its SASLprep /
+        Latin-1 encoding, which is what makes this agree byte-for-byte
+        with :meth:`_open_fitz`. See :mod:`app.pdf_password`.
+
+        Deliberately does *not* write the winning candidate back to
+        ``self._pdf_password``: this runs inside ``_run_background``
+        workers, and re-expanding a handful of candidates is cheaper than
+        making the cache attribute a cross-thread mutable.
         """
+        from app.pdf_password import decrypt_pypdf
         from pypdf import PdfReader
         r = PdfReader(path)
         if r.is_encrypted and self._pdf_password:
             # R11-M4: pypdf returns 0 on a wrong password and silently
             # exposes a reader with zero accessible pages — every
             # downstream tool then writes an empty PDF. Raise instead.
-            if r.decrypt(self._nfc(self._pdf_password)) == 0:
-                raise ValueError(t("tool.err.wrong_password"))
+            if decrypt_pypdf(r, self._pdf_password) is None:
+                raise WrongPasswordError(t("tool.err.wrong_password"))
         return r
 
     def _open_fitz(self, path: str):
         """Open a PyMuPDF Document, authenticating with the stored
         password if needed.
 
-        The cached password is NFC-normalized before being passed to
-        :meth:`fitz.Document.authenticate`. See :meth:`_nfc` for the
-        rationale (R6 C1).
+        Same candidate expansion as :meth:`_open_reader`, and the same
+        no-writeback rule. MuPDF hashes the raw UTF-8 bytes of the string
+        for R>=5, so passing the candidate ``str`` here and its
+        ``.encode("utf-8")`` there feeds both engines identical bytes.
         """
+        from app.pdf_password import authenticate_fitz
         import fitz
         doc = fitz.open(path)
         if doc.needs_pass and self._pdf_password:
@@ -386,8 +400,8 @@ class BasePage(QWidget):
             # wrong password and leaves the document locked — mirror
             # _open_reader and raise instead of handing back a Document
             # whose pages can't be read.
-            if not doc.authenticate(self._nfc(self._pdf_password)):
-                raise ValueError(t("tool.err.wrong_password"))
+            if authenticate_fitz(doc, self._pdf_password) is None:
+                raise WrongPasswordError(t("tool.err.wrong_password"))
         return doc
 
     def _clear_pdf_password(self) -> None:

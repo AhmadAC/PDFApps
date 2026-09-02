@@ -148,9 +148,12 @@ def test_watermark_prompts_for_encrypted_wm():
     src = _read("app/tools/watermark.py")
     assert "_prompt_watermark_password" in src
     assert "prompt_pdf_password" in src
-    # Worker decrypts the watermark reader with the prompted password
+    # Worker decrypts the watermark reader with the prompted password.
+    # Via decrypt_pypdf since the Unicode-password fix: a raw
+    # PdfReader.decrypt(str) makes pypdf SASLprep the password while the
+    # prompt validated it against MuPDF, which does not normalise.
     assert "wm.is_encrypted" in src
-    assert "wm.decrypt(wm_pwd)" in src
+    assert "decrypt_pypdf(wm, wm_pwd)" in src
 
 
 # ── R8 bonus #7 — TOC try/except ─────────────────────────────────────────

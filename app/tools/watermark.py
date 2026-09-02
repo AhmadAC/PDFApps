@@ -10,7 +10,9 @@ from pypdf import PdfReader, PdfWriter
 
 from app.base import BasePage
 from app.i18n import t
-from app.utils import section, info_lbl, parse_pages, show_error
+from app.pdf_password import decrypt_pypdf
+from app.utils import (section, info_lbl, parse_pages, show_error,
+                       WrongPasswordError)
 from app.constants import DESKTOP
 from app.widgets import DropFileEdit
 
@@ -92,6 +94,12 @@ class TabMarcaDagua(BasePage):
         Kept separate from ``self._pdf_password`` (which holds the
         *source* PDF's password) so a corporate stamp PDF and the user's
         own document don't leak credentials into one another.
+
+        This was historically the only password call site that did *not*
+        NFC-normalise, and therefore the only accidentally-correct one.
+        It now gets the winning candidate spelling from
+        ``prompt_pdf_password`` for the same reason: it must stay
+        byte-exact. Do not add normalisation here.
         """
         from app.utils import prompt_pdf_password
         ok, pwd = prompt_pdf_password(wm_path, self)
@@ -127,8 +135,8 @@ class TabMarcaDagua(BasePage):
                 # R11-M4: wrong password yields a reader with zero
                 # accessible pages — caught below, but a clearer error
                 # helps users distinguish "wrong pwd" from "empty WM".
-                if wm_reader.decrypt(wm_pwd) == 0:
-                    raise ValueError(t("tool.err.wrong_password"))
+                if decrypt_pypdf(wm_reader, wm_pwd) is None:
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             if not wm_reader.pages:
                 QMessageBox.warning(self, t("msg.warning"), t("tool.watermark.empty_wm"))
                 return
@@ -151,12 +159,12 @@ class TabMarcaDagua(BasePage):
             if r.is_encrypted and pwd:
                 # R11-M4: same guard as pre-flight; defence in depth in
                 # case the password gets cleared between checks.
-                if r.decrypt(pwd) == 0:
-                    raise ValueError(t("tool.err.wrong_password"))
+                if decrypt_pypdf(r, pwd) is None:
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             wm = PdfReader(wm_path)
             if wm.is_encrypted and wm_pwd:
-                if wm.decrypt(wm_pwd) == 0:
-                    raise ValueError(t("tool.err.wrong_password"))
+                if decrypt_pypdf(wm, wm_pwd) is None:
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             wm_page = wm.pages[0]
             w = PdfWriter()
             n = len(r.pages)

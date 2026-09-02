@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
 
 from app.base import BasePage
 from app.i18n import t
-from app.utils import section, info_lbl, show_error
+from app.utils import (section, info_lbl, show_error,
+                       WrongPasswordError)
 from app.constants import DESKTOP
 from app.widgets import DropFileEdit
 
@@ -191,7 +192,7 @@ class TabNUp(BasePage):
                 # unchecked call would leave the doc locked and produce
                 # empty/garbled output. Mirror _open_fitz and raise.
                 if not (pwd and sd.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 out = fitz.open()
                 try:

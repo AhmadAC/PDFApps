@@ -66,8 +66,8 @@ def test_clear_pwd_handles_long_strings():
 
 
 def test_clear_pwd_handles_unicode():
-    """Multibyte passwords (emoji, accented chars) must not break the
-    ctypes buffer hint."""
+    """Multibyte passwords (emoji, accented chars) must wipe like any
+    other."""
     s = _make_dummy_base()
     s._pdf_password = "señha-€-🔑"
     s._clear_pdf_password()

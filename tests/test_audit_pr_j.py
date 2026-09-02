@@ -251,12 +251,17 @@ def test_encrypt_n_pages_annotated_union():
 # ── Fix #11: existing-test regression check ───────────────────────────────
 
 def test_pdfapps_tests_no_longer_reference_old_stub():
+    """(b) of the original fix: the slice end must use the next ``def``
+    boundary rather than a fixed 1500-char window.
+
+    Part (a) used to assert, on the *source text of another test file*,
+    that its ``_Stub`` bound ``BasePage._nfc``. That is now covered
+    behaviourally by ``assert not hasattr(BasePage, "_nfc")`` in
+    tests/test_polish_lows.py::test_no_canonicalisation_helper_survives:
+    if the normaliser ever comes back, that test fails on the API itself
+    instead of on how some other test happens to be spelled.
+    """
     src = (_REPO_ROOT / "tests" / "test_pdfapps.py").read_text(encoding="utf-8")
-    # The two stale tests have been repaired:
-    #  (a) The _Stub class must now bind _nfc.
-    #  (b) The slice end must use the next def boundary, not a fixed
-    #      1500-char window.
-    assert "_nfc          = staticmethod(BasePage._nfc)" in src
     assert 'src.find("\\n    def "' in src
     assert "src[i:i + 1500]" not in src
 

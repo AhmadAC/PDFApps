@@ -657,14 +657,15 @@ class TestAuditRegressions:
                   algorithm="AES-256")
         with open(enc, "wb") as f: w.write(f)
 
-        # Stand-alone object that mimics a tool with a stored password
-        # PR-H added a staticmethod ``_nfc`` (NFC-normaliser); _open_*
-        # call it via ``self._nfc(...)`` so the stub must expose it too,
-        # otherwise the test fails with AttributeError instead of
-        # exercising the actual decrypt code path.
+        # Stand-alone object that mimics a tool with a stored password.
+        # The stub must mirror exactly what _open_reader / _open_fitz
+        # touch on ``self``; anything missing fails with AttributeError
+        # instead of exercising the decrypt code path. The former
+        # ``_nfc`` NFC-normaliser is deliberately absent: candidate
+        # expansion now lives in app.pdf_password, which the helpers
+        # import directly (see tests/test_unicode_passwords.py).
         class _Stub:
             _pdf_password = "topsecret"
-            _nfc          = staticmethod(BasePage._nfc)
             _open_reader  = BasePage._open_reader
             _open_fitz    = BasePage._open_fitz
         stub = _Stub()

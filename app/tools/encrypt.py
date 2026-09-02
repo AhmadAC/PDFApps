@@ -12,9 +12,22 @@ from pypdf import PdfWriter
 
 from app.base import BasePage
 from app.i18n import t
+from app.pdf_password import decrypt_pypdf, resolve_file_password
 from app.utils import section, info_lbl, show_error
 from app.constants import DESKTOP
 from app.widgets import DropFileEdit
+
+
+def _pwd_cache_key(path: str) -> str:
+    """Normalise ``path`` for use as a ``_written_pwd`` key.
+
+    ``abspath`` alone left the map case-sensitive, which on Windows is
+    not what the filesystem does: encrypting to ``Out.pdf`` and then
+    loading ``out.pdf`` -- the very same file -- missed the seeded entry
+    and prompted for a password the user had typed seconds earlier.
+    ``normcase`` is a no-op on POSIX, where the case sensitivity is real.
+    """
+    return os.path.normcase(os.path.abspath(path))
 
 
 class TabEncriptar(BasePage):
@@ -23,6 +36,10 @@ class TabEncriptar(BasePage):
                          t("tool.encrypt.desc"),
                          t("tool.encrypt.btn"), status_fn)
         self._pipeline_supported = True
+        # Output path -> the password spelling that file is really
+        # locked with (see _cache_written_password). Wiped together with
+        # _pdf_password by app.utils.wipe_pdf_password.
+        self._written_pwd: dict[str, str] = {}
         f = self._form
         sec_src = section(t("tool.encrypt.source"))
         f.addWidget(sec_src)
@@ -86,6 +103,21 @@ class TabEncriptar(BasePage):
         self.drop_in.blockSignals(True)
         self.drop_in.set_path(p)
         self.drop_in.blockSignals(False)
+        # If this is a file we encrypted a moment ago, seed the cache
+        # with the on-disk spelling so _maybe_prompt_password unlocks it
+        # silently instead of prompting for a password the user already
+        # typed (pipeline mode re-loads the tool with its own output).
+        # Re-verified against the file first: the path may have been
+        # overwritten by something else since we wrote it, and blindly
+        # copying a stale entry over _pdf_password would leave the tool
+        # holding one file's password while pointing at another.
+        key = _pwd_cache_key(p)
+        seeded = self._written_pwd.get(key)
+        if seeded is not None:
+            if resolve_file_password(p, seeded) == seeded:
+                self._pdf_password = seeded
+            else:
+                self._written_pwd.pop(key, None)
         if not self._maybe_prompt_password(p):
             self.drop_in.blockSignals(True); self.drop_in.set_path("")
             self.drop_in.blockSignals(False); return
@@ -129,6 +161,45 @@ class TabEncriptar(BasePage):
                 field.setText("")
                 field.clear()
 
+    def _cache_written_password(self, out_path: str, user_pwd: str) -> None:
+        """Remember the spelling the file we just wrote is really locked with.
+
+        pypdf encrypts AES-256 through ``_encode_password``, which runs
+        SASLprep (RFC 4013, i.e. NFKC) on a ``str`` password. MuPDF does
+        not normalise at all, so reopening the file we just wrote with
+        the *typed* password fails whenever SASLprep changed it: a
+        password containing U+FB01 (LATIN SMALL LIGATURE FI) is written
+        as "fi" but handed back to fitz as U+FB01. The app produced files
+        it could not reopen.
+
+        We do not *predict* what pypdf did — we read it back. pypdf
+        catches its own SASLprep failures (unassigned code points, i.e.
+        every emoji; prohibited characters; bidi violations) and silently
+        falls back to raw UTF-8, so ``saslprep(typed)`` was the wrong
+        answer for precisely the passwords where the guess mattered, and
+        it was welded to one pypdf version's behaviour. Probing the bytes
+        we just wrote is version-proof.
+
+        The write side stays conformant; we only record the form that
+        matches the bytes on disk. Keyed by output path rather than
+        assigned to ``self._pdf_password`` because that attribute holds
+        the *source* document's password — clobbering it would break a
+        second run against the same encrypted source.
+        """
+        if not out_path:
+            return
+        key = _pwd_cache_key(out_path)
+        winner = resolve_file_password(out_path, user_pwd)
+        if winner is None:
+            # We wrote a file we cannot reopen with anything derived from
+            # what the user typed. Caching a spelling we know is wrong
+            # would silently skip the password prompt on the next load,
+            # so drop the entry (including any stale one for this path)
+            # and let _maybe_prompt_password ask.
+            self._written_pwd.pop(key, None)
+            return
+        self._written_pwd[key] = winner
+
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -153,6 +224,7 @@ class TabEncriptar(BasePage):
                 w.encrypt(user_password=user_pwd,
                           owner_password=owner, algorithm="AES-256")
                 self._atomic_pdf_write(w, out_path, sources=[pdf_path])
+                self._cache_written_password(out_path, user_pwd)
                 self._status(t("tool.encrypt.status.done",
                                name=os.path.basename(out_path)))
                 msg = t("tool.encrypt.done_enc", path=out_path)
@@ -167,8 +239,7 @@ class TabEncriptar(BasePage):
                 # use it (e.g. user skipped the prompt or wants a different pwd).
                 manual_pwd = self.edit_pwd.text()
                 if reader.is_encrypted and manual_pwd:
-                    result = reader.decrypt(manual_pwd)
-                    if result == 0:
+                    if decrypt_pypdf(reader, manual_pwd) is None:
                         QMessageBox.warning(self, t("msg.warning"), t("tool.encrypt.wrong_pass"))
                         return
                 w = PdfWriter(); w.append(reader)

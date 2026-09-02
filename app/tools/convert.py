@@ -52,7 +52,7 @@ from app.base import BasePage
 from app.i18n import t
 from app.utils import (
     section, info_lbl, pick_folder, show_error, result_label_style,
-    CancelledError, format_size_localized,
+    CancelledError, format_size_localized, WrongPasswordError,
 )
 from app.constants import DESKTOP
 from app.widgets import DropFileEdit
@@ -255,7 +255,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 matrix = fitz.Matrix(dpi / 72, dpi / 72)
                 for i, page in enumerate(doc):
@@ -337,7 +337,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 # Pass 1: extract assets for every page (text blocks, images,
                 # widgets, annotations) using the shared helper.
@@ -693,7 +693,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             cancelled = False
             try:
                 def _write_txt(tmp_path: str) -> None:
@@ -770,7 +770,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
 
             def _rgb(c):
                 """fitz colors are 0..1 floats; PPTX wants 0..255 ints."""
@@ -1054,7 +1054,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 wb = Workbook()
                 wb.remove(wb.active)
@@ -1118,7 +1118,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 parts = [
                     "<!DOCTYPE html>",
@@ -1218,7 +1218,7 @@ class TabConverter(BasePage):
                 # it locked and produce empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 book = epub.EpubBook()
                 book.set_identifier(f"pdfapps-{os.path.basename(pdf_path)}")

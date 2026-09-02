@@ -212,18 +212,86 @@ def test_srcinfo_bin_regex_is_anchored():
 # ── #10 — Tab close ordering audit (existing behaviour) ─────────────────
 
 
-def test_window_closeevent_waits_for_workers_before_destroy():
-    """Pre-existing: window.closeEvent must call wait_for_workers()
-    on each stacked page before super().closeEvent() so QThreads are
-    not destroyed mid-run. Audited in R10 #10 — no change required."""
-    src = _read("app/window.py")
-    close_body = src[src.find("def closeEvent"):
-                     src.find("def _toggle_sidebar")]
-    assert "wait_for_workers" in close_body
-    # super().closeEvent must come AFTER the wait loop.
-    wait_idx = close_body.find("wait_for_workers")
-    super_idx = close_body.find("super().closeEvent")
-    assert 0 < wait_idx < super_idx
+def test_window_closeevent_waits_for_workers_before_destroy(monkeypatch):
+    """Pre-existing: window.closeEvent must drain every stacked page's
+    background workers before super().closeEvent() so QThreads are not
+    destroyed mid-run. Audited in R10 #10 — no change required.
+
+    Behavioural on purpose. This assertion used to read the source of
+    ``closeEvent`` and require the literal ``"wait_for_workers"`` inside
+    it, which pinned a *name* rather than the ordering: renaming the
+    drain helper with no semantic change turned it red, while any
+    refactor that kept the word but moved the call after
+    ``super().closeEvent`` stayed green. The drain lives behind a
+    helper now (``_wait_for_workers_on_all_pages``), so the property to
+    protect is "every page that can drain, drained, and all of them
+    before super()".
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QMainWindow
+
+    from app.update_controller import UpdateController
+    from app.window import MainWindow
+
+    # Held only to keep a live QApplication for the duration of the test
+    # (MainWindow's constructor needs one); the name is never read.
+    _unused_app = QApplication.instance() or QApplication([])  # noqa: F841
+    monkeypatch.setattr(UpdateController, "check_async", lambda self: None)
+    # Don't let a test close write the real user config.
+    monkeypatch.setattr("app.i18n._update_config", lambda *a, **k: None)
+
+    # Captured before the try so the restore check in ``finally`` cannot
+    # itself raise NameError and mask a real failure above it.
+    real_close = QMainWindow.closeEvent
+    win = MainWindow()
+    try:
+        events: list[str] = []
+        pages = [win.stack.widget(i) for i in range(win.stack.count())]
+        drainable = [p for p in pages
+                     if callable(getattr(p, "wait_for_workers", None))]
+        assert drainable, (
+            "no stacked page exposes wait_for_workers -- the drain this "
+            "test guards would be a no-op"
+        )
+        for page in drainable:
+            monkeypatch.setattr(page, "wait_for_workers",
+                                lambda *a, **k: events.append("wait"))
+        # Patch the *base class* slot: ``super().closeEvent(event)``
+        # inside MainWindow.closeEvent resolves through the MRO, so this
+        # is what that call lands on.
+        monkeypatch.setattr(QMainWindow, "closeEvent",
+                            lambda self, ev: events.append("super"))
+
+        win.closeEvent(QCloseEvent())
+
+        assert events.count("wait") == len(drainable), (
+            f"drained {events.count('wait')} of {len(drainable)} pages"
+        )
+        assert "super" in events, (
+            "closeEvent returned without reaching super().closeEvent"
+        )
+        # The ordering the drain exists for: no QThread may still be
+        # running when Qt starts destroying the window.
+        last_wait = len(events) - 1 - events[::-1].index("wait")
+        assert events.index("super") > last_wait, (
+            f"super().closeEvent ran before the drain finished: {events}"
+        )
+    finally:
+        # Patching a method on a Qt class is global state. monkeypatch
+        # undoes it, but a leak here would silently swallow every other
+        # window teardown in the suite instead of failing anything, so
+        # restore eagerly and prove it took.
+        monkeypatch.undo()
+        assert QMainWindow.closeEvent is real_close, (
+            "QMainWindow.closeEvent was not restored -- the rest of the "
+            "suite would run against a stubbed teardown"
+        )
+        win.deleteLater()
+        QTest.qWait(10)
 
 
 # ── #11 — Uncached fallback on getmtime failure ─────────────────────────

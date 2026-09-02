@@ -226,7 +226,10 @@ def test_nup_worker_raises_on_auth_failure(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(fitz, "open", lambda *a, **k: _Locked())
-    with pytest.raises(ValueError) as ei:
+    # WrongPasswordError, not ValueError: the type is what routes the
+    # failure to show_error's warning branch instead of the generic
+    # "something went wrong + traceback in the log" crash dialog.
+    with pytest.raises(WrongPasswordError) as ei:
         do_work(_FakeWorker())
     assert t("tool.err.wrong_password") in str(ei.value)
 
@@ -256,7 +259,10 @@ def test_convert_images_worker_raises_on_auth_failure(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(fitz, "open", lambda *a, **k: _Locked())
-    with pytest.raises(ValueError) as ei:
+    # WrongPasswordError, not ValueError: the type is what routes the
+    # failure to show_error's warning branch instead of the generic
+    # "something went wrong + traceback in the log" crash dialog.
+    with pytest.raises(WrongPasswordError) as ei:
         do_work(_FakeWorker())
     assert t("tool.err.wrong_password") in str(ei.value)
 

@@ -10,7 +10,9 @@ from pypdf import PdfReader, PdfWriter
 
 from app.base import BasePage
 from app.i18n import t
-from app.utils import section, danger_btn, pick_pdfs, show_error
+from app.pdf_password import decrypt_pypdf
+from app.utils import (section, danger_btn, pick_pdfs, show_error,
+                       WrongPasswordError)
 from app.widgets import DropFileEdit, MultiDropWidget
 
 
@@ -122,8 +124,11 @@ class TabJuntar(BasePage):
                     if pwd:
                         # R11-M4: wrong password yields 0 pages, which
                         # would silently produce an incomplete merge.
-                        if reader.decrypt(pwd) == 0:
-                            raise ValueError(t("tool.err.wrong_password"))
+                        # decrypt_pypdf feeds pypdf the same UTF-8 bytes
+                        # MuPDF hashed when _maybe_prompt_password
+                        # accepted this password (see app.pdf_password).
+                        if decrypt_pypdf(reader, pwd) is None:
+                            raise WrongPasswordError(t("tool.err.wrong_password"))
                 for page in reader.pages:
                     w.add_page(page)
             self._atomic_pdf_write(w, out, sources=paths)
