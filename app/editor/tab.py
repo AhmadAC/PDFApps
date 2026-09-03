@@ -18,7 +18,7 @@ import qtawesome as qta
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, DESKTOP, _LQ, _LP
 from app.utils import (
     ToolHeader, ActionBar, info_lbl, _paint_bg, show_error,
-    normalize_password,
+    WrongPasswordError,
 )
 from app.i18n import t
 from app.widgets import DropFileEdit, ColorPickerButton
@@ -26,6 +26,7 @@ from app.editor.canvas import PdfEditCanvas, _get_icon_cursor
 from app.editor.dialogs import _NoteDialog
 from app.editor.apply_edits import apply_pending_edits
 from app.pdf_io import atomic_pdf_write
+from app.pdf_password import authenticate_fitz, decrypt_pypdf
 
 
 _log = logging.getLogger(__name__)
@@ -634,8 +635,13 @@ class TabEditar(QWidget):
             probe = fitz.open(p)
             needs_pass = bool(probe.needs_pass)
             if needs_pass and self._pdf_password:
-                if not probe.authenticate(self._pdf_password):
-                    self._pdf_password = ""
+                # Re-anchor on the candidate spelling that actually
+                # authenticates (see app.pdf_password): the value may
+                # have been propagated from the viewer, which caches the
+                # form the user typed, and pypdf/MuPDF only agree when
+                # both are handed those exact bytes.
+                winner = authenticate_fitz(probe, self._pdf_password)
+                self._pdf_password = winner or ""
             probe.close()
         except Exception:
             needs_pass = False
@@ -644,12 +650,12 @@ class TabEditar(QWidget):
             ok, pwd = prompt_pdf_password(p, self)
             if not ok:
                 return
-            # NFC-normalise at the WRITE site so every reader of
-            # self._pdf_password (~10 call sites in this file plus
-            # ~8 tools under tools/) receives a deterministic value
-            # without needing per-site normalisation. See R11 review
-            # C2 / utils.normalize_password.
-            self._pdf_password = normalize_password(pwd)
+            # Store the exact spelling that authenticated. Every reader
+            # of self._pdf_password (~10 call sites in this file plus
+            # ~8 tools under tools/) needs those bytes verbatim;
+            # canonicalising here is the bug app.pdf_password exists to
+            # prevent.
+            self._pdf_password = pwd
         elif not needs_pass:
             self._pdf_password = ""
         self._doc_path = p
@@ -819,8 +825,8 @@ class TabEditar(QWidget):
             if _r.is_encrypted and self._pdf_password:
                 # R11-M4: 0 == wrong password — surface to the user
                 # instead of silently parsing an empty PDF.
-                if _r.decrypt(self._pdf_password) == 0:
-                    raise ValueError(t("tool.err.wrong_password"))
+                if decrypt_pypdf(_r, self._pdf_password) is None:
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             fields = _r.get_fields() or {}
             for name, field in fields.items():
                 r = self._form_table.rowCount(); self._form_table.insertRow(r)
@@ -1345,8 +1351,8 @@ class TabEditar(QWidget):
                 if was_encrypted and self._pdf_password:
                     # R11-M4: catch the wrong-password silent-fail path
                     # so we never write an empty PDF over the user's file.
-                    if _r.decrypt(self._pdf_password) == 0:
-                        raise ValueError(t("tool.err.wrong_password"))
+                    if decrypt_pypdf(_r, self._pdf_password) is None:
+                        raise WrongPasswordError(t("tool.err.wrong_password"))
                 # If input was encrypted, ask the user how to save.
                 encrypt_choice = "plaintext"
                 if was_encrypted and self._pdf_password:

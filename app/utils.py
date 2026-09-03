@@ -178,30 +178,10 @@ def pick_folder(parent: QWidget) -> str:
     return QFileDialog.getExistingDirectory(parent, t("btn.select_folder"))
 
 
-def normalize_password(pwd: str) -> str:
-    """Return ``pwd`` normalised to Unicode NFC form (R6 C1 / R11 review C2).
-
-    Passwords typed on macOS frequently land in NFD (decomposed) form,
-    while Windows clipboards produce NFC (composed) form. The on-screen
-    glyphs are identical but the underlying byte sequences are not, so a
-    password that authenticates on one OS may fail on the other.
-
-    Normalising at the WRITE side of the cache (i.e. wherever
-    ``self._pdf_password = pwd`` happens) makes the cached value
-    deterministic and frees every downstream consumer
-    (``editor/tab.py``, ``viewer/panel.py``, ``tools/*``) from having to
-    remember to normalise on read. Returns falsy inputs unchanged so the
-    helper is safe to apply unconditionally.
-    """
-    if not pwd:
-        return pwd
-    try:
-        import unicodedata
-        return unicodedata.normalize("NFC", pwd)
-    except (TypeError, ValueError):
-        # str inputs only ever raise on absurd code points; falling
-        # back to the raw string is safer than crashing.
-        return pwd
+# Per-object password dictionaries that must die with ``_pdf_password``:
+# TabJuntar._pwd_map (one password per merge input) and
+# TabEncriptar._written_pwd (output path -> on-disk spelling).
+_SECONDARY_PWD_ATTRS = ("_pwd_map", "_written_pwd")
 
 
 def wipe_pdf_password(obj) -> None:
@@ -211,29 +191,38 @@ def wipe_pdf_password(obj) -> None:
     the interpreter may keep the original buffer alive via interning or
     constant tables. What we *can* do is drop the only reachable
     reference so the password no longer surfaces in the live object
-    graph. The ctypes block allocates a zeroed buffer of the same length
-    as a defensive hint to memory scanners; it does not touch the
-    original PyUnicode storage.
+    graph. That is the whole guarantee, for the scalar attribute and for
+    the dictionaries below alike.
+
+    There used to be a ctypes step here that allocated a *separate*
+    zeroed buffer the size of the password and memset it. It never
+    touched the PyUnicode storage (its own docstring said so), so it
+    zeroed an unrelated allocation and returned; and it ran only for
+    ``_pdf_password``, which made the dictionary values look less
+    protected than the scalar when in fact both get exactly the same
+    treatment. Removed rather than duplicated onto the dict values: a
+    no-op applied consistently is still a no-op, and it advertised a
+    protection this code cannot provide.
 
     Centralised here so BasePage, EditorTab and PdfViewerPanel share a
     single implementation (used to be three near-identical copies — the
     review for PR-B flagged the duplication as DRY rot).
 
-    Always assigns ``obj._pdf_password = ""`` afterwards, so callers can
-    rely on the attribute being defined for the rest of the object's
-    lifecycle.
+    Always assigns ``obj._pdf_password = ""``, so callers can rely on
+    the attribute being defined for the rest of the object's lifecycle
+    even if it was never set.
+
+    Also empties the secondary password dictionaries listed in
+    :data:`_SECONDARY_PWD_ATTRS` when the object has them. ``_pdf_password``
+    is not the only live reference any more: merge keeps one password per
+    input file and the encrypt tool remembers the on-disk spelling of the
+    files it writes, and both used to survive every close/reload path.
     """
-    try:
-        pwd = getattr(obj, "_pdf_password", "")
-    except Exception:
-        pwd = ""
-    if pwd:
-        with contextlib.suppress(Exception):
-            import ctypes
-            buf = ctypes.create_string_buffer(len(pwd.encode("utf-8")))
-            ctypes.memset(ctypes.addressof(buf), 0, len(buf))
-            del buf
     obj._pdf_password = ""
+    for name in _SECONDARY_PWD_ATTRS:
+        cache = getattr(obj, name, None)
+        if isinstance(cache, dict):
+            cache.clear()
 
 
 def prompt_pdf_password(path: str, parent=None) -> tuple[bool, str]:
@@ -243,6 +232,12 @@ def prompt_pdf_password(path: str, parent=None) -> tuple[bool, str]:
         (True, "")          → PDF is not encrypted, just open normally
         (True, "<pwd>")     → PDF is encrypted and the password authenticated
         (False, "")         → user cancelled the dialog (silent abort)
+
+    The returned string is the *candidate spelling that actually
+    authenticated*, not necessarily the one the user typed and never a
+    canonicalised form — see :mod:`app.pdf_password`. Callers must cache
+    it verbatim: normalising it afterwards is exactly the bug this
+    returns a winner to avoid.
 
     Detects encryption with PyMuPDF (handles all PDF flavours). The caller
     opens the file with whatever library (pypdf, fitz) using the returned
@@ -262,15 +257,16 @@ def prompt_pdf_password(path: str, parent=None) -> tuple[bool, str]:
         if not doc.needs_pass:
             return True, ""
         from app.editor.dialogs import _PdfPasswordDialog
+        from app.pdf_password import authenticate_fitz
         from PySide6.QtWidgets import QDialog
         wrong = False
         while True:
             dlg = _PdfPasswordDialog(os.path.basename(path), wrong=wrong, parent=parent)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return False, ""
-            pwd = dlg.password()
-            if doc.authenticate(pwd):
-                return True, pwd
+            winner = authenticate_fitz(doc, dlg.password())
+            if winner is not None:
+                return True, winner
             wrong = True
     finally:
         doc.close()
@@ -551,26 +547,39 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
     # AES-256 natively, whereas pypdf.decrypt() needs an optional crypto
     # backend and would spuriously report a correct AES password as
     # wrong. pypdf is only the fallback if fitz is somehow unavailable.
+    #
+    # The probe resolves the *candidate spelling* that authenticates
+    # (see app.pdf_password) and rebinds ``password`` to it, so the
+    # Ghostscript / PyMuPDF / pikepdf passes below all hash the same
+    # byte sequence the gate just validated.
     encrypted = False
     authed = False
     try:
         import fitz
+        from app.pdf_password import authenticate_fitz
         probe = fitz.open(src)
         try:
             encrypted = probe.needs_pass
             if encrypted and password:
-                authed = bool(probe.authenticate(password))
+                winner = authenticate_fitz(probe, password)
+                authed = winner is not None
+                if winner is not None:
+                    password = winner
         finally:
             probe.close()
     except Exception:
         try:
+            from app.pdf_password import decrypt_pypdf
             from pypdf import PdfReader
             pr = PdfReader(src)
             encrypted = pr.is_encrypted
             if encrypted and password:
                 # decrypt() returns PasswordType.NOT_DECRYPTED (0) on a
                 # wrong password; anything else means success.
-                authed = bool(pr.decrypt(password))
+                winner = decrypt_pypdf(pr, password)
+                authed = winner is not None
+                if winner is not None:
+                    password = winner
         except Exception:
             encrypted = False
     if encrypted and not authed:
@@ -947,8 +956,34 @@ def show_error(parent, exc: BaseException) -> None:
     shows a localized "something went wrong" message; the technical detail
     is in the collapsed "Show Details" pane, and the full traceback is in
     the log file at `pdfapps.log` next to the config.
+
+    :class:`WrongPasswordError` is the one exception routed differently.
+    It is not a crash: it is a recoverable, self-inflicted and fully
+    understood condition whose message is already translated and already
+    addressed to the user. Sending it down the generic path showed
+    "something went wrong ... the full traceback has been written to the
+    log file" as the primary text and hid the real sentence behind
+    "Show Details", prefixed with the Python class name. So it gets a
+    warning icon, its own message as the primary text, and no details
+    pane -- the same shape as the hand-rolled QMessageBox.warning the
+    encrypt tool already uses for the identical situation.
     """
     from PySide6.QtWidgets import QMessageBox
+
+    if isinstance(exc, WrongPasswordError):
+        # A wrong password is expected user input, not a fault: log at
+        # warning level and without the traceback, which would otherwise
+        # fill the log with stack dumps of a typo.
+        logging.warning("Wrong PDF password: %s", exc)
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(t("msg.warning"))
+        # str(exc) only: no `type(exc).__name__` prefix, so the dialog
+        # never leaks "WrongPasswordError:" to an end user in 8 locales.
+        box.setText(str(exc) or t("tool.err.wrong_password"))
+        box.exec()
+        return
+
     # logging.exception() relies on sys.exc_info() being active, but this
     # helper is typically called from a queued slot on the main thread —
     # by then the originating `except` block has already exited and

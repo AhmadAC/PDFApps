@@ -3,7 +3,7 @@
 Bug map (PR-H worklist):
     #1  Global sys.excepthook in pdfapps.py main entry        (R7 I2 LOW)
     #2  config.json backup before reset on corruption          (R8 N1 LOW)
-    #3  NFC password normalization in BasePage helpers         (R6 C1 LOW)
+    #3  Unicode password candidates (was: NFC normalization)   (R6 C1 LOW)
     #4  Explicit tab order in _PdfPasswordDialog               (R11 G1 LOW)
     #5  Drop folder >20 PDFs confirmation                       (R10 review LOW)
     #6  AcroForm with zero widgets no_fields short-circuit     (R10 review LOW)
@@ -75,110 +75,109 @@ def test_i18n_backs_up_corrupt_config_before_reset():
     assert "datetime.now()" in src
 
 
-# ── #3 — NFC password normalization ─────────────────────────────────────
+# ── #3 — Unicode password handling ─────────────────────────
 
 
-def test_base_normalizes_passwords_to_nfc():
-    """All three encrypted-PDF entry points must route the password
-    through ``unicodedata.normalize('NFC', ...)`` so a macOS-typed (NFD)
-    password unlocks the same PDF on Windows (NFC).
+def _encrypt(tmp_path, pwd: str, algorithm: str = "AES-256") -> str:
+    """Write a 2-page PDF encrypted with ``pwd`` and return its path.
 
-    After the R11 review the canonical normalisation function moved to
-    :func:`app.utils.normalize_password` (so all the
-    ``self._pdf_password`` *read* sites in ``tools/*`` and
-    ``editor/tab.py`` are covered transitively when the cache is set);
-    ``BasePage._nfc`` is now a thin delegator. The actual
-    ``unicodedata.normalize("NFC", ...)`` call therefore lives in
-    ``utils.py`` rather than ``base.py``, which is what we assert here.
-
-    After the follow-up R11 review fix, normalisation now also happens at
-    the WRITE site of the cache (BasePage._maybe_prompt_password) so the
-    ``self._pdf_password`` attribute itself is deterministic for every
-    downstream consumer in ``tools/*`` that reads it directly. The three
-    helpers keep their defensive read-side ``self._nfc(self._pdf_password)``
-    so a value cached before this fix (or set externally without going
-    through ``normalize_password``) still authenticates correctly.
+    Note that pypdf itself normalises on the WRITE side for AES-256
+    (SASLprep/NFKC), so the on-disk password is not necessarily ``pwd``.
+    That asymmetry is the point of these tests.
     """
-    base_src = _read("app/base.py")
-    utils_src = _read("app/utils.py")
-    # Normalisation primitive lives in utils.py now.
-    assert "import unicodedata" in utils_src
-    assert "unicodedata.normalize(\"NFC\"" in utils_src
-    assert "def normalize_password(" in utils_src
-    # BasePage helper still exists and still has the three read-side
-    # call sites (defensive — the WRITE site below covers the cache).
-    assert "def _nfc(" in base_src
-    assert base_src.count("self._nfc(self._pdf_password)") == 3, (
-        "Expected three defensive read-side _nfc calls (auth probe, "
-        "PdfReader.decrypt, fitz.authenticate)."
-    )
-    # WRITE-site normalisation: the prompt path must NFC-normalise
-    # before storing on self._pdf_password so every tool that reads
-    # the attribute raw (~30 sites under tools/*) is covered without
-    # per-call instrumentation.
-    assert "self._pdf_password = normalize_password(pwd)" in base_src
-    # And the BasePage helper must delegate to the utils primitive so
-    # the two paths cannot drift.
-    assert "normalize_password" in base_src
+    import fitz
+    from pypdf import PdfReader, PdfWriter
+
+    doc = fitz.open()
+    doc.new_page()
+    doc.new_page()
+    plain = str(tmp_path / "plain.pdf")
+    doc.save(plain)
+    doc.close()
+
+    w = PdfWriter()
+    w.append(PdfReader(plain))
+    w.encrypt(user_password=pwd, owner_password=pwd, algorithm=algorithm)
+    enc = str(tmp_path / f"enc_{abs(hash((pwd, algorithm)))}.pdf")
+    with open(enc, "wb") as fh:
+        w.write(fh)
+    return enc
 
 
-def test_editor_tab_normalizes_password_on_cache_write():
-    """R11 review C2 follow-up: the editor's _load_pdf path stores the
-    prompted password directly on self._pdf_password. It must route
-    through normalize_password so tools reading the cache raw
-    (merge, watermark, ocr, page_numbers, convert, nup, ...) see the
-    same NFC string the BasePage helpers would compare against."""
-    src = _read("app/editor/tab.py")
-    assert "self._pdf_password = normalize_password(pwd)" in src
-    assert "from app.utils import" in src and "normalize_password" in src
+def _stub(pwd: str):
+    """Minimal stand-in for a tool page holding a cached password."""
+    from app.base import BasePage
+
+    class _Stub:
+        _pdf_password = pwd
+        _open_reader = BasePage._open_reader
+        _open_fitz = BasePage._open_fitz
+
+    return _Stub()
 
 
-def test_viewer_panel_normalizes_password_on_cache_write():
-    """R11 review C2 follow-up: PdfViewerPanel._open_path stores the
-    typed password on self._pdf_password. Same NFC-at-WRITE rule applies
-    — this is the value propagated to compact-mode tools by
-    MainWindow._on_tab_changed."""
-    src = _read("app/viewer/panel.py")
-    assert "normalize_password(dlg.password())" in src
-    assert "from app.utils import" in src and "normalize_password" in src
+def test_no_canonicalisation_helper_survives():
+    """The NFC helpers must be gone, not merely unused.
+
+    ``normalize_password`` / ``BasePage._nfc`` produced a *third*
+    spelling that matched neither engine: MuPDF hashes the raw UTF-8
+    bytes and pypdf applies SASLprep (NFKC). Leaving either helper in
+    place is an invitation to reintroduce the bug at the next call site.
+    """
+    from app import utils
+    from app.base import BasePage
+
+    assert not hasattr(utils, "normalize_password")
+    assert not hasattr(BasePage, "_nfc")
 
 
-def test_password_cache_round_trips_nfd_to_nfc():
-    """Behavioral guard: feed an NFD-composed string through the same
-    write path the prompt uses and confirm the cached attribute reads
-    back in NFC form, matching what tools that bypass _nfc would see."""
+def test_cached_password_is_the_spelling_that_authenticated(tmp_path):
+    """Behavioural: the write site must store the winning candidate.
+
+    A user typing the NFD spelling of a password whose AES-256 file was
+    locked with the NFC one (because pypdf SASLprepped it at write time)
+    used to have the *typed* form NFC-normalised into the cache by luck;
+    now the cache is filled from the candidate that really unlocked the
+    document, whatever spelling that is.
+    """
     import unicodedata
 
-    from app.utils import normalize_password
+    import fitz
 
-    nfd = unicodedata.normalize("NFD", "passé")
-    assert not unicodedata.is_normalized("NFC", nfd), (
-        "Test fixture must actually be in NFD form."
-    )
+    from app.pdf_password import authenticate_fitz
 
-    class _Fake:
-        _pdf_password = ""
+    nfd = "café"
+    assert not unicodedata.is_normalized("NFC", nfd)
+    path = _encrypt(tmp_path, nfd)
 
-    obj = _Fake()
-    # Mirror the WRITE-site idiom used by BasePage / editor / viewer.
-    obj._pdf_password = normalize_password(nfd)
-    assert unicodedata.is_normalized("NFC", obj._pdf_password), (
-        "Cache must hold NFC after going through normalize_password."
-    )
-    # And the on-screen form must be preserved (no characters dropped).
-    assert obj._pdf_password == "passé"
+    doc = fitz.open(path)
+    try:
+        winner = authenticate_fitz(doc, nfd)
+    finally:
+        doc.close()
+    assert winner is not None, "typed NFD form must resolve to a candidate"
+
+    # And the winner is directly usable by both engines with no further
+    # massaging — which is what the cache write sites now rely on.
+    stub = _stub(winner)
+    assert stub._open_fitz(path).page_count == 2
+    assert len(stub._open_reader(path).pages) == 2
 
 
-def test_nfc_helper_behavior_on_combining_characters():
-    """Smoke test: a Unicode string composed in NFD (e + combining acute)
-    must become its NFC singleton (é) before pypdf/PyMuPDF see it."""
-    import unicodedata
+def test_open_helpers_agree_on_the_same_cached_password(tmp_path):
+    """pypdf and PyMuPDF must never disagree about the cached value.
 
-    nfd = "passé"  # 'e' + combining acute
-    nfc = "passé".encode("utf-8")
-    normalized = unicodedata.normalize("NFC", nfd)
-    assert normalized != nfd, "Test input must actually differ from NFC"
-    assert unicodedata.is_normalized("NFC", normalized)
+    This is the failure the user saw: the viewer opened the document and
+    every tool answered "wrong password".
+    """
+    path = _encrypt(tmp_path, "café")
+    stub = _stub("café")
+    doc = stub._open_fitz(path)
+    try:
+        assert doc.page_count == 2
+    finally:
+        doc.close()
+    assert len(stub._open_reader(path).pages) == 2
 
 
 # ── #4 — _PdfPasswordDialog explicit tab order ──────────────────────────

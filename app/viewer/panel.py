@@ -13,7 +13,8 @@ from shiboken6 import isValid
 import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
-from app.utils import _paint_bg, normalize_password
+from app.pdf_password import authenticate_fitz
+from app.utils import _paint_bg
 from app.i18n import t
 from app.viewer.canvas import _SelectCanvas
 from app.viewer.thumbnails import ThumbnailPanel
@@ -652,14 +653,16 @@ class PdfViewerPanel(QWidget):
                     doc.close()
                     self._reset_to_placeholder()
                     return
-                if doc.authenticate(dlg.password()):
-                    # NFC-normalise at WRITE time so every consumer
-                    # downstream (canvas.load, propagation to editor
-                    # / tools) sees a deterministic value. R11 review
-                    # C2: per-call-site normalisation missed the ~30
-                    # raw reads under tools/ — see
-                    # utils.normalize_password.
-                    self._pdf_password = normalize_password(dlg.password())
+                winner = authenticate_fitz(doc, dlg.password())
+                if winner is not None:
+                    # Cache the exact spelling that authenticated, never
+                    # a canonicalised one: this value is propagated
+                    # verbatim to the canvas, the thumbnail worker and
+                    # (via MainWindow._try_auto_load) to every tool, and
+                    # normalising it here is what used to leave the
+                    # thumbnail strip blank and make the tools claim the
+                    # password was wrong. See app.pdf_password.
+                    self._pdf_password = winner
                     break
                 wrong = True
         self._current_path = path

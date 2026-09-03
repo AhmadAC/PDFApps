@@ -1,0 +1,31 @@
+# GitGuardian configuration.
+#
+# Why this file exists: the secret scanner flags synthetic password literals
+# used by the PDF encryption unit tests (for example "s3cret", "merge-secret",
+# "correct-horse", "definitely-not-it", "src-secret"). These are not
+# credentials. They are throwaway strings typed inline to encrypt a PDF that
+# the same test function generates in a pytest tmp_path and deletes when it
+# finishes. They unlock nothing, they reach no service, and they exist only so
+# the assertions can prove a password round-trips.
+#
+# The exclusion is deliberately tight: individual files, never the whole
+# tests/ tree. A blanket tests/ rule would blind the scanner across a
+# directory where a real secret could still land by accident, which is exactly
+# the case this tool needs to keep catching.
+#
+# Adding a password-bearing test file? Prefer a fixture or a parameter over a
+# new inline literal. Only extend this list when a literal is unavoidable.
+version: 2
+
+secret:
+  ignored_paths:
+    # Unicode/normalization password matrix (NFC/NFD, PDFDocEncoding fallbacks).
+    - tests/test_unicode_passwords.py
+    # Wrong-password dialog flows across viewer, editor and tool pages.
+    - tests/test_wrong_password_dialog.py
+    # Per-tool behaviour against encrypted source PDFs.
+    - tests/test_encrypted_pdf_tools.py
+    # Cache/propagation lifecycle of an entered password.
+    - tests/test_password_lifecycle.py
+    # Core suite; a couple of encrypted-PDF cases carry inline literals.
+    - tests/test_pdfapps.py

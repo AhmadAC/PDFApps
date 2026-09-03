@@ -646,6 +646,12 @@ class MainWindow(QMainWindow):
             # Last tab — close document and reset to placeholder
             viewer = self._viewers[0]
             viewer._canvas.close_doc()
+            # The panel survives as an empty placeholder, so nothing
+            # will ever deliver closeEvent to it; without this the
+            # password of the document just closed stays cached for the
+            # rest of the session, reachable by the next document loaded
+            # into the same tab.
+            self._wipe_password_holder(viewer)
             viewer._fitz_doc = None
             viewer._current_path = ""
             viewer._viewer_splitter.setVisible(False)
@@ -668,6 +674,11 @@ class MainWindow(QMainWindow):
         self._tab_bar.removeTab(idx)
         self._viewer_stack.removeWidget(viewer)
         viewer._canvas.close_doc()
+        # PdfViewerPanel.closeEvent would wipe this, but deleteLater()
+        # destroys the widget without ever delivering closeEvent, and the
+        # panel has already left self._viewers so _wipe_all_pdf_passwords
+        # can no longer reach it either. Wipe here, before both.
+        self._wipe_password_holder(viewer)
         viewer.deleteLater()
         self._update_tab_visibility()
         self._update_page_nav()
@@ -985,6 +996,16 @@ class MainWindow(QMainWindow):
         """Restart the application as a fully detached process.
         Frozen PyInstaller builds relaunch the exe directly; source runs
         relaunch the original .py via the current Python interpreter."""
+        # This path leaves through QApplication.exit(0), which unwinds
+        # the event loop directly: Qt never delivers closeEvent here, so
+        # neither the worker drain nor the sweep that run there cover the
+        # language-change restart. Do both explicitly, in the same order
+        # closeEvent uses, rather than letting the outgoing process
+        # linger with every cached password still in its heap.
+        self._wait_for_workers_on_all_pages()
+        # Runs AFTER the worker wait above so no background thread is
+        # still reading a password while we wipe it.
+        self._wipe_all_pdf_passwords()
         import sys
         from PySide6.QtCore import QProcess, QProcessEnvironment
         pdf_args = [a for a in sys.argv[1:] if a.lower().endswith(".pdf")]
@@ -1266,6 +1287,84 @@ class MainWindow(QMainWindow):
         self._presentation = pres
         self._presentation.show()
 
+    @staticmethod
+    def _wipe_password_holder(holder) -> None:
+        """Drop the PDF password cached on one holder (tool page or viewer).
+
+        The single-holder primitive behind :meth:`_wipe_all_pdf_passwords`,
+        also called directly by ``_close_tab`` for a panel the sweep can
+        no longer reach. Two deliberate choices, both bought with bugs:
+        the attribute lookup lives *inside* the ``suppress`` because
+        ``getattr(..., None)`` only swallows ``AttributeError``, so a
+        holder raising anything else used to abort the whole sweep and
+        take ``release_worker()`` and the layout persistence with it; and
+        there is deliberately **no** ``shiboken6.isValid`` guard, because
+        the secret lives in the Python ``__dict__`` that outlives the C++
+        widget, so skipping a dead wrapper would leave behind exactly the
+        secret this exists to drop.
+        """
+        with contextlib.suppress(Exception):
+            clear_fn = getattr(holder, "_clear_pdf_password", None)
+            if callable(clear_fn):
+                clear_fn()
+
+    def _wait_for_workers_on_all_pages(self) -> None:
+        """Cancel and drain the background workers of every tool page.
+
+        Extracted from ``closeEvent`` because ``_restart_app`` needs the
+        exact same guarantee and did not have it: it leaves through
+        ``QApplication.exit(0)`` without ever reaching ``closeEvent``, so
+        a compress / OCR / convert QThread was still running while
+        :meth:`_wipe_all_pdf_passwords` emptied the password it was
+        reading, and was then destroyed mid-flight.
+
+        Every call must stay *before* the password sweep, never after.
+        """
+        for i in range(self.stack.count()):
+            page = self.stack.widget(i)
+            # See _wipe_all_pdf_passwords: the lookup is inside the
+            # suppress because ``getattr(..., None)`` only swallows
+            # AttributeError, and one hostile page must not abort the
+            # remaining pages or the caller's teardown.
+            with contextlib.suppress(Exception):
+                wait_fn = getattr(page, "wait_for_workers", None)
+                if callable(wait_fn):
+                    wait_fn()
+
+    def _wipe_all_pdf_passwords(self) -> None:
+        """Drop the PDF passwords cached by the tool pages and the viewers.
+
+        ``_clear_pdf_password`` existed on BasePage, PdfViewerPanel and
+        TabEditar, but nothing in production ever reached the tool pages:
+        Qt does not deliver ``closeEvent`` to child widgets, so the
+        viewer's own handler never fired either. The encrypt tool's
+        ``_written_pwd`` map, merge's ``_pwd_map`` and both
+        ``_pdf_password`` attributes survived intact until the process
+        died.
+
+        Scope: every widget in ``self.stack`` plus every entry of
+        ``self._viewers``, and nothing else. Copies deeper in the tree
+        are **not** reached and still live until the process exits. An
+        AST enumeration of ``self._password = ...`` under ``app/`` finds
+        **11 write sites in 7 classes**, none of them in either list:
+        ``_SelectCanvas`` and ``_PageJob`` (app/viewer/canvas.py),
+        ``ThumbnailPanel`` and ``ThumbnailWorker``
+        (app/viewer/thumbnails.py), ``PdfEditCanvas`` and
+        ``_EditPageJob`` (app/editor/canvas.py), and
+        ``PresentationWidget`` (app/viewer/presentation.py), whose window
+        hangs off ``self._presentation``. ``ThumbnailWorker._password``
+        has been observed alive *after* this sweep in a real scenario
+        (encrypted PDF, thumbnails rendered). They all use a differently
+        named attribute, so handing them to ``wipe_pdf_password`` would
+        create an unrelated ``_pdf_password`` on them and clear nothing;
+        closing the gap is a rename plus reaching the render jobs, not
+        just an extra call site here.
+        """
+        holders = [self.stack.widget(i) for i in range(self.stack.count())]
+        holders += list(self._viewers)
+        for holder in holders:
+            self._wipe_password_holder(holder)
+
     def closeEvent(self, event):
         """Save layout state on close, prompt for unsaved pipeline changes."""
         # Check for unsaved pipeline changes
@@ -1303,14 +1402,10 @@ class MainWindow(QMainWindow):
         # Cleanup all pipeline temp files
         for v in list(self._viewers):
             self._cleanup_pipeline(id(v))
-        # Wait for any active background workers (compress / ocr /
-        # convert) so their QThreads are not destroyed mid-flight.
-        for i in range(self.stack.count()):
-            page = self.stack.widget(i)
-            wait_fn = getattr(page, "wait_for_workers", None)
-            if callable(wait_fn):
-                with contextlib.suppress(Exception):
-                    wait_fn()
+        self._wait_for_workers_on_all_pages()
+        # Runs AFTER the worker wait above so no background thread is
+        # still reading a password while we wipe it.
+        self._wipe_all_pdf_passwords()
         # Same for the update-check thread (usually a short HTTP
         # request, but the user can close the app immediately on
         # launch and Qt will warn if it's still running). Also drops

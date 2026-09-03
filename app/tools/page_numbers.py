@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
 
 from app.base import BasePage
 from app.i18n import t
-from app.utils import section, info_lbl, parse_pages, show_error
+from app.utils import (section, info_lbl, parse_pages, show_error,
+                       WrongPasswordError)
 from app.constants import DESKTOP
 from app.widgets import DropFileEdit
 
@@ -237,7 +238,7 @@ class TabPageNumbers(BasePage):
                 # it locked and write empty/garbled output. Mirror
                 # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
-                    raise ValueError(t("tool.err.wrong_password"))
+                    raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 if replace:
                     for pg_idx, rects in existing:

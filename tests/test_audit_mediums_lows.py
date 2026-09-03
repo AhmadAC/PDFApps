@@ -102,15 +102,30 @@ def test_split_clamps_rows_to_total():
     "app/tools/merge.py",
 ])
 def test_decrypt_return_checked(path):
+    """A discarded decrypt return value means a silently empty reader.
+
+    Deliberately checks only that *some* checked form is present, and
+    accepts both spellings: the original ``.decrypt(...) == 0`` and the
+    ``app.pdf_password.decrypt_pypdf(...) is None`` the Unicode-password
+    fix introduced. An earlier revision of this test banned the substring
+    ``.decrypt(`` outright, which outlawed a legitimate pypdf method by
+    text and would block the next correct use of it.
+
+    The property itself — a wrong password must raise instead of
+    yielding an empty document — is asserted behaviourally in
+    tests/test_unicode_passwords.py
+    (``test_wrong_password_still_raises``,
+    ``test_wrong_password_never_produces_a_zero_page_merge``,
+    ``test_editor_form_loader_reports_failure_on_a_wrong_password``).
+    """
     src = _read(path)
-    # The new pattern is "if X.decrypt(Y) == 0" or equivalent — either
-    # a direct comparison or storing in `result` and checking result == 0.
-    assert (".decrypt(" in src), f"{path} has no decrypt call"
-    has_check = ("decrypt(" in src and (
-        "== 0" in src or "result == 0" in src
-    ))
-    assert has_check, (
-        f"{path} must validate decrypt() return value (0 = wrong pwd)."
+    checked_forms = (
+        "decrypt_pypdf(" in src and "is None" in src,   # current
+        ".decrypt(" in src and "== 0" in src,           # pre-fix
+    )
+    assert any(checked_forms), (
+        f"{path} must check the result of its decrypt call "
+        "(0 / None = wrong password, and a reader with zero pages)."
     )
 
 

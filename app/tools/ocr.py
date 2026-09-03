@@ -12,7 +12,8 @@ from pypdf import PdfReader, PdfWriter
 
 from app.base import BasePage
 from app.i18n import t
-from app.utils import section, info_lbl, show_error
+from app.utils import (section, info_lbl, show_error,
+                       WrongPasswordError)
 from app.worker import TaskRunner, run_task
 from app.constants import TEXT_SEC, DESKTOP
 from app.widgets import DropFileEdit
@@ -304,7 +305,7 @@ class TabOCR(BasePage):
                     # would leave it locked and OCR empty pages. Mirror
                     # _open_fitz and raise a clear password error.
                     if not (pwd and doc.authenticate(pwd)):
-                        raise ValueError(t("tool.err.wrong_password"))
+                        raise WrongPasswordError(t("tool.err.wrong_password"))
                 try:
                     if fmt == 1:
                         texts = []
