@@ -1,8 +1,19 @@
 PySide6>=6.11.1
-pypdf>=6.14.2
+# PYSEC-2026-3655 / PYSEC-2026-3656 (fixed in 6.15.0), CVE-2026-82398
+# (6.15.0), CVE-2026-84309 (6.16.0) and CVE-2026-84310 / CVE-2026-84311
+# (6.16.1). 6.16.1 is the first release clear of all six, so the floor
+# is the current 6.16.2 rather than the 6.15.0 the earliest advisory
+# alone would suggest.
+pypdf>=6.16.2
 # GHSA-537c-gmf6-5ccf: signature verification bypass in legacy OpenSSL
-# providers fixed in 48.0.1.
-cryptography>=49.0.0
+# providers fixed in 48.0.1, and PYSEC-2026-3552 / CVE-2026-69247
+# (Bleichenbacher oracle in PKCS#7 EnvelopedData decryption, introduced
+# in 44.0.0) fixed in 50.0.0. 49.0.0 is the only 49.x release and it is
+# vulnerable, so the floor must stay at 50 or above: do not lower it.
+# Also the AES backend pypdf resolves at import time (pypdf declares it
+# only as the optional `crypto` extra), so without it AES-encrypted PDFs
+# raise DependencyError.
+cryptography>=50.0.1
 qtawesome>=1.4.2
 pillow>=12.3.0
 pymupdf>=1.28.0
