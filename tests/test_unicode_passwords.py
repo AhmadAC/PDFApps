@@ -468,7 +468,7 @@ def test_encrypt_tool_probes_the_output_instead_of_predicting(tmp_path,
     file locked with U+FB01 and then cannot reopen what it just wrote --
     which is what the reviewer measured on WSL with pypdf 6.10.2.
     """
-    import app.tools.encrypt as encrypt_mod
+    from app.tools import encrypt as encrypt_mod
     from app.editor import dialogs
 
     real_writer = encrypt_mod.PdfWriter
@@ -1185,7 +1185,19 @@ def test_main_window_close_survives_a_holder_that_raises_on_attribute_access(
     from app.tools.merge import TabJuntar
 
     class _Poison:
-        """Stands in for a holder whose attribute access blows up."""
+        """Stands in for a holder whose attribute access blows up.
+
+        The ``RuntimeError`` is the point of the test and must not be
+        softened into the ``AttributeError`` that ``__getattr__`` is
+        conventionally expected to raise (CodeQL
+        ``py/unexpected-raise-in-special-method`` flags it for that
+        reason). ``AttributeError`` is precisely the one exception the
+        ``getattr(holder, ..., None)`` default swallows on its own, so
+        with it this test keeps passing even when the lookup is moved
+        back outside ``contextlib.suppress`` -- the very regression it
+        exists to catch. Verified by mutation: ``RuntimeError`` fails
+        against the reintroduced bug, ``AttributeError`` passes.
+        """
 
         def __getattr__(self, name):
             raise RuntimeError("holder is gone: " + name)
