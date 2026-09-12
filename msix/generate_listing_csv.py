@@ -254,69 +254,69 @@ Engels, Portugees, Spaans, Frans, Duits, Chinees, Italiaans, Nederlands.
 # RELEASE NOTES
 # ============================================================
 RELEASE_NOTES = {}
-RELEASE_NOTES['en-us'] = ''  # User left empty
-RELEASE_NOTES['pt-pt'] = '''Versão 1.13.9 — Melhorias de segurança e instalador
+RELEASE_NOTES['en-us'] = '''Version 1.15.0 — Password fixes and a stronger encryption stack
 
-• Auditoria de segurança completa: validação SHA-256 nos updates, escrita atómica de ficheiros de configuração, e limites mais restritos na extração de ZIP/TAR.
-• Splash screen do instalador traduzido em 8 idiomas com animação de carregamento.
-• Pacote macOS agora distribuído como .dmg (arrasta para Aplicações).
-• Atualização da pypdf 6.10.2 com várias correções de segurança.
-• 9 correções em ferramentas: validação reforçada na junção, marca de água, encriptação, OCR e conversão.
-• Updater traduzido em 8 idiomas com diálogo de progresso melhorado.
+• Password-protected PDFs: a correct password is no longer accepted by the unlock prompt and then rejected by every tool. Passwords with accented or non-English characters were affected, leaving blank page thumbnails and repeated prompts.
+• Unlock once and stay unlocked: the spelling that worked is remembered and reused across the viewer and all tools.
+• A wrong password now shows a clear translated message instead of a generic error with hidden technical details.
+• AES-256 encryption fixed on the Linux (Flatpak) build, where a missing cryptography component made it fail.
+• Security: pypdf 6.16.2 and cryptography 50.0.1, closing six PDF parser advisories and one cryptography advisory.
 '''
-RELEASE_NOTES['es-es'] = '''Versión 1.13.9 — Auditoría de seguridad y mejoras del instalador
+RELEASE_NOTES['pt-pt'] = '''Versão 1.15.0 — Correções de palavra-passe e encriptação mais robusta
 
-• Validación SHA-256 en actualizaciones, escritura atómica de configuración y límites más estrictos en extracción ZIP/TAR.
-• Pantalla de carga del instalador traducida a 8 idiomas con animación.
-• macOS ahora se distribuye como .dmg (arrastra a Aplicaciones).
-• pypdf actualizado a 6.10.2 con varios parches de seguridad.
-• 9 correcciones en herramientas: unión, marca de agua, cifrado, OCR y conversión.
-• Actualizador traducido a 8 idiomas con diálogo de progreso mejorado.
+• PDFs protegidos: uma palavra-passe correta deixa de ser aceite no pedido de desbloqueio e rejeitada depois por todas as ferramentas. Afetava palavras-passe com acentos ou caracteres não ingleses, deixando miniaturas em branco e pedidos repetidos.
+• Desbloqueie uma vez: a grafia que funcionou fica memorizada e é reutilizada no visualizador e em todas as ferramentas.
+• Palavra-passe errada mostra agora uma mensagem traduzida e clara, em vez de um erro genérico com detalhes técnicos escondidos.
+• Encriptação AES-256 corrigida na versão Linux (Flatpak), onde falhava por falta de um componente de criptografia.
+• Segurança: pypdf 6.16.2 e cryptography 50.0.1, fechando seis avisos no leitor de PDF e um na biblioteca de criptografia.
 '''
-RELEASE_NOTES['fr-fr'] = '''Version 1.13.9 — Audit de sécurité et améliorations de l\'installateur
+RELEASE_NOTES['es-es'] = '''Versión 1.15.0 — Correcciones de contraseña y cifrado más robusto
 
-• Validation SHA-256 sur les mises à jour, écriture atomique de la configuration, limites strictes sur l\'extraction ZIP/TAR.
-• Écran de démarrage de l\'installateur traduit en 8 langues avec animation.
-• macOS livré désormais en .dmg (glissez vers Applications).
-• Mise à jour de pypdf vers 6.10.2 avec plusieurs correctifs de sécurité.
-• 9 corrections dans les outils : fusion, filigrane, chiffrement, OCR et conversion.
-• Programme de mise à jour traduit en 8 langues avec dialogue de progression amélioré.
+• PDF protegidos: una contraseña correcta ya no es aceptada al desbloquear y rechazada después por todas las herramientas. Afectaba a contraseñas con acentos o caracteres no ingleses, con miniaturas en blanco y peticiones repetidas.
+• Desbloquee una vez: la grafía que funcionó se recuerda y se reutiliza en el visor y en todas las herramientas.
+• Una contraseña incorrecta muestra ahora un mensaje traducido y claro, en lugar de un error genérico con detalles técnicos ocultos.
+• Cifrado AES-256 corregido en la versión Linux (Flatpak), donde fallaba por faltar un componente de criptografía.
+• Seguridad: pypdf 6.16.2 y cryptography 50.0.1, cerrando seis avisos del lector de PDF y uno de criptografía.
 '''
-RELEASE_NOTES['de-de'] = '''Version 1.13.9 — Sicherheitsaudit und Installer-Verbesserungen
+RELEASE_NOTES['fr-fr'] = '''Version 1.15.0 — Corrections de mot de passe et chiffrement renforcé
 
-• SHA-256-Validierung bei Updates, atomares Schreiben der Konfiguration, strengere ZIP/TAR-Extraktionsgrenzen.
-• Übersetzte Installer-Splash in 8 Sprachen mit Ladeanimation.
-• macOS wird jetzt als .dmg ausgeliefert (in Programme ziehen).
-• pypdf auf 6.10.2 aktualisiert mit mehreren Sicherheitspatches.
-• 9 Korrekturen in Werkzeugen: Zusammenführen, Wasserzeichen, Verschlüsselung, OCR, Konvertierung.
-• Updater in 8 Sprachen übersetzt, mit verbessertem Fortschrittsdialog.
+• PDF protégés : un mot de passe correct n\'est plus accepté au déverrouillage puis rejeté par tous les outils. Les mots de passe avec accents ou caractères non anglais étaient concernés, avec des miniatures vides et des demandes répétées.
+• Déverrouillez une fois : l\'orthographe qui a fonctionné est mémorisée et réutilisée dans la visionneuse et tous les outils.
+• Un mot de passe erroné affiche désormais un message traduit et clair, au lieu d\'une erreur générique aux détails techniques masqués.
+• Chiffrement AES-256 corrigé sur la version Linux (Flatpak), où il échouait faute d\'un composant de cryptographie.
+• Sécurité : pypdf 6.16.2 et cryptography 50.0.1, corrigeant six avis sur le lecteur PDF et un sur la cryptographie.
 '''
-RELEASE_NOTES['zh-cn'] = '''版本 1.13.9 — 安全审计与安装器优化
+RELEASE_NOTES['de-de'] = '''Version 1.15.0 — Passwort-Korrekturen und stärkere Verschlüsselung
 
-• 更新使用 SHA-256 校验、配置文件原子写入、更严格的 ZIP/TAR 解压限制。
-• 安装器启动画面已翻译为 8 种语言，含加载动画。
-• macOS 现以 .dmg 格式发布（拖入“应用程序”）。
-• pypdf 升级至 6.10.2，包含多项安全补丁。
-• 工具中 9 处修复：合并、水印、加密、OCR 与格式转换。
-• 更新程序翻译为 8 种语言，进度对话框已改进。
+• Geschützte PDFs: Ein korrektes Passwort wird nicht mehr beim Entsperren akzeptiert und danach von jedem Werkzeug abgelehnt. Betroffen waren Passwörter mit Akzenten oder nicht englischen Zeichen, mit leeren Miniaturansichten und wiederholten Abfragen.
+• Einmal entsperren: Die Schreibweise, die funktioniert hat, wird gemerkt und im Viewer und in allen Werkzeugen wiederverwendet.
+• Ein falsches Passwort zeigt jetzt eine klare, übersetzte Meldung statt eines generischen Fehlers mit versteckten technischen Details.
+• AES-256-Verschlüsselung in der Linux-Version (Flatpak) korrigiert, wo eine fehlende Krypto-Komponente sie scheitern ließ.
+• Sicherheit: pypdf 6.16.2 und cryptography 50.0.1, schließt sechs PDF-Parser-Hinweise und einen Krypto-Hinweis.
 '''
-RELEASE_NOTES['it-it'] = '''Versione 1.13.9 — Audit di sicurezza e miglioramenti dell\'installer
+RELEASE_NOTES['zh-cn'] = '''版本 1.15.0 — 密码修复与更强的加密
 
-• Validazione SHA-256 sugli aggiornamenti, scrittura atomica della configurazione, limiti più rigidi sull\'estrazione ZIP/TAR.
-• Splash dell\'installer tradotto in 8 lingue con animazione di caricamento.
-• macOS distribuito come .dmg (trascina in Applicazioni).
-• pypdf aggiornato a 6.10.2 con diverse patch di sicurezza.
-• 9 correzioni negli strumenti: unione, filigrana, crittografia, OCR e conversione.
-• Updater tradotto in 8 lingue con dialogo di avanzamento migliorato.
+• 受保护的 PDF：正确的密码不会再在解锁时被接受、随后却被所有工具拒绝。含重音或非英文字符的密码受影响，会出现空白缩略图和反复提示。
+• 解锁一次即可：生效的密码写法会被记住，并在查看器和所有工具中复用。
+• 密码错误时显示清晰的翻译提示，不再是隐藏技术细节的通用错误。
+• 修复 Linux (Flatpak) 版本的 AES-256 加密，此前因缺少加密组件而失败。
+• 安全：pypdf 升级至 6.16.2、cryptography 升级至 50.0.1，修复六项 PDF 解析器公告和一项加密库公告。
 '''
-RELEASE_NOTES['nl-nl'] = '''Versie 1.13.9 — Beveiligingsaudit en installer-verbeteringen
+RELEASE_NOTES['it-it'] = '''Versione 1.15.0 — Correzioni delle password e cifratura più robusta
 
-• SHA-256-validatie bij updates, atomair schrijven van configuratie, striktere ZIP/TAR-extractielimieten.
-• Vertaalde installer-splash in 8 talen met laad-animatie.
-• macOS wordt nu als .dmg geleverd (sleep naar Programma\'s).
-• pypdf bijgewerkt naar 6.10.2 met meerdere beveiligingspatches.
-• 9 fixes in tools: samenvoegen, watermerk, versleuteling, OCR en conversie.
-• Updater vertaald in 8 talen met verbeterd voortgangsdialoog.
+• PDF protetti: una password corretta non viene più accettata allo sblocco e poi rifiutata da ogni strumento. Erano interessate le password con accenti o caratteri non inglesi, con miniature vuote e richieste ripetute.
+• Sblocca una volta sola: la grafia che ha funzionato viene memorizzata e riusata nel visualizzatore e in tutti gli strumenti.
+• Una password errata mostra ora un messaggio tradotto e chiaro, invece di un errore generico con dettagli tecnici nascosti.
+• Cifratura AES-256 corretta nella versione Linux (Flatpak), dove falliva per un componente di crittografia mancante.
+• Sicurezza: pypdf 6.16.2 e cryptography 50.0.1, chiudendo sei avvisi del lettore PDF e uno di crittografia.
+'''
+RELEASE_NOTES['nl-nl'] = '''Versie 1.15.0 — Wachtwoordfixes en sterkere versleuteling
+
+• Beveiligde PDF\'s: een correct wachtwoord wordt niet langer bij het ontgrendelen geaccepteerd en daarna door elke tool geweigerd. Wachtwoorden met accenten of niet-Engelse tekens waren getroffen, met lege miniaturen en herhaalde vragen.
+• Eenmaal ontgrendelen: de schrijfwijze die werkte wordt onthouden en hergebruikt in de viewer en alle tools.
+• Een verkeerd wachtwoord toont nu een duidelijke vertaalde melding in plaats van een generieke fout met verborgen technische details.
+• AES-256-versleuteling hersteld in de Linux-versie (Flatpak), waar een ontbrekend crypto-onderdeel het liet mislukken.
+• Beveiliging: pypdf 6.16.2 en cryptography 50.0.1, met zes PDF-parser-adviezen en één crypto-advies verholpen.
 '''
 
 # ============================================================
