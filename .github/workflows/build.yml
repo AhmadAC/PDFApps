@@ -234,57 +234,13 @@ jobs:
 
           echo "Generating notes from $PREV to $TAG"
 
-          # Collect conventional commit messages, skip chore/ci/deps/merge
-          FEATURES=""
-          FIXES=""
-          PERF=""
-          OTHER=""
+          # Categorisation lives in scripts/release_notes.py so it can be
+          # unit-tested; this body is published verbatim to end users by
+          # the in-app updater, so development-only commit types (test,
+          # refactor, chore, ci, build, docs, style) are dropped there.
+          # stdlib only: this job has no setup-python step.
+          python3 scripts/release_notes.py "${PREV}..${TAG}" -o release_notes.md
 
-          while IFS= read -r line; do
-            # Skip empty, merge, chore, ci, deps, bump, dependabot
-            echo "$line" | grep -qiE '^(chore|ci|build|Merge|docs\(deps\))' && continue
-            echo "$line" | grep -qiE 'dependabot|bump.*from.*to' && continue
-            echo "$line" | grep -qi '^$' && continue
-
-            # Clean up: remove scope prefix for display, capitalize
-            clean=$(echo "$line" | sed -E 's/^(feat|fix|perf|a11y|docs)(\([^)]*\))?:\s*//')
-            clean="$(echo "${clean:0:1}" | tr '[:lower:]' '[:upper:]')${clean:1}"
-
-            if echo "$line" | grep -qE '^feat'; then
-              FEATURES="${FEATURES}- ${clean}\n"
-            elif echo "$line" | grep -qE '^fix'; then
-              FIXES="${FIXES}- ${clean}\n"
-            elif echo "$line" | grep -qE '^perf'; then
-              PERF="${PERF}- ${clean}\n"
-            elif echo "$line" | grep -qE '^a11y'; then
-              FIXES="${FIXES}- ${clean}\n"
-            elif echo "$line" | grep -qE '^docs'; then
-              : # skip docs-only commits
-            else
-              OTHER="${OTHER}- ${clean}\n"
-            fi
-          done <<< "$(git log --pretty=format:'%s' "${PREV}..${TAG}" --no-merges)"
-
-          BODY=""
-          if [ -n "$FEATURES" ]; then
-            BODY="${BODY}## New features\n${FEATURES}\n"
-          fi
-          if [ -n "$PERF" ]; then
-            BODY="${BODY}## Performance\n${PERF}\n"
-          fi
-          if [ -n "$FIXES" ]; then
-            BODY="${BODY}## Fixes & improvements\n${FIXES}\n"
-          fi
-          if [ -n "$OTHER" ]; then
-            BODY="${BODY}## Other\n${OTHER}\n"
-          fi
-
-          if [ -z "$BODY" ]; then
-            BODY="Bug fixes and improvements."
-          fi
-
-          # Write to file (multiline output)
-          printf '%b' "$BODY" > release_notes.md
           echo "Generated release notes:"
           cat release_notes.md
 

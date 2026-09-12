@@ -20,8 +20,12 @@ from app.utils import error_color
 
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
-# Section headings used in auto-generated release notes (build.yml)
+# Section headings used in auto-generated release notes, produced by
+# scripts/release_notes.py. The match below is a plain string replace,
+# so a heading added there without a key here (and in all 8 languages of
+# app/translations.json) degrades to English silently.
 _SECTION_MAP = {
+    "## Security":              "update.section.security",
     "## New features":          "update.section.features",
     "## Performance":           "update.section.performance",
     "## Fixes & improvements":  "update.section.fixes",
