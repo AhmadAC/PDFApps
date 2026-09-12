@@ -67,9 +67,24 @@
     <div class="container" style="max-width: 880px;">
         <div class="release">
             <div class="release-header">
+                <span class="version-tag">v1.15.0</span>
+                <span class="release-date">September 12, 2026</span>
+                <span class="release-badge">Latest</span>
+            </div>
+            <h3>Passwords that unlock once, stay unlocked, and a stronger encryption stack</h3>
+            <ul class="docs-list">
+                <li><strong>Password-protected PDFs</strong>: a correct password is no longer accepted by the unlock prompt and then rejected by every tool you open afterwards. Documents with accented or non-English characters in the password were the ones affected: the file appeared to open, the page thumbnails stayed blank, and each tool asked again for a password you had just typed correctly. PDFApps now tries the spellings the PDF standard allows, remembers the one that actually worked, and reuses it everywhere, so unlocking once is enough.</li>
+                <li><strong>Clearer wrong-password message</strong>: typing the wrong password now shows a plain, translated message instead of a generic error with technical details hidden behind a "Show Details" button.</li>
+                <li><strong>Encryption fixed on Linux (Flatpak)</strong>: the Flatpak build was missing a cryptography component, so encrypting a PDF with AES-256 failed outright and AES-encrypted files could not be opened by the Encrypt tool. The component is now bundled and both work.</li>
+                <li><strong>Security &amp; dependencies</strong>: pypdf updated to 6.16.2 and cryptography to 50.0.1, closing six advisories in the PDF parser and one in the cryptography library.</li>
+                <li><strong>Better release notes</strong>: the "What's new" text shown by the in-app updater no longer includes internal development entries, and security updates now get their own section listed first.</li>
+            </ul>
+        </div>
+
+        <div class="release">
+            <div class="release-header">
                 <span class="version-tag">v1.14.4</span>
                 <span class="release-date">August 4, 2026</span>
-                <span class="release-badge">Latest</span>
             </div>
             <h3>OCR language detection on Apple Silicon Macs</h3>
             <ul class="docs-list">

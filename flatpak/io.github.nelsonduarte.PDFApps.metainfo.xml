@@ -11,12 +11,14 @@
       PDFApps is a fast, offline, all-in-one PDF editor and manager. No subscriptions,
       no cloud uploads, no account required — your files never leave your computer.
     </p>
-    <p>13 built-in tools:</p>
+    <p>15 built-in tools:</p>
     <ul>
       <li>Split PDFs by page ranges</li>
       <li>Merge multiple PDFs with drag-and-drop ordering</li>
       <li>Rotate, extract, and reorder pages</li>
       <li>Compress with three quality levels</li>
+      <li>Add page numbers in six positions with four formats</li>
+      <li>N-up layout: 2, 4, 6, 9, or 16 pages per sheet</li>
       <li>Encrypt and decrypt with passwords</li>
       <li>Add watermarks and stamps</li>
       <li>OCR for scanned documents (5 languages)</li>
@@ -96,6 +98,65 @@
   </provides>
 
   <releases>
+    <release version="1.15.0" date="2026-09-12">
+      <description>
+        <p>Password fixes and a stronger encryption stack:</p>
+        <ul>
+          <li>Correct passwords with accented or non-English characters are no longer rejected by the tools after unlocking</li>
+          <li>The password spelling that worked is reused across the viewer and every tool</li>
+          <li>A wrong password now shows a clear translated message</li>
+          <li>AES-256 encryption fixed in the Flatpak build, where a missing cryptography module made it fail</li>
+          <li>Security: pypdf 6.16.2 and cryptography 50.0.1, closing seven advisories</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.14.4" date="2026-08-04">
+      <description>
+        <p>OCR language packs installed through Homebrew are now detected on Apple Silicon Macs.</p>
+      </description>
+    </release>
+    <release version="1.14.3" date="2026-07-28">
+      <description>
+        <p>Viewer stability, legacy-encoding imports, and security updates:</p>
+        <ul>
+          <li>The shared document handle stays valid after a failed note deletion, and saving no longer races with rendering</li>
+          <li>In-document search is debounced, so typing a query no longer blocks the interface</li>
+          <li>Text files in Windows-1252 and Latin-1 encodings now import without errors</li>
+          <li>Security updates to pillow, pymupdf, pypdf, and qtawesome</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.14.0" date="2026-07-13">
+      <description>
+        <p>Page thumbnails sidebar in the viewer:</p>
+        <ul>
+          <li>A Pages tab shows a live thumbnail of every page; click one to jump to it</li>
+          <li>Thumbnails render on demand and stay sharp on high-DPI displays</li>
+          <li>A Contents tab shows the document outline when a PDF has bookmarks</li>
+          <li>Password-protected documents are verified correctly when opened for viewing</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.13.17" date="2026-06-28">
+      <description>
+        <p>Editor audit fixes, atomic saves, and streaming OCR:</p>
+        <ul>
+          <li>Encryption is preserved on save and annotation deletions persist</li>
+          <li>Atomic writes with restore-on-error added across the tools</li>
+          <li>Streaming OCR writer lowers peak memory use</li>
+          <li>PDF to DOCX conversion is now layout-aware</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.12.0" date="2026-04-13">
+      <description>
+        <p>Five new import formats and four new export formats:</p>
+        <ul>
+          <li>Import DOCX, PPTX, XLSX, HTML, and EPUB to PDF</li>
+          <li>Convert PDF to PPTX, XLSX, HTML, and EPUB</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.8.3" date="2026-04-05">
       <description>
         <p>New features and fixes:</p>
