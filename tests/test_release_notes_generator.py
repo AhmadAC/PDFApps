@@ -65,9 +65,9 @@ class TestDroppedTypes:
         "refactor(editor): reuse shared atomic PDF write in TabEditar._run",
         "test: close file handles in test_pdfapps to satisfy CodeQL",
         "test(editor): cover image and highlight branches of apply_pending_edits",
-        "refactor(editor): extract pure apply_pending_edits dispatcher "
+        "refactor(editor): extract pure apply_pending_edits dispatcher " +
         "from TabEditar._run",
-        "refactor(editor): extract pure text-reinsertion helpers to "
+        "refactor(editor): extract pure text-reinsertion helpers to " +
         "text_reinsert module",
     ]
 
