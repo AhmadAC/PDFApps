@@ -155,7 +155,7 @@ class TestSecuritySection:
         "security: bump bundled Ghostscript 10.05.0 to 10.07.0 (#32)",
         "security: verify SHA256 of bundled Tesseract and Ghostscript downloads",
         "security: upgrade PDF encryption to AES-256 and fix toast use-after-free",
-        "security: harden updater hash verification and uninstaller "
+        "security: harden updater hash verification and uninstaller " +
         "BAT generation",
         "security: fix ZIP/TAR slip, temp perms, batch injection, " +
         "path validation",
