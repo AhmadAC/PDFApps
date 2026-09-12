@@ -157,7 +157,7 @@ class TestSecuritySection:
         "security: upgrade PDF encryption to AES-256 and fix toast use-after-free",
         "security: harden updater hash verification and uninstaller "
         "BAT generation",
-        "security: fix ZIP/TAR slip, temp perms, batch injection, "
+        "security: fix ZIP/TAR slip, temp perms, batch injection, " +
         "path validation",
     ]
 
