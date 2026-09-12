@@ -150,7 +150,7 @@ class TestSecuritySection:
     # All the security commits in main's history (arrow normalised).
     REAL_SECURITY = [
         "security(deps): align qtawesome floor to 1.4.2",
-        "security(deps): bump pillow floor to 12.3.0 and update "
+        "security(deps): bump pillow floor to 12.3.0 and update " +
         "vulnerable flatpak pins",
         "security: bump bundled Ghostscript 10.05.0 to 10.07.0 (#32)",
         "security: verify SHA256 of bundled Tesseract and Ghostscript downloads",
