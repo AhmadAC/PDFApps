@@ -261,6 +261,7 @@ RELEASE_NOTES['en-us'] = '''Version 1.15.0 — Password fixes and a stronger enc
 • A wrong password now shows a clear translated message instead of a generic error with hidden technical details.
 • AES-256 encryption fixed on the Linux (Flatpak) build, where a missing cryptography component made it fail.
 • Security: pypdf 6.16.2 and cryptography 50.0.1, closing six PDF parser advisories and one cryptography advisory.
+• Clearer release notes: these notes now describe only what changes for you, with internal development entries left out and security fixes listed first in their own section.
 '''
 RELEASE_NOTES['pt-pt'] = '''Versão 1.15.0 — Correções de palavra-passe e encriptação mais robusta
 
@@ -269,6 +270,7 @@ RELEASE_NOTES['pt-pt'] = '''Versão 1.15.0 — Correções de palavra-passe e en
 • Palavra-passe errada mostra agora uma mensagem traduzida e clara, em vez de um erro genérico com detalhes técnicos escondidos.
 • Encriptação AES-256 corrigida na versão Linux (Flatpak), onde falhava por falta de um componente de criptografia.
 • Segurança: pypdf 6.16.2 e cryptography 50.0.1, fechando seis avisos no leitor de PDF e um na biblioteca de criptografia.
+• Notas de versão mais claras: estas notas passam a descrever apenas o que muda para si, sem entradas internas de desenvolvimento e com as correções de segurança em secção própria, listadas primeiro.
 '''
 RELEASE_NOTES['es-es'] = '''Versión 1.15.0 — Correcciones de contraseña y cifrado más robusto
 
@@ -277,6 +279,7 @@ RELEASE_NOTES['es-es'] = '''Versión 1.15.0 — Correcciones de contraseña y ci
 • Una contraseña incorrecta muestra ahora un mensaje traducido y claro, en lugar de un error genérico con detalles técnicos ocultos.
 • Cifrado AES-256 corregido en la versión Linux (Flatpak), donde fallaba por faltar un componente de criptografía.
 • Seguridad: pypdf 6.16.2 y cryptography 50.0.1, cerrando seis avisos del lector de PDF y uno de criptografía.
+• Notas de versión más claras: estas notas describen ahora solo lo que cambia para usted, sin entradas internas de desarrollo y con las correcciones de seguridad en su propia sección, listadas primero.
 '''
 RELEASE_NOTES['fr-fr'] = '''Version 1.15.0 — Corrections de mot de passe et chiffrement renforcé
 
@@ -285,6 +288,7 @@ RELEASE_NOTES['fr-fr'] = '''Version 1.15.0 — Corrections de mot de passe et ch
 • Un mot de passe erroné affiche désormais un message traduit et clair, au lieu d\'une erreur générique aux détails techniques masqués.
 • Chiffrement AES-256 corrigé sur la version Linux (Flatpak), où il échouait faute d\'un composant de cryptographie.
 • Sécurité : pypdf 6.16.2 et cryptography 50.0.1, corrigeant six avis sur le lecteur PDF et un sur la cryptographie.
+• Notes de version plus claires : ces notes ne décrivent plus que ce qui change pour vous, sans les entrées internes de développement, et les correctifs de sécurité ont leur propre section, placée en premier.
 '''
 RELEASE_NOTES['de-de'] = '''Version 1.15.0 — Passwort-Korrekturen und stärkere Verschlüsselung
 
@@ -293,6 +297,7 @@ RELEASE_NOTES['de-de'] = '''Version 1.15.0 — Passwort-Korrekturen und stärker
 • Ein falsches Passwort zeigt jetzt eine klare, übersetzte Meldung statt eines generischen Fehlers mit versteckten technischen Details.
 • AES-256-Verschlüsselung in der Linux-Version (Flatpak) korrigiert, wo eine fehlende Krypto-Komponente sie scheitern ließ.
 • Sicherheit: pypdf 6.16.2 und cryptography 50.0.1, schließt sechs PDF-Parser-Hinweise und einen Krypto-Hinweis.
+• Klarere Versionshinweise: Diese Hinweise beschreiben jetzt nur noch, was sich für Sie ändert, ohne interne Entwicklungseinträge und mit Sicherheitskorrekturen in einem eigenen, zuerst genannten Abschnitt.
 '''
 RELEASE_NOTES['zh-cn'] = '''版本 1.15.0 — 密码修复与更强的加密
 
@@ -301,6 +306,7 @@ RELEASE_NOTES['zh-cn'] = '''版本 1.15.0 — 密码修复与更强的加密
 • 密码错误时显示清晰的翻译提示，不再是隐藏技术细节的通用错误。
 • 修复 Linux (Flatpak) 版本的 AES-256 加密，此前因缺少加密组件而失败。
 • 安全：pypdf 升级至 6.16.2、cryptography 升级至 50.0.1，修复六项 PDF 解析器公告和一项加密库公告。
+• 更清晰的版本说明：本说明现在只描述与您相关的变化，不再包含内部开发条目，安全修复单独成节并列在最前。
 '''
 RELEASE_NOTES['it-it'] = '''Versione 1.15.0 — Correzioni delle password e cifratura più robusta
 
@@ -309,6 +315,7 @@ RELEASE_NOTES['it-it'] = '''Versione 1.15.0 — Correzioni delle password e cifr
 • Una password errata mostra ora un messaggio tradotto e chiaro, invece di un errore generico con dettagli tecnici nascosti.
 • Cifratura AES-256 corretta nella versione Linux (Flatpak), dove falliva per un componente di crittografia mancante.
 • Sicurezza: pypdf 6.16.2 e cryptography 50.0.1, chiudendo sei avvisi del lettore PDF e uno di crittografia.
+• Note di versione più chiare: queste note descrivono ora solo ciò che cambia per te, senza voci interne di sviluppo e con le correzioni di sicurezza in una sezione dedicata, elencata per prima.
 '''
 RELEASE_NOTES['nl-nl'] = '''Versie 1.15.0 — Wachtwoordfixes en sterkere versleuteling
 
@@ -317,6 +324,7 @@ RELEASE_NOTES['nl-nl'] = '''Versie 1.15.0 — Wachtwoordfixes en sterkere versle
 • Een verkeerd wachtwoord toont nu een duidelijke vertaalde melding in plaats van een generieke fout met verborgen technische details.
 • AES-256-versleuteling hersteld in de Linux-versie (Flatpak), waar een ontbrekend crypto-onderdeel het liet mislukken.
 • Beveiliging: pypdf 6.16.2 en cryptography 50.0.1, met zes PDF-parser-adviezen en één crypto-advies verholpen.
+• Duidelijkere release-opmerkingen: deze opmerkingen beschrijven nu alleen wat er voor u verandert, zonder interne ontwikkelitems en met beveiligingsfixes in een eigen sectie, als eerste vermeld.
 '''
 
 # ============================================================
