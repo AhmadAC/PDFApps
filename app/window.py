@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         self._help_btn.setObjectName("theme_btn")
         _a11y(self._help_btn, t("help.tip"))
         self._help_btn.setFixedSize(28, 28)
-        self._help_btn.clicked.connect(lambda: __import__('webbrowser').open("https://nelsonduarte.github.io/PDFApps/#guide"))
+        self._help_btn.clicked.connect(lambda: __import__('webbrowser').open("https://pdf-apps.com/docs#first-steps"))
         wb_h.addWidget(self._help_btn)
 
         _lang_labels = {"en": "EN", "pt": "PT", "es": "ES", "fr": "FR", "de": "DE", "zh": "ZH", "it": "IT", "nl": "NL"}
