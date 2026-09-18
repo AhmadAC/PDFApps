@@ -1,13 +1,28 @@
-"""PDFApps — Cross-platform Installer (Windows / macOS / Linux)"""
+"""PDFApps — Cross-platform Installer (Windows / macOS / Linux) using PySide6"""
+import os
+import sys
+import shutil
+import subprocess
+import urllib.request
+import time
+import locale
+import hashlib
+import hmac
 import contextlib
-import os, sys, shutil, subprocess, threading, urllib.request, time, locale, hashlib, hmac
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QIcon, QFont
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton, QLineEdit,
+    QCheckBox, QProgressBar, QFileDialog, QMessageBox,
+    QVBoxLayout, QHBoxLayout, QFrame
+)
 
 APP_NAME    = "PDFApps"
 APP_VERSION = "1.15.0"
 BG          = "#FFFFFF"
-HEADER_BG   = "#1E3A5F"
+BANNER_BG   = "#E5EDF5"
+BORDER      = "#C9D2DF"
 ACCENT      = "#3B82F6"
 TEXT        = "#1E293B"
 TEXT_L      = "#64748B"
@@ -19,7 +34,7 @@ _INSTALLER_STRINGS = {
         "loading": "Loading…",
         "title": "Install {app} {ver}",
         "folder": "Installation folder:",
-        "browse": "  Browse  ",
+        "browse": "Browse",
         "desktop": "Create Desktop shortcut",
         "startmenu": "Create Start Menu shortcut",
         "appmenu": "Register in application menu",
@@ -28,10 +43,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract already installed.",
         "gs_ok": "Ghostscript already installed.",
         "ready": "Ready to install.",
-        "install": "  Install  ",
-        "installing": "  Installing…  ",
-        "cancel": "  Cancel  ",
-        "finish": "  Finish  ",
+        "install": "Install",
+        "installing": "Installing…",
+        "cancel": "Cancel",
+        "finish": "Finish",
         "creating_folder": "Creating installation folder…",
         "copying_app": "Copying {app}…",
         "copying_files": "Copying files…",
@@ -61,7 +76,7 @@ _INSTALLER_STRINGS = {
         "loading": "A carregar…",
         "title": "Instalar {app} {ver}",
         "folder": "Pasta de instalação:",
-        "browse": "  Procurar  ",
+        "browse": "Procurar",
         "desktop": "Criar atalho no Ambiente de Trabalho",
         "startmenu": "Criar atalho no Menu Iniciar",
         "appmenu": "Registar no menu de aplicações",
@@ -70,10 +85,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract já instalado.",
         "gs_ok": "Ghostscript já instalado.",
         "ready": "Pronto para instalar.",
-        "install": "  Instalar  ",
-        "installing": "  A instalar…  ",
-        "cancel": "  Cancelar  ",
-        "finish": "  Concluir  ",
+        "install": "Instalar",
+        "installing": "A instalar…",
+        "cancel": "Cancelar",
+        "finish": "Concluir",
         "creating_folder": "A criar pasta de instalação…",
         "copying_app": "A copiar {app}…",
         "copying_files": "A copiar ficheiros…",
@@ -103,7 +118,7 @@ _INSTALLER_STRINGS = {
         "loading": "Cargando…",
         "title": "Instalar {app} {ver}",
         "folder": "Carpeta de instalación:",
-        "browse": "  Examinar  ",
+        "browse": "Examinar",
         "desktop": "Crear acceso directo en el Escritorio",
         "startmenu": "Crear acceso directo en el Menú Inicio",
         "appmenu": "Registrar en el menú de aplicaciones",
@@ -112,10 +127,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract ya instalado.",
         "gs_ok": "Ghostscript ya instalado.",
         "ready": "Listo para instalar.",
-        "install": "  Instalar  ",
-        "installing": "  Instalando…  ",
-        "cancel": "  Cancelar  ",
-        "finish": "  Finalizar  ",
+        "install": "Instalar",
+        "installing": "Instalando…",
+        "cancel": "Cancelar",
+        "finish": "Finalizar",
         "creating_folder": "Creando carpeta de instalación…",
         "copying_app": "Copiando {app}…",
         "copying_files": "Copiando archivos…",
@@ -145,7 +160,7 @@ _INSTALLER_STRINGS = {
         "loading": "Chargement…",
         "title": "Installer {app} {ver}",
         "folder": "Dossier d'installation :",
-        "browse": "  Parcourir  ",
+        "browse": "Parcourir",
         "desktop": "Créer un raccourci sur le Bureau",
         "startmenu": "Créer un raccourci dans le Menu Démarrer",
         "appmenu": "Enregistrer dans le menu des applications",
@@ -154,10 +169,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract déjà installé.",
         "gs_ok": "Ghostscript déjà installé.",
         "ready": "Prêt à installer.",
-        "install": "  Installer  ",
-        "installing": "  Installation…  ",
-        "cancel": "  Annuler  ",
-        "finish": "  Terminer  ",
+        "install": "Installer",
+        "installing": "Installation…",
+        "cancel": "Annuler",
+        "finish": "Terminer",
         "creating_folder": "Création du dossier d'installation…",
         "copying_app": "Copie de {app}…",
         "copying_files": "Copie des fichiers…",
@@ -187,7 +202,7 @@ _INSTALLER_STRINGS = {
         "loading": "Laden…",
         "title": "{app} {ver} installieren",
         "folder": "Installationsordner:",
-        "browse": "  Durchsuchen  ",
+        "browse": "Durchsuchen",
         "desktop": "Desktopverknüpfung erstellen",
         "startmenu": "Startmenüverknüpfung erstellen",
         "appmenu": "Im Anwendungsmenü registrieren",
@@ -196,10 +211,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract bereits installiert.",
         "gs_ok": "Ghostscript bereits installiert.",
         "ready": "Bereit zur Installation.",
-        "install": "  Installieren  ",
-        "installing": "  Wird installiert…  ",
-        "cancel": "  Abbrechen  ",
-        "finish": "  Fertig  ",
+        "install": "Installieren",
+        "installing": "Wird installiert…",
+        "cancel": "Abbrechen",
+        "finish": "Fertig",
         "creating_folder": "Installationsordner wird erstellt…",
         "copying_app": "{app} wird kopiert…",
         "copying_files": "Dateien werden kopiert…",
@@ -229,7 +244,7 @@ _INSTALLER_STRINGS = {
         "loading": "加载中…",
         "title": "安装 {app} {ver}",
         "folder": "安装文件夹：",
-        "browse": "  浏览  ",
+        "browse": "浏览",
         "desktop": "创建桌面快捷方式",
         "startmenu": "创建开始菜单快捷方式",
         "appmenu": "注册到应用程序菜单",
@@ -238,10 +253,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract 已安装。",
         "gs_ok": "Ghostscript 已安装。",
         "ready": "准备安装。",
-        "install": "  安装  ",
-        "installing": "  正在安装…  ",
-        "cancel": "  取消  ",
-        "finish": "  完成  ",
+        "install": "安装",
+        "installing": "正在安装…",
+        "cancel": "取消",
+        "finish": "完成",
         "creating_folder": "正在创建安装文件夹…",
         "copying_app": "正在复制 {app}…",
         "copying_files": "正在复制文件…",
@@ -271,7 +286,7 @@ _INSTALLER_STRINGS = {
         "loading": "Caricamento…",
         "title": "Installa {app} {ver}",
         "folder": "Cartella di installazione:",
-        "browse": "  Sfoglia  ",
+        "browse": "Sfoglia",
         "desktop": "Crea collegamento sul Desktop",
         "startmenu": "Crea collegamento nel Menu Start",
         "appmenu": "Registra nel menu applicazioni",
@@ -280,10 +295,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract già installato.",
         "gs_ok": "Ghostscript già installato.",
         "ready": "Pronto per l'installazione.",
-        "install": "  Installa  ",
-        "installing": "  Installazione…  ",
-        "cancel": "  Annulla  ",
-        "finish": "  Fine  ",
+        "install": "Installa",
+        "installing": "Installazione…",
+        "cancel": "Annulla",
+        "finish": "Fine",
         "creating_folder": "Creazione cartella di installazione…",
         "copying_app": "Copia di {app}…",
         "copying_files": "Copia dei file…",
@@ -313,7 +328,7 @@ _INSTALLER_STRINGS = {
         "loading": "Laden…",
         "title": "{app} {ver} installeren",
         "folder": "Installatiemap:",
-        "browse": "  Bladeren  ",
+        "browse": "Bladeren",
         "desktop": "Snelkoppeling op bureaublad maken",
         "startmenu": "Snelkoppeling in Startmenu maken",
         "appmenu": "Registreren in toepassingsmenu",
@@ -322,10 +337,10 @@ _INSTALLER_STRINGS = {
         "tess_ok": "Tesseract al geïnstalleerd.",
         "gs_ok": "Ghostscript al geïnstalleerd.",
         "ready": "Klaar om te installeren.",
-        "install": "  Installeren  ",
-        "installing": "  Bezig met installeren…  ",
-        "cancel": "  Annuleren  ",
-        "finish": "  Voltooien  ",
+        "install": "Installeren",
+        "installing": "Bezig met installeren…",
+        "cancel": "Annuleren",
+        "finish": "Voltooien",
         "creating_folder": "Installatiemap aanmaken…",
         "copying_app": "{app} kopiëren…",
         "copying_files": "Bestanden kopiëren…",
@@ -360,7 +375,7 @@ def _detect_lang() -> str:
             lang_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
             primary = lang_id & 0x03FF
             _map = {0x16: "pt", 0x0A: "es", 0x0C: "fr", 0x07: "de",
-                     0x04: "zh", 0x10: "it", 0x13: "nl"}
+                    0x04: "zh", 0x10: "it", 0x13: "nl"}
             lang = _map.get(primary)
             if lang:
                 return lang
@@ -373,52 +388,6 @@ def _detect_lang() -> str:
     return "en"
 
 _LANG = _detect_lang()
-
-# Close PyInstaller splash and show animated tkinter splash
-try:
-    import pyi_splash
-    pyi_splash.close()
-except ImportError:
-    pass
-
-_loading_text = _INSTALLER_STRINGS.get(_LANG, {}).get("loading", "Loading…").rstrip("…").rstrip(".")
-
-
-def _show_loading_splash(root: tk.Tk):
-    """Show a small centered splash with animated dots while the main UI builds."""
-    splash = tk.Toplevel(root)
-    splash.overrideredirect(True)
-    splash.configure(bg="#1E3A5F")
-    sw, sh = 400, 200
-    x = (root.winfo_screenwidth() - sw) // 2
-    y = (root.winfo_screenheight() - sh) // 2
-    splash.geometry(f"{sw}x{sh}+{x}+{y}")
-    splash.attributes("-topmost", True)
-
-    tk.Label(splash, text="PDFApps", bg="#1E3A5F", fg="#FFFFFF",
-             font=("Segoe UI", 28, "bold")).pack(pady=(40, 10))
-    line = tk.Frame(splash, bg="#3B82F6", height=3, width=160)
-    line.pack(pady=(0, 20))
-
-    loading_var = tk.StringVar(value=_loading_text + ".")
-    tk.Label(splash, textvariable=loading_var, bg="#1E3A5F", fg="#94A3B8",
-             font=("Segoe UI", 11)).pack()
-
-    splash._dots = 1
-    splash._loading_var = loading_var
-
-    def _animate():
-        try:
-            splash._dots = (splash._dots % 3) + 1
-            loading_var.set(_loading_text + "." * splash._dots)
-            splash.after(400, _animate)
-        except Exception:
-            pass
-
-    splash.after(400, _animate)
-    splash.update()
-    return splash
-
 
 def _t(key: str, **kwargs) -> str:
     val = _INSTALLER_STRINGS.get(_LANG, {}).get(key)
@@ -440,8 +409,6 @@ if sys.platform == "win32":
         "https://github.com/UB-Mannheim/tesseract/releases/download/"
         "v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
     )
-    # Pinned SHA256 of the installer above. If the URL/version changes,
-    # recompute via:  python -c "import urllib.request,hashlib;print(hashlib.sha256(urllib.request.urlopen(URL).read()).hexdigest())"
     TESSERACT_SHA256 = "c885fff6998e0608ba4bb8ab51436e1c6775c2bafc2559a19b423e18678b60c9"
 elif sys.platform == "darwin":
     TESSERACT_EXE  = shutil.which("tesseract") or "/opt/homebrew/bin/tesseract"
@@ -456,14 +423,7 @@ else:
 
 LANG_PACKS = ["eng", "por"]
 
-# ── Ghostscript constants ─────────────────────────────────────────────
 if sys.platform == "win32":
-    # Bumped from 10.05.0 → 10.07.0 to clear 4 medium-severity CVEs
-    # affecting gs ≤10.05.1: CVE-2025-48708 (password leak in created
-    # PDFs), CVE-2025-59798 / 59799 (stack buffer overflow in
-    # pdf_write_cmap / pdfmark_coerce_dest), CVE-2025-59800 (integer →
-    # heap overflow in ocr_begin_page). NVD confirms 10.07.0 has zero
-    # known CVEs as of 2026-05.
     GHOSTSCRIPT_EXE = r"C:\Program Files\gs\gs10.07.0\bin\gswin64c.exe"
     GHOSTSCRIPT_URL = (
         "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/"
@@ -496,7 +456,6 @@ def default_dir() -> str:
 
 
 def open_file(path: str) -> None:
-    """Open a file with the default application, cross-platform."""
     if sys.platform == "win32":
         os.startfile(path)
     elif sys.platform == "darwin":
@@ -506,14 +465,12 @@ def open_file(path: str) -> None:
 
 
 def _no_window():
-    """Flags to hide console window (Windows only)."""
     return {"creationflags": 0x08000000} if sys.platform == "win32" else {}
 
 
 # ── Shortcuts / launchers ───────────────────────────────────────────────────────
 
 def create_shortcut_windows(target: str, lnk: str) -> None:
-    # Validate paths before interpolation
     if not os.path.isabs(target) or not os.path.isabs(lnk):
         raise ValueError("Shortcut paths must be absolute")
     t_safe = target.replace("'", "''")
@@ -548,7 +505,6 @@ def create_desktop_entry_linux(exe: str, desktop_file: str) -> None:
 
 
 def create_app_bundle_macos(exe: str, app_dir: str) -> None:
-    """Create minimal .app structure for macOS."""
     contents = os.path.join(app_dir, "Contents", "MacOS")
     os.makedirs(contents, exist_ok=True)
     launcher = os.path.join(contents, APP_NAME)
@@ -610,9 +566,8 @@ def _register_file_association_win(app_exe: str) -> None:
             winreg.SetValueEx(k, prog_id, 0, winreg.REG_NONE, b"")
         cap_key = r"Software\PDFApps\Capabilities"
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cap_key) as k:
-            winreg.SetValueEx(k, "ApplicationName",        0, winreg.REG_SZ, APP_NAME)
-            winreg.SetValueEx(k, "ApplicationDescription", 0, winreg.REG_SZ,
-                              "PDF editor and viewer")
+            winreg.SetValueEx(k, "ApplicationName", 0, winreg.REG_SZ, APP_NAME)
+            winreg.SetValueEx(k, "ApplicationDescription", 0, winreg.REG_SZ, "PDF editor and viewer")
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
                               cap_key + r"\FileAssociations") as k:
             winreg.SetValueEx(k, ".pdf", 0, winreg.REG_SZ, prog_id)
@@ -659,19 +614,24 @@ def register_uninstall(install_dir: str, uninstall_exe: str) -> None:
         pass
 
 
-# ── Tesseract ─────────────────────────────────────────────────────────────────
+# ── Dependency check & download helpers ─────────────────────────────────────────
 
 def tesseract_installed() -> bool:
     return os.path.isfile(TESSERACT_EXE) or bool(shutil.which("tesseract"))
 
 
+def ghostscript_installed() -> bool:
+    if bool(shutil.which("gswin64c")) or bool(shutil.which("gs")):
+        return True
+    if sys.platform == "win32":
+        import glob
+        return bool(glob.glob(r"C:\Program Files\gs\gs*\bin\gswin64c.exe"))
+    return False
+
+
 def download_file(url: str, dest: str, on_progress=None,
                   expected_sha256: str | None = None,
                   asset_name: str = "") -> None:
-    """Download URL to dest. If expected_sha256 is set, verify the SHA256
-    of the written file using a constant-time compare; on mismatch, delete
-    the file and raise RuntimeError. Refuses to proceed for executables
-    that should be hash-pinned but aren't."""
     h = hashlib.sha256() if expected_sha256 else None
     with urllib.request.urlopen(url, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length", 0))
@@ -759,17 +719,6 @@ def install_lang_packs_windows(step_fn, base_pct: int) -> None:
         download_file(url, dest)
 
 
-# ── Ghostscript ───────────────────────────────────────────────────────────────
-
-def ghostscript_installed() -> bool:
-    if bool(shutil.which("gswin64c")) or bool(shutil.which("gs")):
-        return True
-    if sys.platform == "win32":
-        import glob
-        return bool(glob.glob(r"C:\Program Files\gs\gs*\bin\gswin64c.exe"))
-    return False
-
-
 def install_ghostscript_windows(step_fn) -> None:
     import tempfile
     temp = tempfile.gettempdir()
@@ -817,179 +766,29 @@ def install_ghostscript_linux(step_fn) -> None:
     subprocess.run(["sudo", pkg_manager[0]] + pkg_manager[1], check=True)
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+# ── Background Worker Thread ───────────────────────────────────────────────────
 
-class InstallerApp(tk.Tk):
-    def __init__(self):
+class InstallWorker(QThread):
+    progress = Signal(str, int)
+    finished = Signal(str, str)
+    error = Signal(str)
+
+    def __init__(self, install_dir: str, desktop: bool, startmenu: bool,
+                 install_ocr: bool, install_gs: bool):
         super().__init__()
-        # Show loading splash immediately
-        self._splash = _show_loading_splash(self)
-        self.withdraw()  # hide main window while building UI
-        self.title(_t("title", app=APP_NAME, ver=APP_VERSION))
-        self.geometry("600x520")
-        self.resizable(False, False)
-        self.configure(bg=BG)
+        self.install_dir = install_dir
+        self.desktop = desktop
+        self.startmenu = startmenu
+        self.install_ocr = install_ocr
+        self.install_gs = install_gs
+
+    def step(self, msg: str, pct: int):
+        self.progress.emit(msg, pct)
+
+    def run(self):
+        install_dir = self.install_dir
         try:
-            self.iconbitmap(resource("icon.ico"))
-        except Exception:
-            pass
-        self._build()
-        # Ensure splash is visible for at least 1 second
-        self.after(1000, self._close_splash)
-
-    def _close_splash(self):
-        with contextlib.suppress(Exception):
-            self._splash.destroy()
-        self.deiconify()
-
-    def _build(self):
-        # Wizard-style layout (banner header + body + footer with status
-        # and action buttons), modelled on installers like LibreOffice's.
-        BANNER_BG = "#E5EDF5"   # soft blue-gray header band
-        BORDER    = "#C9D2DF"
-
-        # ── Banner (title + subtitle) ────────────────────────────────
-        banner = tk.Frame(self, bg=BANNER_BG, height=80)
-        banner.pack(side="top", fill="x")
-        banner.pack_propagate(False)
-        tk.Label(banner,
-                 text=_t("banner_title", app=APP_NAME, ver=APP_VERSION),
-                 bg=BANNER_BG, fg=TEXT,
-                 font=("Segoe UI", 13, "bold")).place(x=24, y=16)
-        tk.Label(banner, text=_t("banner_subtitle"),
-                 bg=BANNER_BG, fg="#475569",
-                 font=("Segoe UI", 9)).place(x=24, y=44)
-        tk.Frame(self, bg=BORDER, height=1).pack(side="top", fill="x")
-
-        # ── Footer (packed bottom-up so body fills the middle) ───────
-        # Bottom border line first (will be the bottommost element)
-        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
-
-        # Action buttons row (right-aligned)
-        btn_row = tk.Frame(self, bg=BG)
-        btn_row.pack(side="bottom", fill="x", padx=24, pady=(8, 14))
-        self._btn = tk.Button(btn_row, text=_t("install"),
-                              command=self._start,
-                              bg=ACCENT, fg="#FFFFFF",
-                              font=("Segoe UI", 10, "bold"),
-                              relief="flat", cursor="hand2")
-        self._btn.pack(side="right", ipady=6, ipadx=14)
-        tk.Button(btn_row, text=_t("cancel"), command=self.destroy,
-                  bg="#E2E8F0", fg=TEXT, font=("Segoe UI", 10),
-                  relief="flat", cursor="hand2").pack(
-                  side="right", padx=(0, 8), ipady=6, ipadx=14)
-
-        # Status label + current-operation text + progress bar
-        progress_area = tk.Frame(self, bg=BG)
-        progress_area.pack(side="bottom", fill="x", padx=24, pady=(10, 0))
-        tk.Label(progress_area, text=_t("status_label"), bg=BG, fg=TEXT,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self._status_var = tk.StringVar(value=_t("ready"))
-        tk.Label(progress_area, textvariable=self._status_var, bg=BG,
-                 fg=TEXT_L, font=("Segoe UI", 9)).pack(
-                 anchor="w", pady=(2, 6))
-        self._pb = ttk.Progressbar(progress_area, mode="determinate")
-        self._pb.pack(fill="x")
-
-        # Top border above the footer block
-        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
-
-        # ── Body (form fields, fills the middle) ─────────────────────
-        body = tk.Frame(self, bg=BG, padx=24, pady=18)
-        body.pack(side="top", fill="both", expand=True)
-
-        # Folder picker
-        tk.Label(body, text=_t("folder"), bg=BG, fg=TEXT,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        row = tk.Frame(body, bg=BG)
-        row.pack(fill="x", pady=(4, 14))
-        self._dir_var = tk.StringVar(value=default_dir())
-        self._dir_entry = tk.Entry(row, textvariable=self._dir_var,
-                                   font=("Segoe UI", 10), bg="#F8FAFC",
-                                   relief="flat", bd=1,
-                                   highlightbackground="#CBD5E1",
-                                   highlightthickness=1)
-        self._dir_entry.pack(side="left", fill="x", expand=True, ipady=6)
-        tk.Button(row, text=_t("browse"), command=self._browse,
-                  bg="#E2E8F0", fg=TEXT, relief="flat",
-                  font=("Segoe UI", 9), cursor="hand2").pack(
-                  side="left", padx=(6, 0), ipady=6)
-
-        self._desktop_var   = tk.BooleanVar(value=True)
-        self._startmenu_var = tk.BooleanVar(value=True)
-
-        if sys.platform == "win32":
-            tk.Checkbutton(body, text=_t("desktop"),
-                           variable=self._desktop_var, bg=BG, fg=TEXT,
-                           font=("Segoe UI", 10), activebackground=BG,
-                           selectcolor="#EFF6FF").pack(anchor="w")
-            tk.Checkbutton(body, text=_t("startmenu"),
-                           variable=self._startmenu_var, bg=BG, fg=TEXT,
-                           font=("Segoe UI", 10), activebackground=BG,
-                           selectcolor="#EFF6FF").pack(anchor="w", pady=(4, 0))
-        elif sys.platform == "darwin":
-            tk.Checkbutton(body, text=_t("desktop"),
-                           variable=self._desktop_var, bg=BG, fg=TEXT,
-                           font=("Helvetica", 10), activebackground=BG,
-                           selectcolor="#EFF6FF").pack(anchor="w")
-        else:
-            tk.Checkbutton(body, text=_t("desktop"),
-                           variable=self._desktop_var, bg=BG, fg=TEXT,
-                           font=("Segoe UI", 10), activebackground=BG,
-                           selectcolor="#EFF6FF").pack(anchor="w")
-            tk.Checkbutton(body, text=_t("appmenu"),
-                           variable=self._startmenu_var, bg=BG, fg=TEXT,
-                           font=("Segoe UI", 10), activebackground=BG,
-                           selectcolor="#EFF6FF").pack(anchor="w", pady=(4, 0))
-
-        self._ocr_var = tk.BooleanVar(value=True)
-        self._ocr_chk = tk.Checkbutton(
-            body,
-            text=_t("ocr"),
-            variable=self._ocr_var, bg=BG, fg="#0369A1",
-            font=("Segoe UI", 10), activebackground=BG, selectcolor="#EFF6FF",
-        )
-        if not tesseract_installed():
-            self._ocr_chk.pack(anchor="w", pady=(4, 0))
-
-        self._gs_var = tk.BooleanVar(value=True)
-        self._gs_chk = tk.Checkbutton(
-            body,
-            text=_t("gs"),
-            variable=self._gs_var, bg=BG, fg="#0369A1",
-            font=("Segoe UI", 10), activebackground=BG, selectcolor="#EFF6FF",
-        )
-        if not ghostscript_installed():
-            self._gs_chk.pack(anchor="w", pady=(4, 0))
-
-        notes = []
-        if tesseract_installed():
-            notes.append(_t("tess_ok"))
-        if ghostscript_installed():
-            notes.append(_t("gs_ok"))
-        self._note_var = tk.StringVar(value="  ".join(notes))
-        tk.Label(body, textvariable=self._note_var, bg=BG, fg="#10B981",
-                 font=("Segoe UI", 9)).pack(anchor="w", pady=(6, 0))
-
-    def _browse(self):
-        d = filedialog.askdirectory(initialdir=self._dir_var.get())
-        if d:
-            self._dir_var.set(os.path.normpath(d))
-
-    def _start(self):
-        self._btn.config(state="disabled", text=_t("installing"))
-        self._dir_entry.config(state="disabled")
-        threading.Thread(target=self._install, daemon=True).start()
-
-    def _step(self, msg: str, pct: int):
-        self._status_var.set(msg)
-        self._pb["value"] = pct
-        self.update_idletasks()
-
-    def _install(self):
-        install_dir = self._dir_var.get()
-        try:
-            self._step(_t("creating_folder"), 8)
+            self.step(_t("creating_folder"), 8)
             try:
                 os.makedirs(install_dir, exist_ok=True)
                 test = os.path.join(install_dir, ".write_test")
@@ -998,27 +797,25 @@ class InstallerApp(tk.Tk):
             except PermissionError:
                 if sys.platform == "win32":
                     install_dir = os.path.join(
-                        os.environ.get("LOCALAPPDATA",
-                                       os.path.expanduser("~\\AppData\\Local")),
+                        os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
                         "Programs", APP_NAME,
                     )
                 else:
                     install_dir = os.path.expanduser(f"~/.local/opt/{APP_NAME}")
-                self._dir_var.set(install_dir)
                 os.makedirs(install_dir, exist_ok=True)
 
             if sys.platform == "win32":
-                self._step(_t("copying_app", app="PDFApps.exe"), 18)
+                self.step(_t("copying_app", app="PDFApps.exe"), 18)
                 app_exe = os.path.join(install_dir, "PDFApps.exe")
                 shutil.copy2(resource("PDFApps.exe"), app_exe)
-                self._step(_t("copying_files"), 28)
+                self.step(_t("copying_files"), 28)
                 for f in ("icon.ico", "PDFAppsUninstall.exe"):
                     try:
                         shutil.copy2(resource(f), os.path.join(install_dir, f))
                     except Exception:
                         pass
             elif sys.platform == "darwin":
-                self._step(_t("creating_bundle"), 18)
+                self.step(_t("creating_bundle"), 18)
                 app_exe_src = resource("PDFApps")
                 app_dir = install_dir if install_dir.endswith(".app") else \
                           os.path.join(install_dir, f"{APP_NAME}.app")
@@ -1026,7 +823,7 @@ class InstallerApp(tk.Tk):
                 create_app_bundle_macos(app_exe_src, app_dir)
                 app_exe = os.path.join(app_dir, "Contents", "MacOS", APP_NAME)
             else:
-                self._step(_t("copying_app", app="PDFApps"), 18)
+                self.step(_t("copying_app", app="PDFApps"), 18)
                 app_exe = os.path.join(install_dir, "PDFApps")
                 shutil.copy2(resource("PDFApps"), app_exe)
                 os.chmod(app_exe, 0o755)
@@ -1037,8 +834,8 @@ class InstallerApp(tk.Tk):
                         pass
 
             home = os.path.expanduser("~")
-            if self._desktop_var.get():
-                self._step(_t("desktop_shortcut"), 32)
+            if self.desktop:
+                self.step(_t("desktop_shortcut"), 32)
                 desktop = os.path.join(home, "Desktop")
                 if sys.platform == "win32":
                     create_shortcut_windows(
@@ -1056,9 +853,9 @@ class InstallerApp(tk.Tk):
                     create_desktop_entry_linux(app_exe, df)
                     os.chmod(df, 0o755)
 
-            if self._startmenu_var.get():
+            if self.startmenu:
                 if sys.platform == "win32":
-                    self._step(_t("startmenu_shortcut"), 36)
+                    self.step(_t("startmenu_shortcut"), 36)
                     start = os.path.join(
                         os.environ.get("APPDATA", ""),
                         "Microsoft", "Windows", "Start Menu", "Programs", APP_NAME,
@@ -1067,73 +864,412 @@ class InstallerApp(tk.Tk):
                     create_shortcut_windows(
                         app_exe, os.path.join(start, f"{APP_NAME}.lnk"))
                 elif sys.platform != "darwin":
-                    self._step(_t("registering_menu"), 36)
+                    self.step(_t("registering_menu"), 36)
                     apps_dir = os.path.expanduser("~/.local/share/applications")
                     create_desktop_entry_linux(
                         app_exe, os.path.join(apps_dir, f"{APP_NAME}.desktop"))
 
-            if not tesseract_installed() and self._ocr_var.get():
+            if not tesseract_installed() and self.install_ocr:
                 if sys.platform == "win32":
-                    install_tesseract_windows(self._step)
+                    install_tesseract_windows(self.step)
                     if tesseract_installed():
-                        install_lang_packs_windows(self._step, base_pct=62)
+                        install_lang_packs_windows(self.step, base_pct=62)
                 elif sys.platform == "darwin":
-                    install_tesseract_macos(self._step)
+                    install_tesseract_macos(self.step)
                 else:
-                    install_tesseract_linux(self._step)
+                    install_tesseract_linux(self.step)
 
-            if not ghostscript_installed() and self._gs_var.get():
+            if not ghostscript_installed() and self.install_gs:
                 if sys.platform == "win32":
-                    install_ghostscript_windows(self._step)
+                    install_ghostscript_windows(self.step)
                 elif sys.platform == "darwin":
-                    install_ghostscript_macos(self._step)
+                    install_ghostscript_macos(self.step)
                 else:
-                    install_ghostscript_linux(self._step)
+                    install_ghostscript_linux(self.step)
 
-            self._step(_t("registering"), 92)
+            self.step(_t("registering"), 92)
             if sys.platform == "win32":
                 uninstall_exe = os.path.join(install_dir, "PDFAppsUninstall.exe")
                 register_uninstall(install_dir, uninstall_exe)
             register_file_association(app_exe)
 
-            self._step(_t("complete"), 100)
-            self.after(0, self._done, install_dir, app_exe)
+            self.step(_t("complete"), 100)
+            self.finished.emit(install_dir, app_exe)
 
         except Exception as exc:
-            # Capture exc into a local string and bind it as a lambda
-            # default argument; otherwise Python's late-binding closure
-            # raises NameError once the worker thread frame unwinds and
-            # `exc` falls out of scope before tk runs the after-callback.
-            err_msg = str(exc)
-            self.after(0, lambda msg=err_msg:
-                       messagebox.showerror("Error", msg))
-            self.after(0, lambda: self._btn.config(
-                state="normal", text=_t("install")))
+            self.error.emit(str(exc))
+
+
+# ── Splash Window ─────────────────────────────────────────────────────────────
+
+class LoadingSplash(QWidget):
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setFixedSize(400, 200)
+        self.setStyleSheet("background-color: #1E3A5F;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 30, 20, 30)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("PDFApps", self)
+        title.setFont(QFont("Segoe UI", 26, QFont.Weight.Bold))
+        title.setStyleSheet("color: #FFFFFF;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        line = QFrame(self)
+        line.setFixedHeight(3)
+        line.setFixedWidth(160)
+        line.setStyleSheet("background-color: #3B82F6;")
+        layout.addWidget(line, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addSpacing(15)
+
+        self._loading_text = _INSTALLER_STRINGS.get(_LANG, {}).get("loading", "Loading…").rstrip("…").rstrip(".")
+        self.dots = 1
+        self.label = QLabel(self._loading_text + ".", self)
+        self.label.setFont(QFont("Segoe UI", 11))
+        self.label.setStyleSheet("color: #94A3B8;")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.label)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._animate)
+        self.timer.start(400)
+
+    def _animate(self):
+        self.dots = (self.dots % 3) + 1
+        self.label.setText(self._loading_text + "." * self.dots)
+
+
+# ── Main Installer Window ──────────────────────────────────────────────────────
+
+class InstallerApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.worker = None
+        self._installed_dir = ""
+        self._installed_exe = ""
+
+        self.setWindowTitle(_t("title", app=APP_NAME, ver=APP_VERSION))
+        self.setFixedSize(600, 530)
+        self.setStyleSheet(f"background-color: {BG};")
+
+        ico = "icon.ico" if sys.platform == "win32" else "icon.png"
+        if os.path.exists(resource(ico)):
+            self.setWindowIcon(QIcon(resource(ico)))
+
+        self._init_ui()
+
+    def _init_ui(self):
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # ── Banner Header ────────────────────────────────────────────
+        banner = QFrame(self)
+        banner.setFixedHeight(80)
+        banner.setStyleSheet(f"background-color: {BANNER_BG};")
+        b_layout = QVBoxLayout(banner)
+        b_layout.setContentsMargins(24, 14, 24, 14)
+
+        b_title = QLabel(_t("banner_title", app=APP_NAME, ver=APP_VERSION), banner)
+        b_title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        b_title.setStyleSheet(f"color: {TEXT}; background: transparent;")
+        b_layout.addWidget(b_title)
+
+        b_sub = QLabel(_t("banner_subtitle"), banner)
+        b_sub.setFont(QFont("Segoe UI", 9))
+        b_sub.setStyleSheet("color: #475569; background: transparent;")
+        b_layout.addWidget(b_sub)
+        root_layout.addWidget(banner)
+
+        sep1 = QFrame(self)
+        sep1.setFixedHeight(1)
+        sep1.setStyleSheet(f"background-color: {BORDER};")
+        root_layout.addWidget(sep1)
+
+        # ── Body Form ────────────────────────────────────────────────
+        body = QWidget(self)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 18, 24, 18)
+        body_layout.setSpacing(10)
+
+        # Folder Picker
+        f_lbl = QLabel(_t("folder"), body)
+        f_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        f_lbl.setStyleSheet(f"color: {TEXT};")
+        body_layout.addWidget(f_lbl)
+
+        row = QHBoxLayout()
+        self.dir_entry = QLineEdit(default_dir(), body)
+        self.dir_entry.setFont(QFont("Segoe UI", 10))
+        self.dir_entry.setStyleSheet("""
+            QLineEdit {
+                background-color: #F8FAFC;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 6px 8px;
+                color: #1E293B;
+            }
+        """)
+        row.addWidget(self.dir_entry)
+
+        browse_btn = QPushButton(_t("browse"), body)
+        browse_btn.setFont(QFont("Segoe UI", 9))
+        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E2E8F0;
+                color: #1E293B;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 14px;
+            }
+            QPushButton:hover { background-color: #CBD5E1; }
+        """)
+        browse_btn.clicked.connect(self._browse)
+        row.addWidget(browse_btn)
+        body_layout.addLayout(row)
+
+        chk_css = """
+            QCheckBox {
+                color: #1E293B;
+                font-family: 'Segoe UI';
+                font-size: 10pt;
+                spacing: 8px;
+            }
+        """
+
+        # Shortcuts
+        self.desktop_chk = QCheckBox(_t("desktop"), body)
+        self.desktop_chk.setChecked(True)
+        self.desktop_chk.setStyleSheet(chk_css)
+        body_layout.addWidget(self.desktop_chk)
+
+        if sys.platform == "win32":
+            self.menu_chk = QCheckBox(_t("startmenu"), body)
+            self.menu_chk.setChecked(True)
+            self.menu_chk.setStyleSheet(chk_css)
+            body_layout.addWidget(self.menu_chk)
+        elif sys.platform != "darwin":
+            self.menu_chk = QCheckBox(_t("appmenu"), body)
+            self.menu_chk.setChecked(True)
+            self.menu_chk.setStyleSheet(chk_css)
+            body_layout.addWidget(self.menu_chk)
+        else:
+            self.menu_chk = None
+
+        # Optional Tesseract / Ghostscript
+        self.ocr_chk = QCheckBox(_t("ocr"), body)
+        self.ocr_chk.setChecked(True)
+        self.ocr_chk.setStyleSheet(chk_css.replace("#1E293B", "#0369A1"))
+        if not tesseract_installed():
+            body_layout.addWidget(self.ocr_chk)
+        else:
+            self.ocr_chk.hide()
+
+        self.gs_chk = QCheckBox(_t("gs"), body)
+        self.gs_chk.setChecked(True)
+        self.gs_chk.setStyleSheet(chk_css.replace("#1E293B", "#0369A1"))
+        if not ghostscript_installed():
+            body_layout.addWidget(self.gs_chk)
+        else:
+            self.gs_chk.hide()
+
+        # Existing tool notes
+        notes = []
+        if tesseract_installed():
+            notes.append(_t("tess_ok"))
+        if ghostscript_installed():
+            notes.append(_t("gs_ok"))
+        if notes:
+            note_lbl = QLabel("  ".join(notes), body)
+            note_lbl.setFont(QFont("Segoe UI", 9))
+            note_lbl.setStyleSheet("color: #10B981;")
+            body_layout.addWidget(note_lbl)
+
+        body_layout.addStretch()
+        root_layout.addWidget(body)
+
+        # ── Footer Area ──────────────────────────────────────────────
+        sep2 = QFrame(self)
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet(f"background-color: {BORDER};")
+        root_layout.addWidget(sep2)
+
+        footer = QWidget(self)
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(24, 10, 24, 14)
+        footer_layout.setSpacing(6)
+
+        status_hdr = QLabel(_t("status_label"), footer)
+        status_hdr.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        status_hdr.setStyleSheet(f"color: {TEXT};")
+        footer_layout.addWidget(status_hdr)
+
+        self.status_lbl = QLabel(_t("ready"), footer)
+        self.status_lbl.setFont(QFont("Segoe UI", 9))
+        self.status_lbl.setStyleSheet(f"color: {TEXT_L};")
+        footer_layout.addWidget(self.status_lbl)
+
+        self.pb = QProgressBar(footer)
+        self.pb.setFixedHeight(16)
+        self.pb.setRange(0, 100)
+        self.pb.setValue(0)
+        self.pb.setTextVisible(False)
+        self.pb.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #E2E8F0;
+                border: none;
+                border-radius: 4px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {ACCENT};
+                border-radius: 4px;
+            }}
+        """)
+        footer_layout.addWidget(self.pb)
+        footer_layout.addSpacing(6)
+
+        # Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.cancel_btn = QPushButton(_t("cancel"), footer)
+        self.cancel_btn.setFont(QFont("Segoe UI", 10))
+        self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #E2E8F0;
+                color: #1E293B;
+                border: none;
+                border-radius: 4px;
+                padding: 7px 18px;
+            }
+            QPushButton:hover { background-color: #CBD5E1; }
+        """)
+        self.cancel_btn.clicked.connect(self.close)
+        btn_layout.addWidget(self.cancel_btn)
+
+        self.install_btn = QPushButton(_t("install"), footer)
+        self.install_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ACCENT};
+                color: #FFFFFF;
+                border: none;
+                border-radius: 4px;
+                padding: 7px 18px;
+            }}
+            QPushButton:hover {{ background-color: #2563EB; }}
+            QPushButton:disabled {{ background-color: #93C5FD; }}
+        """)
+        self.install_btn.clicked.connect(self._start)
+        btn_layout.addWidget(self.install_btn)
+
+        footer_layout.addLayout(btn_layout)
+        root_layout.addWidget(footer)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, _t("folder"), self.dir_entry.text())
+        if d:
+            self.dir_entry.setText(os.path.normpath(d))
+
+    def _start(self):
+        self.install_btn.setEnabled(False)
+        self.install_btn.setText(_t("installing"))
+        self.cancel_btn.setEnabled(False)
+        self.dir_entry.setEnabled(False)
+
+        startmenu_val = self.menu_chk.isChecked() if self.menu_chk else False
+
+        self.worker = InstallWorker(
+            install_dir=self.dir_entry.text(),
+            desktop=self.desktop_chk.isChecked(),
+            startmenu=startmenu_val,
+            install_ocr=self.ocr_chk.isChecked(),
+            install_gs=self.gs_chk.isChecked(),
+        )
+        self.worker.progress.connect(self._step)
+        self.worker.finished.connect(self._done)
+        self.worker.error.connect(self._error)
+        self.worker.start()
+
+    def _step(self, msg: str, pct: int):
+        self.status_lbl.setText(msg)
+        self.pb.setValue(pct)
+
+    def _error(self, err_msg: str):
+        QMessageBox.critical(self, "Error", err_msg)
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText(_t("install"))
+        self.cancel_btn.setEnabled(True)
+        self.dir_entry.setEnabled(True)
 
     def _done(self, install_dir: str, app_exe: str):
-        self._btn.config(text=_t("finish"), state="normal",
-                         command=self.destroy, bg="#10B981")
-        if messagebox.askyesno(
+        self._installed_dir = install_dir
+        self._installed_exe = app_exe
+
+        self.cancel_btn.hide()
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText(_t("finish"))
+        self.install_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #10B981;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 4px;
+                padding: 7px 18px;
+            }
+            QPushButton:hover { background-color: #059669; }
+        """)
+        self.install_btn.clicked.disconnect()
+        self.install_btn.clicked.connect(self.close)
+
+        res = QMessageBox.question(
+            self,
             _t("done_title"),
             _t("done_msg", app=APP_NAME, path=install_dir),
-        ):
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if res == QMessageBox.StandardButton.Yes:
             open_file(app_exe)
-        self.destroy()
+        self.close()
 
 
 def _self_elevate():
-    """Re-launch this exe as admin if not already elevated (Windows only)."""
     if sys.platform != "win32":
         return
     import ctypes
     if ctypes.windll.shell32.IsUserAnAdmin():
         return
-    ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", sys.executable, "", None, 1
-    )
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, "", None, 1)
     sys.exit(0)
 
 
 if __name__ == "__main__":
     _self_elevate()
-    InstallerApp().mainloop()
+
+    # Close PyInstaller splash if present
+    with contextlib.suppress(ImportError):
+        import pyi_splash
+        pyi_splash.close()
+
+    app = QApplication(sys.argv)
+
+    splash = LoadingSplash()
+    splash.show()
+
+    main_win = InstallerApp()
+
+    # Hold splash for 1 second then show main installer window
+    def show_installer():
+        splash.close()
+        main_win.show()
+
+    QTimer.singleShot(1000, show_installer)
+
+    sys.exit(app.exec())
