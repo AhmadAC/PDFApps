@@ -1,10 +1,10 @@
 """PDFApps – TabRotar: rotate PDF pages tool."""
-# rotate.py
+import contextlib
 import os
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QHBoxLayout, QLineEdit, QComboBox,
+    QGroupBox, QFormLayout, QHBoxLayout, QLineEdit,
     QPushButton, QFileDialog, QMessageBox,
 )
 import qtawesome as qta
@@ -12,10 +12,11 @@ from pypdf import PdfWriter
 
 from app import i18n
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t, get_language
 from app.utils import section, info_lbl, parse_pages, show_error
 from app.constants import DESKTOP, TEXT_PRI, TEXT_SEC, _LQ
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox
 
 
 _SAVE_BTN_TEXT = {
@@ -72,7 +73,7 @@ class TabRotar(BasePage):
         self.edit_pages.setPlaceholderText(t("tool.rotate.pages_hint"))
         self.edit_pages.textChanged.connect(self._on_pages_changed)
 
-        self.cmb_angle = QComboBox()
+        self.cmb_angle = FocusComboBox()
         self.cmb_angle.addItems([
             t("tool.rotate.90"),
             t("tool.rotate.180"),
@@ -263,11 +264,28 @@ class TabRotar(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
             return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
+
+        # Prompt Save As dialog so user can choose destination file and name
+        default_name = "rotated.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_rotated{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
         if not out_path:
             return
+        self.drop_out.set_path(out_path)
+
+        win = self.window()
+        viewer = getattr(win, "_viewer", None)
+
         try:
             reader = self._open_reader(pdf_path)
             total = len(reader.pages)
@@ -286,12 +304,26 @@ class TabRotar(BasePage):
                     page.rotate(rot)
                 w.add_page(page)
 
-            self._atomic_pdf_write(w, out_path, sources=[pdf_path])
+            # Release viewer document locks before atomic overwrite if applicable
+            if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                viewer._canvas.close_doc()
+                if viewer._fitz_doc:
+                    with contextlib.suppress(Exception):
+                        viewer._fitz_doc.close()
+                    viewer._fitz_doc = None
+                viewer._thumbnails._stop_all_workers()
+
+            atomic_pdf_write(w, out_path, sources=[pdf_path])
+
             self._status(t("tool.rotate.status.done", name=os.path.basename(out_path)))
             msg = t("tool.rotate.done", path=out_path)
-            if self._pipeline_active:
-                self._pipeline_success(msg, out_path)
-            else:
-                QMessageBox.information(self, t("msg.done"), msg)
+
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(out_path)
+
+            QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e:
             show_error(self, e)

@@ -1,14 +1,16 @@
 """PDFApps – TabJuntar: merge PDFs tool."""
 
+import contextlib
 import os
 
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QAbstractItemView, QPushButton, QMessageBox,
+    QAbstractItemView, QPushButton, QMessageBox, QFileDialog,
 )
 from pypdf import PdfReader, PdfWriter
 
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.pdf_password import decrypt_pypdf
 from app.utils import (section, danger_btn, pick_pdfs, show_error,
@@ -113,8 +115,21 @@ class TabJuntar(BasePage):
             QMessageBox.critical(self, t("msg.error"),
                                  t("tool.merge.missing_files", files="\n".join(missing)))
             return
-        out = self._resolve_output_file(self.drop_out, paths[0])
-        if not out: return
+
+        # Prompt Save As dialog so user can choose destination file and name
+        default_name = "merged.pdf"
+        if paths:
+            base, ext = os.path.splitext(os.path.basename(paths[0]))
+            default_name = f"{base}_merged{ext}"
+        start_dir = os.path.dirname(paths[0]) if paths else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
+        if not out_path:
+            return
+        self.drop_out.set_path(out_path)
+        
+        win = self.window()
+        viewer = getattr(win, "_viewer", None)
+
         try:
             w = PdfWriter()
             for p in paths:
@@ -122,16 +137,30 @@ class TabJuntar(BasePage):
                 if reader.is_encrypted:
                     pwd = self._pwd_map.get(p, "")
                     if pwd:
-                        # R11-M4: wrong password yields 0 pages, which
-                        # would silently produce an incomplete merge.
-                        # decrypt_pypdf feeds pypdf the same UTF-8 bytes
-                        # MuPDF hashed when _maybe_prompt_password
-                        # accepted this password (see app.pdf_password).
                         if decrypt_pypdf(reader, pwd) is None:
                             raise WrongPasswordError(t("tool.err.wrong_password"))
                 for page in reader.pages:
                     w.add_page(page)
-            self._atomic_pdf_write(w, out, sources=paths)
-            self._status(t("tool.merge.status.done", name=os.path.basename(out)))
-            QMessageBox.information(self, t("msg.done"), t("tool.merge.done", path=out))
+
+            # Release viewer document locks before atomic overwrite if applicable
+            if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                viewer._canvas.close_doc()
+                if viewer._fitz_doc:
+                    with contextlib.suppress(Exception):
+                        viewer._fitz_doc.close()
+                    viewer._fitz_doc = None
+                viewer._thumbnails._stop_all_workers()
+
+            atomic_pdf_write(w, out_path, sources=paths)
+            
+            self._status(t("tool.merge.status.done", name=os.path.basename(out_path)))
+            msg = t("tool.merge.done", path=out_path)
+
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(out_path)
+
+            QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e: show_error(self, e)

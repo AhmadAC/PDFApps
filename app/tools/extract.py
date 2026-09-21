@@ -1,5 +1,6 @@
 """PDFApps – TabExtrair: extract PDF pages tool."""
 
+import contextlib
 import os
 
 from PySide6.QtCore import Qt
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
 from pypdf import PdfWriter
 
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.utils import section, info_lbl, parse_pages, show_error
 from app.constants import DESKTOP
@@ -76,22 +78,55 @@ class TabExtrair(BasePage):
         pdf_path = self.drop_in.path()
         txt = self.edit_pages.text().strip()
         if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf")); return
         if not txt:
             QMessageBox.warning(self, t("msg.warning"), t("tool.extract.specify")); return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
-        if not out_path: return
+        
+        # Prompt Save As dialog so user can choose destination file and name
+        default_name = "extracted.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_extracted{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
+        if not out_path:
+            return
+        self.drop_out.set_path(out_path)
+
+        win = self.window()
+        viewer = getattr(win, "_viewer", None)
+
         try:
             reader = self._open_reader(pdf_path)
             pages  = parse_pages(txt, len(reader.pages))
             w = PdfWriter()
             for p in pages: w.add_page(reader.pages[p])
-            self._atomic_pdf_write(w, out_path, sources=[pdf_path])
+
+            # Release viewer document locks before atomic overwrite if applicable
+            if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                viewer._canvas.close_doc()
+                if viewer._fitz_doc:
+                    with contextlib.suppress(Exception):
+                        viewer._fitz_doc.close()
+                    viewer._fitz_doc = None
+                viewer._thumbnails._stop_all_workers()
+
+            atomic_pdf_write(w, out_path, sources=[pdf_path])
+            
             self._status(t("tool.extract.status.done",
                            n=len(pages), name=os.path.basename(out_path)))
             msg = t("tool.extract.done", n=len(pages), path=out_path)
-            if self._pipeline_active:
-                self._pipeline_success(msg, out_path)
-            else:
-                QMessageBox.information(self, t("msg.done"), msg)
+
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(out_path)
+
+            QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e: show_error(self, e)

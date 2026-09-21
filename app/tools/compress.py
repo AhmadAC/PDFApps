@@ -1,10 +1,11 @@
 """PDFApps – TabComprimir: compress PDF tool."""
 
+import contextlib
 import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QComboBox, QLabel, QFileDialog, QMessageBox,
+    QGroupBox, QFormLayout, QLabel, QFileDialog, QMessageBox,
     QProgressDialog,
 )
 from app.base import BasePage
@@ -14,7 +15,7 @@ from app.utils import (section, info_lbl, _compress_pdf, _find_gs,
                         format_size_localized)
 from app.worker import TaskRunner, run_task
 from app.constants import DESKTOP, TEXT_SEC
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox
 
 
 class TabComprimir(BasePage):
@@ -39,9 +40,7 @@ class TabComprimir(BasePage):
         grp = QGroupBox(t("tool.compress.section"))
         gl  = QFormLayout(grp)
         gl.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.cmb_level = QComboBox()
-        # Show only the short level name in the combo and the full
-        # description below it as a hint that updates with the selection.
+        self.cmb_level = FocusComboBox()
         self._level_full = [
             t("tool.compress.extreme"),
             t("tool.compress.recommended"),
@@ -85,9 +84,9 @@ class TabComprimir(BasePage):
         from app.constants import _LQ
         sec = TEXT_SEC if dark else _LQ
         try: self.lbl_result.setStyleSheet(result_label_style(dark))
-        except RuntimeError: pass  # widget destroyed
+        except RuntimeError: pass
         try: self._lbl_level_hint.setStyleSheet(f"color:{sec}; font-size:10pt;")
-        except RuntimeError: pass  # widget destroyed
+        except RuntimeError: pass
 
     def _pick_input(self):
         p, _ = QFileDialog.getOpenFileName(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
@@ -116,14 +115,25 @@ class TabComprimir(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf")); return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
-        if not out_path: return
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
+            return
+
+        default_name = "compressed.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_compressed{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
+        if not out_path:
+            return
+        self.drop_out.set_path(out_path)
+
         level = self._LEVEL_KEYS[self.cmb_level.currentIndex()]
-        # Propagate the password captured by _maybe_prompt_password so
-        # _compress_pdf can unlock an encrypted source in every pass.
-        # Without this the file fell through all passes and raised the
-        # misleading "deps_missing" error.
         password = self._pdf_password or None
 
         progress = QProgressDialog(t("progress.compress.passA"),
@@ -146,11 +156,6 @@ class TabComprimir(BasePage):
                     if _self.is_cancelled():
                         return False
                     if stage == "passB_images":
-                        # PyMuPDF's rewrite_images is a single blocking
-                        # call with no per-page callback — emit -1
-                        # (busy bar) on entry so the dialog doesn't
-                        # appear frozen at 25% for 5–30 s, and emit a
-                        # real pct once it returns.
                         if cur < tot:
                             pct = -1
                         else:
@@ -164,14 +169,20 @@ class TabComprimir(BasePage):
                     _self.progress.emit(pct, label)
                     return True
                 try:
+                    win = self.window()
+                    viewer = getattr(win, "_viewer", None)
+                    if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                        viewer._canvas.close_doc()
+                        if viewer._fitz_doc:
+                            with contextlib.suppress(Exception):
+                                viewer._fitz_doc.close()
+                            viewer._fitz_doc = None
+                        viewer._thumbnails._stop_all_workers()
+
                     return _compress_pdf(pdf_path, out_path, level,
                                          progress_fn=progress_fn,
                                          password=password)
                 except ValueError as ve:
-                    # "no gain" is a friendly outcome, not an error.
-                    # WrongPasswordError is deliberately NOT a ValueError
-                    # so it propagates to the real error path (_on_err)
-                    # instead of being reported here as "no gain".
                     return ("__no_gain__", str(ve))
 
         self.action_btn.setEnabled(False)
@@ -196,18 +207,21 @@ class TabComprimir(BasePage):
                     pct=f"{ratio:.0f}")
             self.lbl_result.setText(msg)
             self._status(f"✔  {msg.strip()}")
-            if self._pipeline_active:
-                self._pipeline_success(msg, out_path)
-            else:
-                gs_hint = "" if _find_gs() else "\n\n" + t("tool.compress.gs_hint")
-                QMessageBox.information(self, t("msg.done"),
-                    t("msg.pdf_saved", path=out_path) + gs_hint)
+
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(out_path)
+
+            gs_hint = "" if _find_gs() else "\n\n" + t("tool.compress.gs_hint")
+            QMessageBox.information(self, t("msg.done"),
+                t("msg.pdf_saved", path=out_path) + gs_hint)
 
         def _on_err(exc):
             self.action_btn.setEnabled(True)
-            # Accept either Exception (new TaskRunner contract) or str
-            # (legacy callers); route through show_error so users see
-            # a friendly translated dialog instead of a raw traceback.
             if not isinstance(exc, BaseException):
                 exc = RuntimeError(str(exc))
             show_error(self, exc)

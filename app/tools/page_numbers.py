@@ -1,19 +1,20 @@
 """PDFApps – TabPageNumbers: add page numbers to a PDF."""
 
+import contextlib
 import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QComboBox, QSpinBox, QLineEdit,
-    QFileDialog, QMessageBox,
+    QGroupBox, QFormLayout, QLineEdit, QFileDialog, QMessageBox,
 )
 
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.utils import (section, info_lbl, parse_pages, show_error,
                        WrongPasswordError)
 from app.constants import DESKTOP
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox, FocusSpinBox
 
 
 _POSITIONS = [
@@ -26,19 +27,6 @@ _POSITIONS = [
 ]
 
 _FORMATS = [
-    # (combo_label_key, template_key).
-    # combo_label_key  → the UI string shown in the dropdown (localised
-    #                    per locale, so a ZH user sees ZH labels).
-    # template_key     → the format string written into the output PDF
-    #                    via `.format(n=…, total=…)`.
-    #
-    # NOTE: templates are kept ASCII-only (English) in every locale
-    # because `page.insert_text` below uses the PDF built-in Helvetica,
-    # whose encoding is Latin-1 only. Localising the templates would
-    # render CJK locales (e.g. "第{n}页") and any non-Latin-1 glyphs as
-    # garbled bytes / "?" in the produced PDF. Properly localising the
-    # output requires embedding a CJK-capable font — out of scope for
-    # v1; tracked separately.
     ("tool.page_numbers.fmt.simple",     "tool.page_numbers.template.simple"),
     ("tool.page_numbers.fmt.slash",      "tool.page_numbers.template.slash"),
     ("tool.page_numbers.fmt.page",       "tool.page_numbers.template.page"),
@@ -68,26 +56,26 @@ class TabPageNumbers(BasePage):
         form = QFormLayout(grp)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self.cmb_format = QComboBox()
+        self.cmb_format = FocusComboBox()
         for key, _ in _FORMATS:
             self.cmb_format.addItem(t(key))
         form.addRow(t("tool.page_numbers.format"), self.cmb_format)
 
-        self.cmb_position = QComboBox()
+        self.cmb_position = FocusComboBox()
         for key, _ in _POSITIONS:
             self.cmb_position.addItem(t(key))
         self.cmb_position.setCurrentIndex(4)  # bottom_center
         form.addRow(t("tool.page_numbers.position"), self.cmb_position)
 
-        self.spin_size = QSpinBox()
+        self.spin_size = FocusSpinBox()
         self.spin_size.setRange(6, 48); self.spin_size.setValue(10)
         form.addRow(t("tool.page_numbers.font_size"), self.spin_size)
 
-        self.spin_start_page = QSpinBox()
+        self.spin_start_page = FocusSpinBox()
         self.spin_start_page.setRange(1, 99999); self.spin_start_page.setValue(1)
         form.addRow(t("tool.page_numbers.start_page"), self.spin_start_page)
 
-        self.spin_start_number = QSpinBox()
+        self.spin_start_number = FocusSpinBox()
         self.spin_start_number.setRange(1, 99999); self.spin_start_number.setValue(1)
         form.addRow(t("tool.page_numbers.start_number"), self.spin_start_number)
 
@@ -132,19 +120,26 @@ class TabPageNumbers(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            QMessageBox.warning(self, t("msg.warning"), t("tool.page_numbers.select_source")); return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
-        if not out_path: return
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            QMessageBox.warning(self, t("msg.warning"), t("tool.page_numbers.select_source"))
+            return
 
-        # _FORMATS stores translation keys (e.g. "tool.page_numbers.
-        # template.page") so each locale gets its own template
-        # ("Page {n}" → "Seite {n}"). Resolve via t() to a concrete
-        # string before .format().
+        # Prompt Save As dialog so user can choose destination file and name
+        default_name = "numbered.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_numbered{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
+        if not out_path:
+            return
+        self.drop_out.set_path(out_path)
+
         fmt_template = t(_FORMATS[self.cmb_format.currentIndex()][1])
-        # R11-L4: ``helv`` is a Type-1 Latin-1 font; any char above
-        # U+0100 (CJK, Cyrillic, Arabic, Hebrew, accented Greek etc.)
-        # renders as a ? glyph. Surface a status-bar warning so the user
-        # is not surprised by tofu in the output PDF.
         if any(ord(c) > 0xFF for c in fmt_template):
             self._status(t("tool.warn.font_latin_only"))
         pos_code = _POSITIONS[self.cmb_position.currentIndex()][1]
@@ -154,12 +149,6 @@ class TabPageNumbers(BasePage):
         margin = max(18, font_size + 8)
         txt = self.edit_pages.text().strip()
 
-        # ── Phase 1 (main thread): scan for existing numbers and prompt.
-        # The scan reads only a thin band at the chosen edge of each
-        # target page, so it stays fast enough not to need a worker.
-        # The user-visible Yes/No/Cancel decision must run on the main
-        # thread anyway, and re-entering the worker for a second phase
-        # would add complexity without a perceived speedup.
         try:
             import fitz, re
             with self._open_fitz(pdf_path) as doc:
@@ -171,9 +160,6 @@ class TabPageNumbers(BasePage):
                     r"(?:page|página|pagina|seite|stránka)\s+\d+(?:\s+(?:of|de|sur|von|di|van)\s+\d+)?)\s*$",
                     re.IGNORECASE,
                 )
-                # Plain (x0, y0, x1, y1) tuples — no fitz.Rect objects
-                # leak past the `with` block; the worker reconstructs
-                # them after re-opening the doc.
                 existing: list = []
                 for i in range(total):
                     if i not in targets or i < start_page:
@@ -199,7 +185,6 @@ class TabPageNumbers(BasePage):
             show_error(self, e)
             return
 
-        # numbered_total = how many pages will actually receive a number
         numbered_total = sum(1 for i in range(total)
                              if i in targets and i >= start_page)
         if numbered_total == 0:
@@ -209,9 +194,6 @@ class TabPageNumbers(BasePage):
 
         replace = False
         if existing:
-            # R11-M11: default No — replacing existing page numbers is
-            # destructive (no undo once saveIncr is called). Stray Enter
-            # should preserve, not overwrite.
             ans = QMessageBox.question(
                 self, t("msg.warning"),
                 t("tool.page_numbers.existing_found", n=len(existing)),
@@ -226,17 +208,10 @@ class TabPageNumbers(BasePage):
 
         pwd = self._pdf_password
 
-        # ── Phase 2 (worker thread): apply redactions + insert numbers.
-        # This is the slow part — apply_redactions rasterises the
-        # affected regions and insert_text touches every target page.
         def do_work(worker):
             import fitz
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and write empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
@@ -257,20 +232,11 @@ class TabPageNumbers(BasePage):
                         return None
                     counter += 1
                     n_display = start_num + counter - 1
-                    # {total} represents the count of numbered pages
-                    # (not the last displayed number). With start_num=5
-                    # and 10 target pages, "Page 5 of 10" reads as "5th
-                    # display number, out of 10 numbered pages". The
-                    # legacy `numbered_total + start_num - 1` produced
-                    # "Page 14 of 14" on the last page, which conflates
-                    # the display index with the total count and looks
-                    # like an off-by-one bug to the reader.
                     label = fmt_template.format(
                         n=n_display, total=numbered_total)
 
                     page = doc[i]
                     rect = page.rect
-                    # Estimate text width (rough: 0.5 * font_size per char)
                     tw = len(label) * font_size * 0.5
                     if pos_code[0] == "t":
                         y = margin
@@ -293,23 +259,42 @@ class TabPageNumbers(BasePage):
 
                 if worker.is_cancelled():
                     return None
-                self._atomic_pdf_write(
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(
                     doc, out_path,
                     sources=[pdf_path],
                     save_opts={"garbage": 4, "deflate": True},
+                    close_writer=True,
                 )
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         def on_done(saved):
             self._status(t("tool.page_numbers.status.done",
                            name=os.path.basename(saved)))
             msg = t("tool.page_numbers.done", path=saved)
-            if self._pipeline_active:
-                self._pipeline_success(msg, saved)
-            else:
-                QMessageBox.information(self, t("msg.done"), msg)
+
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(saved)
+
+            QMessageBox.information(self, t("msg.done"), msg)
 
         self._run_background(do_work, total=numbered_total,
                              label=t("progress.page_numbers.applying"),

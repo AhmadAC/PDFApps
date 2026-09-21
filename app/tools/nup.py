@@ -1,21 +1,22 @@
 """PDFApps – TabNUp: combine multiple pages of a PDF onto a single sheet."""
 
+import contextlib
 import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QComboBox, QSpinBox, QFileDialog, QMessageBox,
+    QGroupBox, QFormLayout, QFileDialog, QMessageBox,
 )
 
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.utils import (section, info_lbl, show_error,
                        WrongPasswordError)
 from app.constants import DESKTOP
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox, FocusSpinBox
 
 
-# label key  →  (cols, rows)
 _LAYOUTS = [
     ("tool.nup.layout.2",  (1, 2)),
     ("tool.nup.layout.4",  (2, 2)),
@@ -24,14 +25,12 @@ _LAYOUTS = [
     ("tool.nup.layout.16", (4, 4)),
 ]
 
-# label key  →  (width_pt, height_pt)  (portrait)
 _PAGE_SIZES = [
     ("tool.nup.size.a4",     (595.0, 842.0)),
     ("tool.nup.size.letter", (612.0, 792.0)),
     ("tool.nup.size.a3",     (842.0, 1191.0)),
 ]
 
-# label key  →  internal code
 _ORIENTATIONS = [
     ("tool.nup.orient.auto",      "auto"),
     ("tool.nup.orient.portrait",  "portrait"),
@@ -61,35 +60,35 @@ class TabNUp(BasePage):
         form = QFormLayout(grp)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self.cmb_layout = QComboBox()
+        self.cmb_layout = FocusComboBox()
         for key, _ in _LAYOUTS:
             self.cmb_layout.addItem(t(key))
-        self.cmb_layout.setCurrentIndex(1)  # default 4-up
+        self.cmb_layout.setCurrentIndex(1)
         form.addRow(t("tool.nup.layout_label"), self.cmb_layout)
 
-        self.cmb_size = QComboBox()
+        self.cmb_size = FocusComboBox()
         for key, _ in _PAGE_SIZES:
             self.cmb_size.addItem(t(key))
         form.addRow(t("tool.nup.sheet_size"), self.cmb_size)
 
-        self.cmb_orient = QComboBox()
+        self.cmb_orient = FocusComboBox()
         for key, _ in _ORIENTATIONS:
             self.cmb_orient.addItem(t(key))
         form.addRow(t("tool.nup.orientation"), self.cmb_orient)
 
-        self.spin_gap = QSpinBox()
+        self.spin_gap = FocusSpinBox()
         self.spin_gap.setRange(0, 60); self.spin_gap.setValue(8)
         self.spin_gap.setSuffix(" pt")
         form.addRow(t("tool.nup.gap"), self.spin_gap)
 
-        self.spin_margin = QSpinBox()
+        self.spin_margin = FocusSpinBox()
         self.spin_margin.setRange(0, 100); self.spin_margin.setValue(20)
         self.spin_margin.setSuffix(" pt")
         form.addRow(t("tool.nup.margin"), self.spin_margin)
 
-        self.cmb_order = QComboBox()
+        self.cmb_order = FocusComboBox()
         self.cmb_order.addItems(["→ ↓", "↓ →"])
-        self.cmb_order.setItemData(0, t("tool.nup.order.row"), 3)  # Qt.ToolTipRole
+        self.cmb_order.setItemData(0, t("tool.nup.order.row"), 3)
         self.cmb_order.setItemData(1, t("tool.nup.order.col"), 3)
         self.cmb_order.setToolTip(t("tool.nup.order.row"))
         self.cmb_order.currentIndexChanged.connect(
@@ -134,12 +133,24 @@ class TabNUp(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.select_source")); return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
-        if not out_path: return
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.select_source"))
+            return
 
-        # Pre-flight on the main thread: read page count + validate cell
-        # geometry so the worker can be a tight image loop.
+        default_name = "nup.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_nup{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
+        if not out_path:
+            return
+        self.drop_out.set_path(out_path)
+
         try:
             src = self._open_fitz(pdf_path)
         except Exception as e:
@@ -150,7 +161,8 @@ class TabNUp(BasePage):
         finally:
             src.close()
         if total == 0:
-            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.empty_doc")); return
+            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.empty_doc"))
+            return
 
         cols, rows = _LAYOUTS[self.cmb_layout.currentIndex()][1]
         n_per_sheet = cols * rows
@@ -160,15 +172,13 @@ class TabNUp(BasePage):
         margin = self.spin_margin.value()
         row_first = self.cmb_order.currentIndex() == 0
 
-        # Decide orientation
         if orient == "auto":
-            # Pick orientation that gives the largest cell area
             def cell_area(w, h):
                 cw = (w - 2 * margin - (cols - 1) * gap) / cols
                 ch = (h - 2 * margin - (rows - 1) * gap) / rows
                 return max(0, cw) * max(0, ch)
             if cell_area(sheet_h_p, sheet_w_p) > cell_area(sheet_w_p, sheet_h_p):
-                sheet_w, sheet_h = sheet_h_p, sheet_w_p  # landscape
+                sheet_w, sheet_h = sheet_h_p, sheet_w_p
             else:
                 sheet_w, sheet_h = sheet_w_p, sheet_h_p
         elif orient == "landscape":
@@ -179,7 +189,8 @@ class TabNUp(BasePage):
         cell_w = (sheet_w - 2 * margin - (cols - 1) * gap) / cols
         cell_h = (sheet_h - 2 * margin - (rows - 1) * gap) / rows
         if cell_w <= 0 or cell_h <= 0:
-            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.cells_too_small")); return
+            QMessageBox.warning(self, t("msg.warning"), t("tool.nup.cells_too_small"))
+            return
 
         pwd = self._pdf_password
 
@@ -187,10 +198,6 @@ class TabNUp(BasePage):
             import fitz
             sd = fitz.open(pdf_path)
             if sd.needs_pass:
-                # Verify authenticate() succeeded: if the password
-                # changed between _load_input validation and now, an
-                # unchecked call would leave the doc locked and produce
-                # empty/garbled output. Mirror _open_fitz and raise.
                 if not (pwd and sd.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
@@ -211,7 +218,6 @@ class TabNUp(BasePage):
                             x = margin + c_ * (cell_w + gap)
                             y = margin + r_ * (cell_h + gap)
 
-                            # Aspect-fit the source page into the cell
                             src_rect = sd[src_idx].rect
                             sw, sh = src_rect.width, src_rect.height
                             scale = min(cell_w / sw, cell_h / sh)
@@ -226,25 +232,43 @@ class TabNUp(BasePage):
                                   current=src_idx + 1, total=total))
                     if worker.is_cancelled():
                         return None
-                    # R11-M8: atomic write — write to a sibling temp file
-                    # and os.replace into place so a crash mid-save can't
-                    # truncate a pre-existing output PDF.
-                    BasePage._atomic_pdf_write(
+
+                    win = self.window()
+                    viewer = getattr(win, "_viewer", None)
+                    if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                        viewer._canvas.close_doc()
+                        if viewer._fitz_doc:
+                            with contextlib.suppress(Exception):
+                                viewer._fitz_doc.close()
+                            viewer._fitz_doc = None
+                        viewer._thumbnails._stop_all_workers()
+
+                    atomic_pdf_write(
                         out, out_path, sources=[pdf_path],
-                        save_opts={"garbage": 4, "deflate": True})
+                        save_opts={"garbage": 4, "deflate": True},
+                        close_writer=True,
+                    )
                 finally:
-                    out.close()
+                    with contextlib.suppress(Exception):
+                        out.close()
             finally:
-                sd.close()
+                with contextlib.suppress(Exception):
+                    sd.close()
             return out_path
 
         def on_done(saved):
             self._status(t("tool.nup.status.done", name=os.path.basename(saved)))
             msg = t("tool.nup.done", path=saved)
-            if self._pipeline_active:
-                self._pipeline_success(msg, saved)
-            else:
-                QMessageBox.information(self, t("msg.done"), msg)
+
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(saved)
+
+            QMessageBox.information(self, t("msg.done"), msg)
 
         self._run_background(do_work, total=100,
                              label=t("progress.nup.placing"),
