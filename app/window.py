@@ -1,85 +1,31 @@
-
 """PDFApps – MainWindow: application main window."""
-# window..py
 import contextlib
 import os
 
 from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QColor, QShortcut, QKeySequence
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QListWidget, QListWidgetItem,
-    QStackedWidget, QSplitter, QStatusBar, QFrame,
-    QApplication, QLineEdit, QMenu, QTabBar,
-    QFileDialog, QMessageBox,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QListWidget, QListWidgetItem, QStackedWidget, QSplitter, QStatusBar,
+    QFrame, QApplication, QLineEdit, QMenu, QTabBar, QFileDialog, QMessageBox,
 )
-from PySide6.QtGui import QColor
 import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP, BORDER
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
 from app.utils import resource_path, _make_palette
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, MultiDropWidget
 from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
 from app.viewer.panel import PdfViewerPanel
-from app.tools.split import TabDividir
-from app.tools.merge import TabJuntar
+from app.base import BasePage
 from app.tools.rotate import TabRotar
-from app.tools.extract import TabExtrair
-from app.tools.reorder import TabReordenar
-from app.tools.compress import TabComprimir
-from app.tools.encrypt import TabEncriptar
-from app.tools.watermark import TabMarcaDagua
-from app.tools.ocr import TabOCR
-from app.tools.convert import TabConverter
+from app.tools.crop import TabCortar
 from app.editor.tab import TabEditar
-from app.tools.info import TabInfo
-from app.tools.import_pdf import TabImport
-from app.tools.page_numbers import TabPageNumbers
-from app.tools.nup import TabNUp
-
-
-# Grouped sidebar tools — order here = stack index order.
-_NAV_GROUPS = [
-    ("nav.group.organize", [
-        ("nav.split",         "fa5s.cut",                TabDividir),
-        ("nav.merge",         "fa5s.object-group",       TabJuntar),
-        ("nav.reorder",       "fa5s.sort",               TabReordenar),
-        ("nav.extract",       "fa5s.file-export",        TabExtrair),
-    ]),
-    ("nav.group.transform", [
-        ("nav.rotate",        "fa5s.sync-alt",           TabRotar),
-        ("nav.compress",      "fa5s.compress-arrows-alt",TabComprimir),
-        ("nav.page_numbers",  "fa5s.list-ol",            TabPageNumbers),
-        ("nav.nup",           "fa5s.th",                 TabNUp),
-    ]),
-    ("nav.group.security", [
-        ("nav.encrypt",       "fa5s.lock",               TabEncriptar),
-        ("nav.watermark",     "fa5s.stamp",              TabMarcaDagua),
-    ]),
-    ("nav.group.convert", [
-        ("nav.ocr",           "fa5s.eye",                TabOCR),
-        ("nav.convert",       "fa5s.exchange-alt",       TabConverter),
-        ("nav.import",        "fa5s.file-import",        TabImport),
-    ]),
-    ("nav.group.annotate", [
-        ("nav.edit",          "fa5s.edit",               TabEditar),
-    ]),
-    ("nav.group.inspect", [
-        ("nav.info",          "fa5s.info-circle",        TabInfo),
-    ]),
-]
-
-# Flat list for stack building — order must match grouped order above.
-_NAV_KEYS = [(key, icon, cls) for _, tools in _NAV_GROUPS for key, icon, cls in tools]
-
-def _build_nav_items():
-    return [(t(key), icon, cls) for key, icon, cls in _NAV_KEYS]
-
-NAV_ITEMS = _build_nav_items()
+from app.workspace_bar import WorkspaceBar
+from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
 
 
 class MainWindow(QMainWindow):
@@ -106,169 +52,52 @@ class MainWindow(QMainWindow):
         root_v.setContentsMargins(0, 0, 0, 0)
         root_v.setSpacing(0)
 
-        self._workspace_bar = QWidget(); self._workspace_bar.setObjectName("workspace_bar")
-        wb_h = QHBoxLayout(self._workspace_bar)
-        wb_h.setContentsMargins(16, 10, 16, 10)
-        wb_h.setSpacing(8)
+        # ── Workspace Bar Component ──────────────────────────────────────────
+        self._workspace_bar = WorkspaceBar(self)
+        wb = self._workspace_bar
+        self._sidebar_toggle_btn = wb._sidebar_toggle_btn
+        self._breadcrumb = wb._breadcrumb
+        self._open_pdf_btn = wb._open_pdf_btn
+        self._toc_top_btn = wb._toc_top_btn
+        self._night_top_btn = wb._night_top_btn
+        self._print_top_btn = wb._print_top_btn
+        self._present_btn = wb._present_btn
+        self._search_top_btn = wb._search_top_btn
+        self._zoom_widget = wb._zoom_widget
+        self._zm_btn = wb._zm_btn
+        self._lbl_zoom = wb._lbl_zoom
+        self._zp_btn = wb._zp_btn
+        self._z0_btn = wb._z0_btn
+        self._page_nav_widget = wb._page_nav_widget
+        self._prev_pg_btn = wb._prev_pg_btn
+        self._page_input = wb._page_input
+        self._page_total_lbl = wb._page_total_lbl
+        self._next_pg_btn = wb._next_pg_btn
+        self._undo_top_btn = wb._undo_top_btn
+        self._redo_top_btn = wb._redo_top_btn
+        self._help_btn = wb._help_btn
+        self._lang_btn = wb._lang_btn
+        self._theme_btn = wb._theme_btn
+        self._update_btn = wb._update_btn
 
-        def _a11y(btn, tip):
-            btn.setToolTip(tip)
-            btn.setAccessibleName(tip)
-
-        self._sidebar_toggle_btn = QPushButton()
-        self._ico_bars = qta.icon("fa5s.bars", color=TEXT_PRI)
-        self._ico_times = qta.icon("fa5s.times", color=TEXT_PRI)
-        self._sidebar_toggle_btn.setIcon(self._ico_bars)
-        self._sidebar_toggle_btn.setObjectName("viewer_nav_btn")
-        self._sidebar_toggle_btn.setFixedSize(28, 28)
-        _a11y(self._sidebar_toggle_btn, t("sidebar.collapse_expand"))
+        # Wire top bar events
         self._sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
-        wb_h.addWidget(self._sidebar_toggle_btn)
-
-        self._breadcrumb = QLabel(t("workspace.title"))
-        self._breadcrumb.setObjectName("workspace_title")
-        wb_h.addWidget(self._breadcrumb, 1)
-
-        self._open_pdf_btn = QPushButton()
-        self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=TEXT_PRI))
-        self._open_pdf_btn.setObjectName("viewer_nav_btn")
-        self._open_pdf_btn.setFixedSize(28, 28)
-        _a11y(self._open_pdf_btn, t("btn.open_pdf"))
         self._open_pdf_btn.clicked.connect(self._open_pdf)
-        wb_h.addWidget(self._open_pdf_btn)
-
-        self._toc_top_btn = QPushButton()
-        self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=TEXT_PRI))
-        self._toc_top_btn.setObjectName("viewer_nav_btn")
-        self._toc_top_btn.setFixedSize(28, 28)
-        _a11y(self._toc_top_btn, t("viewer.toc"))
-        self._toc_top_btn.setVisible(False)
         self._toc_top_btn.clicked.connect(lambda: self._viewer._toggle_toc())
-        wb_h.addWidget(self._toc_top_btn)
-
-        self._night_top_btn = QPushButton()
-        self._night_top_btn.setIcon(qta.icon("fa5s.moon", color=TEXT_PRI))
-        self._night_top_btn.setObjectName("viewer_nav_btn")
-        self._night_top_btn.setFixedSize(28, 28)
-        _a11y(self._night_top_btn, t("viewer.night_mode"))
-        self._night_top_btn.setCheckable(True)
         self._night_top_btn.clicked.connect(self._toggle_night_mode_top)
-        wb_h.addWidget(self._night_top_btn)
-
-        self._print_top_btn = QPushButton()
-        self._print_top_btn.setIcon(qta.icon("fa5s.print", color=TEXT_PRI))
-        self._print_top_btn.setObjectName("viewer_nav_btn")
-        self._print_top_btn.setFixedSize(28, 28)
-        _a11y(self._print_top_btn, t("viewer.print"))
         self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf())
-        wb_h.addWidget(self._print_top_btn)
-
-        self._present_btn = QPushButton()
-        self._present_btn.setIcon(qta.icon("fa5s.tv", color=TEXT_PRI))
-        self._present_btn.setObjectName("viewer_nav_btn")
-        self._present_btn.setFixedSize(28, 28)
-        _a11y(self._present_btn, t("viewer.presentation") + " (F5)")
         self._present_btn.clicked.connect(self._start_presentation)
-        wb_h.addWidget(self._present_btn)
-
-        self._search_top_btn = QPushButton()
-        self._search_top_btn.setIcon(qta.icon("fa5s.search", color=TEXT_PRI))
-        self._search_top_btn.setObjectName("viewer_nav_btn")
-        self._search_top_btn.setFixedSize(28, 28)
-        _a11y(self._search_top_btn, t("search.placeholder") + " (Ctrl+F)")
         self._search_top_btn.clicked.connect(lambda: self._viewer._toggle_search())
-        wb_h.addWidget(self._search_top_btn)
-
-        # Zoom widget
-        self._zoom_widget = QWidget()
-        zw_h = QHBoxLayout(self._zoom_widget); zw_h.setContentsMargins(0,0,0,0); zw_h.setSpacing(4)
-        _zm = QPushButton(); _zm.setIcon(qta.icon("fa5s.search-minus", color=TEXT_PRI))
-        _zm.setFixedSize(28, 28); _zm.setObjectName("viewer_nav_btn"); _a11y(_zm, t("zoom.out"))
-        self._lbl_zoom = QLabel("100%"); self._lbl_zoom.setMinimumWidth(42); self._lbl_zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _zp = QPushButton(); _zp.setIcon(qta.icon("fa5s.search-plus", color=TEXT_PRI))
-        _zp.setFixedSize(28, 28); _zp.setObjectName("viewer_nav_btn"); _a11y(_zp, t("zoom.in"))
-        _z0 = QPushButton(t("zoom.reset")); _z0.setObjectName("viewer_nav_btn"); _z0.setFixedHeight(28)
-        _a11y(_z0, t("zoom.reset_tip"))
-        zw_h.addWidget(_zm); zw_h.addWidget(self._lbl_zoom); zw_h.addWidget(_zp); zw_h.addWidget(_z0)
-        self._zoom_widget.setVisible(False)
-        self._zm_btn = _zm; self._zp_btn = _zp; self._z0_btn = _z0
-        wb_h.addWidget(self._zoom_widget)
-
-        # Page navigation widget
-        self._page_nav_widget = QWidget()
-        pn_h = QHBoxLayout(self._page_nav_widget); pn_h.setContentsMargins(0,0,0,0); pn_h.setSpacing(4)
-        _prev_pg = QPushButton(); _prev_pg.setIcon(qta.icon("fa5s.chevron-left", color=TEXT_PRI))
-        _prev_pg.setFixedSize(28, 28); _prev_pg.setObjectName("viewer_nav_btn"); _a11y(_prev_pg, t("nav.prev_page"))
-        self._page_input = QLineEdit("1"); self._page_input.setFixedWidth(40); self._page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._page_input.setObjectName("page_input")
-        self._page_total_lbl = QLabel(t("nav.page_total")); self._page_total_lbl.setMinimumWidth(30)
-        _next_pg = QPushButton(); _next_pg.setIcon(qta.icon("fa5s.chevron-right", color=TEXT_PRI))
-        _next_pg.setFixedSize(28, 28); _next_pg.setObjectName("viewer_nav_btn"); _a11y(_next_pg, t("nav.next_page"))
-        pn_h.addWidget(_prev_pg); pn_h.addWidget(self._page_input)
-        pn_h.addWidget(self._page_total_lbl); pn_h.addWidget(_next_pg)
-        self._page_nav_widget.setVisible(False)
-        self._prev_pg_btn = _prev_pg; self._next_pg_btn = _next_pg
-        _prev_pg.clicked.connect(self._goto_prev_page)
-        _next_pg.clicked.connect(self._goto_next_page)
+        self._prev_pg_btn.clicked.connect(self._goto_prev_page)
+        self._next_pg_btn.clicked.connect(self._goto_next_page)
         self._page_input.returnPressed.connect(self._goto_input_page)
-        wb_h.addWidget(self._page_nav_widget)
-
-        # Undo/redo buttons for editor
-        self._undo_top_btn = QPushButton()
-        self._undo_top_btn.setIcon(qta.icon("fa5s.undo", color=TEXT_PRI))
-        self._undo_top_btn.setObjectName("viewer_nav_btn")
-        self._undo_top_btn.setFixedSize(28, 28)
-        _a11y(self._undo_top_btn, t("btn.undo") if "btn.undo" != t("btn.undo") else "Undo (Ctrl+Z)")
-        self._undo_top_btn.setVisible(False)
-        wb_h.addWidget(self._undo_top_btn)
-        self._redo_top_btn = QPushButton()
-        self._redo_top_btn.setIcon(qta.icon("fa5s.redo", color=TEXT_PRI))
-        self._redo_top_btn.setObjectName("viewer_nav_btn")
-        self._redo_top_btn.setFixedSize(28, 28)
-        _a11y(self._redo_top_btn, t("btn.redo") if "btn.redo" != t("btn.redo") else "Redo (Ctrl+Y)")
-        self._redo_top_btn.setVisible(False)
-        wb_h.addWidget(self._redo_top_btn)
-
-        self._help_btn = QPushButton("?")
-        self._help_btn.setObjectName("theme_btn")
-        _a11y(self._help_btn, t("help.tip"))
-        self._help_btn.setFixedSize(28, 28)
         self._help_btn.clicked.connect(lambda: __import__('webbrowser').open("https://pdf-apps.com/docs#first-steps"))
-        wb_h.addWidget(self._help_btn)
-
-        _lang_labels = {"en": "EN", "pt": "PT", "es": "ES", "fr": "FR", "de": "DE", "zh": "ZH", "it": "IT", "nl": "NL"}
-        self._lang_btn = QPushButton(_lang_labels.get(get_language(), "EN"))
-        self._lang_btn.setObjectName("theme_btn")
-        _a11y(self._lang_btn, t("lang.selector"))
-        self._lang_btn.setFixedSize(28, 28)
         self._lang_btn.clicked.connect(self._show_language_menu)
-        wb_h.addWidget(self._lang_btn)
-
-        self._theme_btn = QPushButton("☀")
-        self._theme_btn.setObjectName("theme_btn")
-        _a11y(self._theme_btn, t("theme.toggle"))
-        self._theme_btn.setFixedSize(28, 28)
         self._theme_btn.clicked.connect(self._toggle_theme)
-        wb_h.addWidget(self._theme_btn)
 
-        self._update_btn = QPushButton()
-        self._update_btn.setIcon(qta.icon("fa5s.arrow-circle-up", color=ACCENT))
-        self._update_btn.setObjectName("viewer_nav_btn")
-        self._update_btn.setFixedSize(28, 28)
-        _a11y(self._update_btn, t("update.check"))
-        self._update_btn.setVisible(False)
-        self._update_btn.setStyleSheet(
-            f"QPushButton {{ border: 1.5px solid {ACCENT}; border-radius: 6px; }}"
-            f"QPushButton:hover {{ background: rgba(20,184,166,0.15); }}"
-        )
         self._update_controller = UpdateController(self, self._update_btn)
         self._update_btn.clicked.connect(self._update_controller.show_update_dialog)
-        wb_h.addWidget(self._update_btn)
-
-        QTimer.singleShot(
-            2000,
-            lambda: self._update_controller.check_async() if isValid(self) else None,
-        )
+        QTimer.singleShot(2000, lambda: self._update_controller.check_async() if isValid(self) else None)
 
         root_v.addWidget(self._workspace_bar)
 
@@ -287,9 +116,8 @@ class MainWindow(QMainWindow):
         brand = QWidget(); brand.setObjectName("brand_area")
         bh = QHBoxLayout(brand); bh.setContentsMargins(12, 10, 10, 10); bh.setSpacing(8)
         ico_lbl = QLabel()
-        from PySide6.QtGui import QPixmap as _QPixmap
+        from PySide6.QtGui import QPixmap as _QPixmap, QPainter, QImage
         from PySide6.QtSvg import QSvgRenderer
-        from PySide6.QtGui import QPainter, QImage
         _svg_path = resource_path("pdfapps.svg")
         _h = 36
         dpr = self.devicePixelRatioF() if hasattr(self, 'devicePixelRatioF') else 1.0
@@ -302,9 +130,7 @@ class MainWindow(QMainWindow):
             _w = int(_h * ratio)
             img = QImage(int(_w * dpr), int(_h * dpr), QImage.Format.Format_ARGB32_Premultiplied)
             img.fill(0)
-            p = QPainter(img)
-            renderer.render(p)
-            p.end()
+            p = QPainter(img); renderer.render(p); p.end()
             _app_pix = _QPixmap.fromImage(img)
             _app_pix.setDevicePixelRatio(dpr)
         else:
@@ -314,10 +140,8 @@ class MainWindow(QMainWindow):
                 int(_w * dpr), int(_h * dpr), Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             _app_pix.setDevicePixelRatio(dpr)
-        ico_lbl.setPixmap(_app_pix)
-        ico_lbl.setObjectName("app_icon")
-        ico_lbl.setFixedSize(_w, _h)
-        ico_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ico_lbl.setPixmap(_app_pix); ico_lbl.setObjectName("app_icon")
+        ico_lbl.setFixedSize(_w, _h); ico_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bh.addWidget(ico_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         brand_text = QVBoxLayout(); brand_text.setContentsMargins(0, 0, 0, 0); brand_text.setSpacing(1)
         self._brand_title = QLabel(t("app.name")); self._brand_title.setObjectName("app_title")
@@ -337,8 +161,7 @@ class MainWindow(QMainWindow):
         sb_lay.addWidget(self._nav_search)
 
         self.nav = QListWidget(); self.nav.setObjectName("nav_list")
-        self.nav.setSpacing(0)
-        self.nav.setIconSize(QSize(18, 18))
+        self.nav.setSpacing(0); self.nav.setIconSize(QSize(18, 18))
 
         self._tool_usage = {}
         try:
@@ -376,8 +199,7 @@ class MainWindow(QMainWindow):
                 sep_item.setData(Qt.ItemDataRole.UserRole, -1)
                 sep_item.setSizeHint(QSize(0, 24))
                 self.nav.addItem(sep_item)
-                sep_line = QFrame()
-                sep_line.setFixedHeight(1)
+                sep_line = QFrame(); sep_line.setFixedHeight(1)
                 sep_line.setStyleSheet(f"background:{BORDER}; margin: 0 8px 0 4px;")
                 self.nav.setItemWidget(sep_item, sep_line)
 
@@ -387,8 +209,7 @@ class MainWindow(QMainWindow):
             hdr.setForeground(QColor(TEXT_SEC))
             from PySide6.QtGui import QFont as _QF
             f = _QF(); f.setPointSize(9); f.setBold(True); f.setLetterSpacing(_QF.SpacingType.AbsoluteSpacing, 1.5)
-            hdr.setFont(f)
-            hdr.setSizeHint(QSize(0, 26))
+            hdr.setFont(f); hdr.setSizeHint(QSize(0, 26))
             self.nav.addItem(hdr)
             for key, icon_name, _ in tools:
                 item = QListWidgetItem(qta.icon(icon_name, color=TEXT_SEC), t(key))
@@ -420,24 +241,19 @@ class MainWindow(QMainWindow):
             pass
         self._qapp: QApplication = QApplication.instance()
 
-        # ── Tool stack ─────────────────────────────────────────────
+        # ── Tool Stack ───────────────────────────────────────────────────────
         self.stack = QStackedWidget(); self.stack.setObjectName("content_area")
         for _, __, cls in NAV_ITEMS:
             self.stack.addWidget(cls(self._set_status))
         self.stack.setVisible(False)
 
-        # ── Tabbed viewer ──────────────────────────────────────────────
+        # ── Tabbed Viewer ────────────────────────────────────────────────────
         self._tab_container = QWidget()
-        tc_lay = QVBoxLayout(self._tab_container)
-        tc_lay.setContentsMargins(0, 0, 0, 0)
-        tc_lay.setSpacing(0)
+        tc_lay = QVBoxLayout(self._tab_container); tc_lay.setContentsMargins(0, 0, 0, 0); tc_lay.setSpacing(0)
 
         tab_row = QHBoxLayout(); tab_row.setContentsMargins(0, 0, 0, 0); tab_row.setSpacing(0)
-        self._tab_bar = QTabBar()
-        self._tab_bar.setTabsClosable(True)
-        self._tab_bar.setMovable(True)
-        self._tab_bar.setExpanding(False)
-        self._tab_bar.setObjectName("viewer_tabs")
+        self._tab_bar = QTabBar(); self._tab_bar.setTabsClosable(True); self._tab_bar.setMovable(True)
+        self._tab_bar.setExpanding(False); self._tab_bar.setObjectName("viewer_tabs")
         self._current_tool = -1
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabCloseRequested.connect(self._close_tab)
@@ -451,12 +267,10 @@ class MainWindow(QMainWindow):
         tc_lay.addWidget(self._viewer_stack, 1)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.setHandleWidth(1)
-        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(1); self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(self._tab_container)
         self._splitter.addWidget(self.stack)
-        self._splitter.setCollapsible(0, False)
-        self._splitter.setCollapsible(1, True)
+        self._splitter.setCollapsible(0, False); self._splitter.setCollapsible(1, True)
 
         main_h.addWidget(self._sidebar)
         main_h.addWidget(self._splitter, 1)
@@ -469,17 +283,14 @@ class MainWindow(QMainWindow):
             with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
                 _saved = json.load(_cf)
             sizes = _saved.get("splitter_sizes")
-            if (isinstance(sizes, list)
-                    and len(sizes) == self._splitter.count()
-                    and all(isinstance(s, int) and s >= 0 for s in sizes)
-                    and sum(sizes) > 0):
+            if (isinstance(sizes, list) and len(sizes) == self._splitter.count()
+                    and all(isinstance(s, int) and s >= 0 for s in sizes) and sum(sizes) > 0):
                 self._splitter.setSizes(sizes)
             mode = _saved.get("sidebar_mode")
             if mode == "icons":
                 self._toggle_sidebar()
             elif mode == "hidden":
-                self._toggle_sidebar()
-                self._toggle_sidebar()
+                self._toggle_sidebar(); self._toggle_sidebar()
         except Exception:
             pass
 
@@ -489,7 +300,6 @@ class MainWindow(QMainWindow):
             for dfe in self.stack.widget(i).findChildren(DropFileEdit):
                 dfe.path_changed.connect(lambda p: self._viewer.load(p))
 
-        from app.base import BasePage
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if isinstance(w, BasePage):
@@ -497,10 +307,12 @@ class MainWindow(QMainWindow):
                 w.pipeline_save_requested.connect(self._save_pipeline)
             if isinstance(w, TabRotar):
                 w.rotations_changed.connect(self._on_rotations_changed)
+            if isinstance(w, TabCortar):
+                w.crop_changed.connect(self._on_crop_changed)
+                w.crop_mode_toggled.connect(self._on_crop_mode_toggled)
 
         self._pipeline_state: dict[int, dict] = {}
 
-        from PySide6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence("F5"), self, self._start_presentation)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
@@ -512,16 +324,12 @@ class MainWindow(QMainWindow):
         for sc in (sc_close, sc_save, sc_pgup, sc_pgdn):
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
-        assert len(NAV_ITEMS) <= 15, (
-            f"Only 15 tool shortcuts are defined (Ctrl+1..9, "
-            f"Ctrl+Shift+1..6) but NAV_ITEMS has {len(NAV_ITEMS)}.")
+        assert len(NAV_ITEMS) <= 18, f"Max 18 tool shortcuts defined but NAV_ITEMS has {len(NAV_ITEMS)}."
         for idx in range(len(NAV_ITEMS)):
             if idx < 9:
-                QShortcut(QKeySequence(f"Ctrl+{idx+1}"), self,
-                          lambda i=idx: self._activate_tool(i))
-            else:
-                QShortcut(QKeySequence(f"Ctrl+Shift+{idx-8}"), self,
-                          lambda i=idx: self._activate_tool(i))
+                QShortcut(QKeySequence(f"Ctrl+{idx+1}"), self, lambda i=idx: self._activate_tool(i))
+            elif idx < 18:
+                QShortcut(QKeySequence(f"Ctrl+Shift+{idx-8}"), self, lambda i=idx: self._activate_tool(i))
         self._fullscreen = False
 
         if not self._dark_mode:
@@ -540,8 +348,23 @@ class MainWindow(QMainWindow):
     def _rotate_tool_idx(self) -> int:
         return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabRotar)
 
+    def _crop_tool_idx(self) -> int:
+        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabCortar)
+
     def _on_rotations_changed(self, rotations: dict):
         self._viewer.set_page_rotations(rotations)
+
+    def _on_crop_changed(self, crop_data: dict):
+        self._viewer.set_crop_preview(crop_data)
+
+    def _on_crop_mode_toggled(self, active: bool):
+        if self._current_tool == self._crop_tool_idx():
+            self._viewer.set_crop_mode(active)
+
+    def _on_viewer_crop_selected(self, page_idx: int, rect: tuple):
+        if self._current_tool == self._crop_tool_idx():
+            crop_w = self.stack.widget(self._crop_tool_idx())
+            crop_w.on_canvas_crop_selected(page_idx, rect)
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         v = PdfViewerPanel()
@@ -551,11 +374,11 @@ class MainWindow(QMainWindow):
         self._tab_bar.setCurrentIndex(idx)
         self._update_tab_visibility()
 
-        v._canvas_scroll.verticalScrollBar().valueChanged.connect(
-            lambda _: self._update_page_nav())
+        v._canvas_scroll.verticalScrollBar().valueChanged.connect(lambda _: self._update_page_nav())
+        v.crop_selected.connect(self._on_viewer_crop_selected)
 
         original_load = v.load
-        def _make_wrapped(viewer, orig, tab_idx_ref):
+        def _make_wrapped(viewer, orig):
             def _wrapped(*args, track=True, **kwargs):
                 orig(*args, **kwargs)
                 if args:
@@ -572,7 +395,7 @@ class MainWindow(QMainWindow):
                 if self._current_tool == -1:
                     self._setup_zoom_bar(True, canvas=viewer._canvas)
             return _wrapped
-        v.load = _make_wrapped(v, original_load, idx)
+        v.load = _make_wrapped(v, original_load)
         if path:
             v.load(path)
         return v
@@ -592,8 +415,14 @@ class MainWindow(QMainWindow):
             rot_w = self.stack.widget(self._rotate_tool_idx())
             rots = getattr(rot_w, "_rotations", {})
             self._viewer.set_page_rotations(rots)
+        elif self._current_tool == self._crop_tool_idx():
+            crop_w = self.stack.widget(self._crop_tool_idx())
+            self._viewer.set_crop_mode(crop_w.btn_draw_crop.isChecked())
+            crop_w._emit_preview()
         else:
             self._viewer.set_page_rotations({})
+            self._viewer.set_crop_mode(False)
+            self._viewer.set_crop_preview(None)
         self._refresh_viewer_top_buttons()
 
     def _close_tab(self, idx: int):
@@ -601,9 +430,7 @@ class MainWindow(QMainWindow):
         if self._viewer_has_unsaved(viewer):
             ans = QMessageBox.question(
                 self, t("msg.warning"), t("pipeline.unsaved_prompt"),
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Discard
-                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel)
             if ans == QMessageBox.StandardButton.Cancel:
                 return
@@ -740,6 +567,7 @@ class MainWindow(QMainWindow):
             return
         edit_idx = self._edit_tool_idx()
         rotate_idx = self._rotate_tool_idx()
+        crop_idx = self._crop_tool_idx()
 
         if row == self._current_tool:
             self.nav.clearSelection()
@@ -751,6 +579,8 @@ class MainWindow(QMainWindow):
             self._undo_top_btn.setVisible(False)
             self._redo_top_btn.setVisible(False)
             self._viewer.set_page_rotations({})
+            self._viewer.set_crop_mode(False)
+            self._viewer.set_crop_preview(None)
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
@@ -775,6 +605,8 @@ class MainWindow(QMainWindow):
                 self._redo_top_btn.clicked.connect(edit_w._redo)
                 self._undo_redo_handlers = (edit_w._undo, edit_w._redo)
                 self._viewer.set_page_rotations({})
+                self._viewer.set_crop_mode(False)
+                self._viewer.set_crop_preview(None)
             else:
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
@@ -792,12 +624,20 @@ class MainWindow(QMainWindow):
                 else:
                     self._viewer.set_page_rotations({})
 
+                if row == crop_idx:
+                    crop_w = self.stack.widget(crop_idx)
+                    active = crop_w.btn_draw_crop.isChecked()
+                    self._viewer.set_crop_mode(active)
+                    crop_w._emit_preview()
+                else:
+                    self._viewer.set_crop_mode(False)
+                    self._viewer.set_crop_preview(None)
+
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)
 
     def _open_pdf(self):
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
+        paths, _ = QFileDialog.getOpenFileNames(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
         for path in paths:
             self._load_and_track(path)
 
@@ -818,19 +658,14 @@ class MainWindow(QMainWindow):
         import logging as _logging
         _wlog = _logging.getLogger(__name__)
         for path in paths:
-            if isinstance(path, str) and os.path.isfile(path) \
-                    and path.lower().endswith(".pdf"):
+            if isinstance(path, str) and os.path.isfile(path) and path.lower().endswith(".pdf"):
                 try:
                     self._load_and_track(path)
                 except Exception as exc:
-                    _wlog.warning(
-                        "second instance: failed to load %s: %s",
-                        path, exc,
-                    )
+                    _wlog.warning("second instance: failed to load %s: %s", path, exc)
         if self.isMinimized():
             self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        self.raise_(); self.activateWindow()
 
     def _clear_recent(self):
         from app.i18n import _update_config
@@ -847,8 +682,7 @@ class MainWindow(QMainWindow):
     def _set_status(self, msg: str):
         self._sb.showMessage(msg)
 
-    # ── Page navigation (workspace bar) ───────────────────────────────────
-
+    # ── Page navigation ───────────────────────────────────────────────────
     def _update_page_nav(self):
         canvas = self._viewer._canvas
         entries = canvas._entries
@@ -896,7 +730,8 @@ class MainWindow(QMainWindow):
         sb.setValue(canvas.scroll_to_page(page_num - 1))
 
     def _show_language_menu(self):
-        _langs = [("en", "English"), ("pt", "Português"), ("es", "Español"), ("fr", "Français"), ("de", "Deutsch"), ("zh", "中文"), ("it", "Italiano"), ("nl", "Nederlands")]
+        _langs = [("en", "English"), ("pt", "Português"), ("es", "Español"), ("fr", "Français"),
+                  ("de", "Deutsch"), ("zh", "中文"), ("it", "Italiano"), ("nl", "Nederlands")]
         menu = QMenu(self)
         current = get_language()
         for code, name in _langs:
@@ -924,18 +759,10 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QProcess, QProcessEnvironment
         pdf_args = [a for a in sys.argv[1:] if a.lower().endswith(".pdf")]
         if getattr(sys, "frozen", False):
-            program = sys.executable
-            args = pdf_args
-            cwd = os.path.dirname(sys.executable) or os.getcwd()
+            program = sys.executable; args = pdf_args; cwd = os.path.dirname(sys.executable) or os.getcwd()
         else:
-            script = os.path.abspath(sys.argv[0])
-            program = sys.executable
-            args = [script] + pdf_args
-            cwd = os.path.dirname(script) or os.getcwd()
-        proc = QProcess()
-        proc.setProgram(program)
-        proc.setArguments(args)
-        proc.setWorkingDirectory(cwd)
+            script = os.path.abspath(sys.argv[0]); program = sys.executable; args = [script] + pdf_args; cwd = os.path.dirname(script) or os.getcwd()
+        proc = QProcess(); proc.setProgram(program); proc.setArguments(args); proc.setWorkingDirectory(cwd)
         env = QProcessEnvironment.systemEnvironment()
         for _k in list(env.keys()):
             if _k.startswith("_PYI_") or _k.startswith("_MEIPASS"):
@@ -951,8 +778,7 @@ class MainWindow(QMainWindow):
             local = url.toLocalFile()
             if not local:
                 continue
-            if (local.lower().endswith(".pdf")
-                    or os.path.isdir(local)):
+            if (local.lower().endswith(".pdf") or os.path.isdir(local)):
                 e.acceptProposedAction()
                 return
 
@@ -962,9 +788,7 @@ class MainWindow(QMainWindow):
             if not path:
                 scheme = url.scheme().lower() if url.isValid() else ""
                 if scheme in ("http", "https", "ftp"):
-                    QMessageBox.warning(
-                        self, t("msg.warning"),
-                        t("viewer.drop_url_not_supported"))
+                    QMessageBox.warning(self, t("msg.warning"), t("viewer.drop_url_not_supported"))
                     return
                 continue
             if os.path.isdir(path):
@@ -972,18 +796,10 @@ class MainWindow(QMainWindow):
                     entries = os.listdir(path)
                 except OSError:
                     entries = []
-                pdfs = sorted(
-                    os.path.join(path, f) for f in entries
-                    if f.lower().endswith(".pdf")
-                    and os.path.isfile(os.path.join(path, f))
-                )
+                pdfs = sorted(os.path.join(path, f) for f in entries if f.lower().endswith(".pdf") and os.path.isfile(os.path.join(path, f)))
                 if len(pdfs) > 20:
-                    reply = QMessageBox.question(
-                        self, t("msg.confirm"),
-                        t("viewer.drop_many_pdfs_confirm", count=len(pdfs)),
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No,
-                    )
+                    reply = QMessageBox.question(self, t("msg.confirm"), t("viewer.drop_many_pdfs_confirm", count=len(pdfs)),
+                                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
                     if reply != QMessageBox.StandardButton.Yes:
                         continue
                 for pdf in pdfs:
@@ -1045,8 +861,7 @@ class MainWindow(QMainWindow):
                 fn(temp_path)
 
     def _save_pipeline(self):
-        import shutil
-        import tempfile
+        import shutil, tempfile
         vid = id(self._viewer)
         ps = self._pipeline_state.get(vid)
         if not ps or not ps.get("temp_path"):
@@ -1054,16 +869,13 @@ class MainWindow(QMainWindow):
         orig = ps["original_path"]
         base, ext = os.path.splitext(os.path.basename(orig))
         suggested = os.path.join(os.path.dirname(orig), base + "_edited" + ext)
-        path, _ = QFileDialog.getSaveFileName(
-            self, t("btn.choose"), suggested, t("file_filter.pdf"))
+        path, _ = QFileDialog.getSaveFileName(self, t("btn.choose"), suggested, t("file_filter.pdf"))
         if not path:
             return
         try:
             if os.path.lexists(path) and os.path.realpath(path) != os.path.abspath(path):
                 import logging as _logging
-                _logging.getLogger("pdfapps").warning(
-                    "Pipeline save destination is a symlink: %s -> %s",
-                    path, os.path.realpath(path))
+                _logging.getLogger("pdfapps").warning("Pipeline save destination is a symlink: %s -> %s", path, os.path.realpath(path))
         except Exception:
             pass
         try:
@@ -1090,7 +902,6 @@ class MainWindow(QMainWindow):
         ps = self._pipeline_state.pop(viewer_id, None)
         if not ps:
             return
-        from app.base import BasePage
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if isinstance(w, BasePage):
@@ -1126,19 +937,12 @@ class MainWindow(QMainWindow):
         from app.viewer.presentation import PresentationWidget
         try:
             pres = PresentationWidget(
-                viewer._current_path,
-                getattr(viewer, "_pdf_password", ""),
-                start_page,
-                canvas.page_count(),
-                dark_mode=self._dark_mode,
-            )
+                viewer._current_path, getattr(viewer, "_pdf_password", ""),
+                start_page, canvas.page_count(), dark_mode=self._dark_mode)
         except Exception as e:
-            from app.utils import show_error
             show_error(self, e)
             return
-        pres.destroyed.connect(
-            lambda _=None, w=pres: setattr(self, "_presentation", None)
-            if getattr(self, "_presentation", None) is w else None)
+        pres.destroyed.connect(lambda _=None, w=pres: setattr(self, "_presentation", None) if getattr(self, "_presentation", None) is w else None)
         self._presentation = pres
         self._presentation.show()
 
@@ -1166,12 +970,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         for v in self._viewers:
             if self._viewer_has_unsaved(v):
-                ans = QMessageBox.question(
-                    self, t("msg.warning"), t("pipeline.unsaved_prompt"),
-                    QMessageBox.StandardButton.Save
-                    | QMessageBox.StandardButton.Discard
-                    | QMessageBox.StandardButton.Cancel,
-                    QMessageBox.StandardButton.Cancel)
+                ans = QMessageBox.question(self, t("msg.warning"), t("pipeline.unsaved_prompt"),
+                                           QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                                           QMessageBox.StandardButton.Cancel)
                 if ans == QMessageBox.StandardButton.Cancel:
                     event.ignore(); return
                 if ans == QMessageBox.StandardButton.Save:
@@ -1179,11 +980,9 @@ class MainWindow(QMainWindow):
                 break
         edit_w = self.stack.widget(self._edit_tool_idx())
         if edit_w and getattr(edit_w, "_user_pending", None):
-            ans = QMessageBox.question(
-                self, t("msg.warning"), t("pipeline.unsaved_prompt"),
-                QMessageBox.StandardButton.Discard
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel)
+            ans = QMessageBox.question(self, t("msg.warning"), t("pipeline.unsaved_prompt"),
+                                       QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                                       QMessageBox.StandardButton.Cancel)
             if ans == QMessageBox.StandardButton.Cancel:
                 event.ignore(); return
         for v in list(self._viewers):
@@ -1194,17 +993,10 @@ class MainWindow(QMainWindow):
         try:
             from app.i18n import _update_config
             sizes = self._splitter.sizes()
-            if self._sidebar_collapsed:
-                mode = "hidden"
-            elif self._sidebar.width() <= 60:
-                mode = "icons"
-            else:
-                mode = "full"
-
+            mode = "hidden" if self._sidebar_collapsed else ("icons" if self._sidebar.width() <= 60 else "full")
             def _mutate(cfg: dict) -> None:
                 cfg["splitter_sizes"] = sizes
                 cfg["sidebar_mode"] = mode
-
             _update_config(_mutate)
         except Exception:
             pass
@@ -1221,11 +1013,11 @@ class MainWindow(QMainWindow):
                 idx = it.data(Qt.ItemDataRole.UserRole)
                 if idx is not None and idx < 0:
                     it.setHidden(True)
-            self._sidebar_toggle_btn.setIcon(self._ico_bars)
+            self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_bars)
         elif not self._sidebar_collapsed:
             self._sidebar_collapsed = True
             self._sidebar.setVisible(False)
-            self._sidebar_toggle_btn.setIcon(self._ico_bars)
+            self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_bars)
         else:
             self._sidebar_collapsed = False
             self._sidebar.setVisible(True)
@@ -1237,7 +1029,7 @@ class MainWindow(QMainWindow):
                 idx = it.data(Qt.ItemDataRole.UserRole)
                 if idx is not None and idx < 0:
                     it.setHidden(False)
-            self._sidebar_toggle_btn.setIcon(self._ico_times)
+            self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_times)
         QTimer.singleShot(50, self._relayout_viewer)
 
     def _relayout_viewer(self):
@@ -1261,7 +1053,7 @@ class MainWindow(QMainWindow):
         bar_color = TEXT_PRI if self._dark_mode else _LQ
         self._qapp.setPalette(_make_palette(self._dark_mode))
         self._qapp.setStyleSheet(style)
-        self._theme_btn.setText("☀" if self._dark_mode else "🌙")
+        self._workspace_bar.update_theme(self._dark_mode, self._sidebar_collapsed)
         for r in range(self.nav.count()):
             it = self.nav.item(r)
             tool_idx = it.data(Qt.ItemDataRole.UserRole)
@@ -1270,29 +1062,12 @@ class MainWindow(QMainWindow):
                 it.setIcon(qta.icon(icon_name, color=nav_color))
             else:
                 it.setForeground(QColor(nav_color))
-        self._ico_bars = qta.icon("fa5s.bars", color=bar_color)
-        self._ico_times = qta.icon("fa5s.times", color=bar_color)
-        self._sidebar_toggle_btn.setIcon(
-            self._ico_bars if self._sidebar_collapsed else self._ico_times)
-        self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=bar_color))
-        self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=bar_color))
-        self._night_top_btn.setIcon(qta.icon("fa5s.moon", color=bar_color))
-        self._print_top_btn.setIcon(qta.icon("fa5s.print", color=bar_color))
-        self._present_btn.setIcon(qta.icon("fa5s.tv", color=bar_color))
-        self._undo_top_btn.setIcon(qta.icon("fa5s.undo", color=bar_color))
-        self._redo_top_btn.setIcon(qta.icon("fa5s.redo", color=bar_color))
-        self._search_top_btn.setIcon(qta.icon("fa5s.search", color=bar_color))
-        self._zm_btn.setIcon(qta.icon("fa5s.search-minus", color=bar_color))
-        self._zp_btn.setIcon(qta.icon("fa5s.search-plus", color=bar_color))
-        self._prev_pg_btn.setIcon(qta.icon("fa5s.chevron-left", color=bar_color))
-        self._next_pg_btn.setIcon(qta.icon("fa5s.chevron-right", color=bar_color))
         for v in self._viewers:
             v.update_theme(self._dark_mode)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if hasattr(w, 'update_theme'):
                 w.update_theme(self._dark_mode)
-        from app.widgets import DropFileEdit, MultiDropWidget
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             for cls in (DropFileEdit, MultiDropWidget):
@@ -1302,7 +1077,5 @@ class MainWindow(QMainWindow):
                         try: fn(self._dark_mode)
                         except RuntimeError: pass
         pres = getattr(self, "_presentation", None)
-        if pres is not None:
-            from shiboken6 import isValid as _is_valid
-            if _is_valid(pres):
-                pres.update_theme(self._dark_mode)
+        if pres is not None and isValid(pres):
+            pres.update_theme(self._dark_mode)

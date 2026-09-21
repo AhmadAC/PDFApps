@@ -1,8 +1,10 @@
+# app/viewer/panel.py
+
 """PDFApps – PdfViewerPanel: PDF viewer with drag & drop and text selection."""
 
 import os
 
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
@@ -22,6 +24,8 @@ from app.viewer.thumbnails import ThumbnailPanel
 
 class PdfViewerPanel(QWidget):
     """PDF viewer with drag & drop, native text selection and navigation."""
+
+    crop_selected = Signal(int, object)
 
     def __init__(self):
         super().__init__()
@@ -168,6 +172,7 @@ class PdfViewerPanel(QWidget):
         self._canvas = _SelectCanvas()
         self._canvas.zoom_changed.connect(self._on_zoom_changed)
         self._canvas.doc_replaced.connect(self._on_doc_replaced)
+        self._canvas.crop_selected.connect(self.crop_selected.emit)
         self._canvas_scroll = QScrollArea()
         self._canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._canvas_scroll.setWidgetResizable(False)
@@ -243,6 +248,14 @@ class PdfViewerPanel(QWidget):
         self._sel_status.setVisible(False)
         layout.addWidget(self._sel_status)
         self._canvas.text_copied.connect(self._on_text_copied)
+
+    def set_crop_mode(self, active: bool):
+        if hasattr(self, "_canvas"):
+            self._canvas.set_crop_mode(active)
+
+    def set_crop_preview(self, crop_data: dict | None):
+        if hasattr(self, "_canvas"):
+            self._canvas.set_crop_preview(crop_data)
 
     def set_page_rotations(self, rotations: dict[int, int]):
         """Update live preview rotations across continuous scroll and thumbnail sidebar."""
@@ -493,6 +506,8 @@ class PdfViewerPanel(QWidget):
         self._current_path = ""
         self._fitz_doc = None
         self._reset_search_state()
+        self.set_crop_mode(False)
+        self.set_crop_preview(None)
         self._placeholder.setVisible(True)
         self._viewer_splitter.setVisible(False)
         self._sidebar_tabs.setVisible(False)
@@ -547,6 +562,7 @@ class PdfViewerPanel(QWidget):
         self._current_path = path
         self._fitz_doc     = doc
         self.set_page_rotations({})
+        self.set_crop_preview(None)
         self._canvas.load(doc, 0, path=path, password=getattr(self, "_pdf_password", ""))
         self._canvas_scroll.verticalScrollBar().setValue(0)
         self._placeholder.setVisible(False)

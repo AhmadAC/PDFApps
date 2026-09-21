@@ -1,3 +1,5 @@
+#app/viewer/canvas.py
+
 """PDFApps – _SelectCanvas: continuous scroll with lazy rendering via threads."""
 # canvas.py
 from __future__ import annotations
@@ -12,7 +14,7 @@ from PySide6.QtWidgets import QWidget, QApplication
 from PySide6.QtGui import QColor, QPainter, QPen, QFont
 import qtawesome as qta
 
-from app.constants import BG_INNER, TEXT_SEC, _LN
+from app.constants import ACCENT, BG_INNER, TEXT_SEC, _LN
 from app.i18n import t
 
 _PAGE_GAP       = 4    # px between pages
@@ -99,9 +101,10 @@ class _PageEntry:
 class _SelectCanvas(QWidget):
     """Continuous scroll of all pages with lazy background rendering."""
 
-    zoom_changed = Signal(int)   # current zoom percentage
-    text_copied  = Signal(str)   # copied text (empty = no text layer)
-    doc_replaced = Signal(object)  # new fitz.Document after a close/reopen
+    zoom_changed  = Signal(int)   # current zoom percentage
+    text_copied   = Signal(str)   # copied text (empty = no text layer)
+    doc_replaced  = Signal(object)  # new fitz.Document after a close/reopen
+    crop_selected = Signal(int, object)  # (page_idx, (x0, y0, x1, y1))
 
     def __init__(self):
         super().__init__()
@@ -115,6 +118,13 @@ class _SelectCanvas(QWidget):
         self._gen         = 0       # generation — invalidates old renders
         self._pending: set[int] = set()
         self._page_rotations: dict[int, int] = {}  # page_idx -> rotation angle preview
+
+        self._crop_mode   = False
+        self._crop_preview = None   # dict with {"margins": (t, b, l, r), "targets": set(...)}
+        self._crop_drag_start = None
+        self._crop_drag_cur   = None
+        self._crop_active_page = -1
+
         self._signals     = _RenderSignals()
         self._signals.page_ready.connect(self._on_page_ready)
         self._pool        = QThreadPool()
@@ -142,6 +152,8 @@ class _SelectCanvas(QWidget):
         self._password = password
         self._zoom_factor = 1.0
         self._page_rotations = {}
+        self._crop_mode = False
+        self._crop_preview = None
         self._gen     += 1
         self._pending.clear()
         self._clear_selection()
@@ -152,6 +164,21 @@ class _SelectCanvas(QWidget):
         """Update in-memory preview rotations for pages without saving."""
         self._page_rotations = {int(k): int(v) % 360 for k, v in rotations.items()}
         self._invalidate_and_relayout()
+
+    def set_crop_mode(self, active: bool):
+        self._crop_mode = bool(active)
+        self._crop_drag_start = None
+        self._crop_drag_cur = None
+        self._crop_active_page = -1
+        if self._crop_mode:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.update()
+
+    def set_crop_preview(self, crop_data: dict | None):
+        self._crop_preview = crop_data
+        self.update()
 
     def on_scroll(self):
         """Called when scroll changes — schedules newly visible pages."""
@@ -205,6 +232,8 @@ class _SelectCanvas(QWidget):
         self._gen += 1
         self._pending.clear()
         self._page_rotations = {}
+        self._crop_mode = False
+        self._crop_preview = None
         if self._doc is not None:
             try:
                 self._doc.close()
@@ -446,6 +475,58 @@ class _SelectCanvas(QWidget):
 
     # ── Paint ─────────────────────────────────────────────────────────────────
 
+    def _draw_crop_box(self, p: QPainter, px: int, py: int, pw: int, ph: int,
+                       cx0: int, cy0: int, cx1: int, cy1: int):
+        # 1. Shaded mask outside crop rect
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 140))
+        if cy0 > py:
+            p.drawRect(px, py, pw, cy0 - py)
+        if cy1 < py + ph:
+            p.drawRect(px, cy1, pw, py + ph - cy1)
+        if cx0 > px:
+            p.drawRect(px, cy0, cx0 - px, cy1 - cy0)
+        if cx1 < px + pw:
+            p.drawRect(cx1, cy0, px + pw - cx1, cy1 - cy0)
+
+        # 2. Dashed crop boundary
+        p.setPen(QPen(QColor(ACCENT), 2, Qt.PenStyle.DashLine))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(cx0, cy0, max(1, cx1 - cx0), max(1, cy1 - cy0))
+
+        # 3. Corner brackets
+        k = 14
+        p.setPen(QPen(QColor(ACCENT), 3, Qt.PenStyle.SolidLine))
+        p.drawLine(cx0, cy0, cx0 + k, cy0)
+        p.drawLine(cx0, cy0, cx0, cy0 + k)
+        p.drawLine(cx1, cy0, cx1 - k, cy0)
+        p.drawLine(cx1, cy0, cx1, cy0 + k)
+        p.drawLine(cx0, cy1, cx0 + k, cy1)
+        p.drawLine(cx0, cy1, cx0, cy1 - k)
+        p.drawLine(cx1, cy1, cx1 - k, cy1)
+        p.drawLine(cx1, cy1, cx1, cy1 - k)
+
+        # 4. Dimension badge
+        z = self._zoom or 1.0
+        pt_w = int(round((cx1 - cx0) / z))
+        pt_h = int(round((cy1 - cy0) / z))
+        if pt_w > 20 and pt_h > 20:
+            tag = f"{pt_w} × {pt_h} pt"
+            f = QFont()
+            f.setPointSize(9)
+            f.setBold(True)
+            p.setFont(f)
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(tag) + 12
+            th = fm.height() + 6
+            badge_x = cx0 + 6
+            badge_y = cy0 + 6
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(20, 184, 166, 220))
+            p.drawRoundedRect(QRect(badge_x, badge_y, tw, th), 4, 4)
+            p.setPen(QColor("#FFFFFF"))
+            p.drawText(QRect(badge_x, badge_y, tw, th), Qt.AlignmentFlag.AlignCenter, tag)
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(self._bg_color))
@@ -534,9 +615,48 @@ class _SelectCanvas(QWidget):
         for r in self._sel_rects:
             p.fillRect(r, QColor(59, 130, 246, 90))
 
+        # ── Crop overlay preview ──────────────────────────────────────
+        if (self._crop_mode and self._crop_drag_start and self._crop_drag_cur
+                and 0 <= self._crop_active_page < len(self._entries)):
+            i = self._crop_active_page
+            e = self._entries[i]
+            x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
+            start = self._crop_drag_start
+            cur = self._crop_drag_cur
+            cx0 = max(x, min(start.x(), cur.x()))
+            cy0 = max(e.y_off, min(start.y(), cur.y()))
+            cx1 = min(x + e.w, max(start.x(), cur.x()))
+            cy1 = min(e.y_off + e.h, max(start.y(), cur.y()))
+            self._draw_crop_box(p, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
+        elif self._crop_preview:
+            margins = self._crop_preview.get("margins", (0, 0, 0, 0))
+            targets = self._crop_preview.get("targets")
+            top_m, bot_m, left_m, right_m = margins
+            for i in range(first, last + 1):
+                if targets is not None and i not in targets:
+                    continue
+                e = self._entries[i]
+                x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
+                cx0 = x + int(left_m * z)
+                cy0 = e.y_off + int(top_m * z)
+                cx1 = x + e.w - int(right_m * z)
+                cy1 = e.y_off + e.h - int(bot_m * z)
+                if cx1 > cx0 and cy1 > cy0:
+                    self._draw_crop_box(p, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
+
     # ── Mouse ─────────────────────────────────────────────────────────────────
 
     def mousePressEvent(self, e):
+        if self._crop_mode and e.button() == Qt.MouseButton.LeftButton:
+            pos = e.position().toPoint()
+            self.setFocus()
+            self._crop_active_page = self.page_at_y(pos.y())
+            self._crop_drag_start = pos
+            self._crop_drag_cur = pos
+            self.update()
+            e.accept()
+            return
+
         if e.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
             self._drag_start = e.position().toPoint()
@@ -547,6 +667,12 @@ class _SelectCanvas(QWidget):
             e.accept()
 
     def mouseMoveEvent(self, e):
+        if self._crop_mode and self._crop_drag_start:
+            self._crop_drag_cur = e.position().toPoint()
+            self.update()
+            e.accept()
+            return
+
         if self._drag_start and (e.buttons() & Qt.MouseButton.LeftButton):
             self._drag_end = e.position().toPoint()
             self._compute_selection()
@@ -554,6 +680,26 @@ class _SelectCanvas(QWidget):
             e.accept()
 
     def mouseReleaseEvent(self, e):
+        if self._crop_mode and self._crop_drag_start:
+            start = self._crop_drag_start
+            end = e.position().toPoint()
+            page_idx = self._crop_active_page
+            self._crop_drag_start = None
+            self._crop_drag_cur = None
+            if (abs(end.x() - start.x()) > 5 and abs(end.y() - start.y()) > 5
+                    and 0 <= page_idx < len(self._entries)):
+                entry = self._entries[page_idx]
+                x_off = (max(self.width(), entry.w) - entry.w) // 2 if self.width() > entry.w else 0
+                z = self._zoom
+                p_x0 = max(0.0, min(start.x() - x_off, end.x() - x_off) / z)
+                p_y0 = max(0.0, min(start.y() - entry.y_off, end.y() - entry.y_off) / z)
+                p_x1 = min(entry.w / z, max(start.x() - x_off, end.x() - x_off) / z)
+                p_y1 = min(entry.h / z, max(start.y() - entry.y_off, end.y() - entry.y_off) / z)
+                self.crop_selected.emit(page_idx, (p_x0, p_y0, p_x1, p_y1))
+            self.update()
+            e.accept()
+            return
+
         if e.button() != Qt.MouseButton.LeftButton or not self._drag_start:
             return
         self._drag_end = e.position().toPoint()
@@ -726,3 +872,5 @@ class _SelectCanvas(QWidget):
             t("viewer.copy_chars", n=len(self._sel_text)))
         act.triggered.connect(lambda: QApplication.clipboard().setText(self._sel_text))
         menu.exec(e.globalPos())
+
+
