@@ -1,5 +1,5 @@
 """PDFApps – TabEditar: visual PDF editor tool tab."""
-# app/editor/tab.py
+
 import contextlib
 import logging
 import os
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QTextEdit, QFileDialog,
     QMessageBox, QDialog, QApplication, QSlider,
 )
+from shiboken6 import isValid
 import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, DESKTOP, _LQ, _LP
@@ -551,8 +552,13 @@ class TabEditar(QWidget):
         if p: self._load_pdf(p)
 
     def _load_pdf(self, p: str):
-        if not p or not os.path.isfile(p):
+        if not p:
             return
+        if not os.path.isfile(p):
+            if os.path.isfile(p + ".pdf"):
+                p = p + ".pdf"
+            else:
+                return
         try:
             import fitz
             probe = fitz.open(p)
@@ -589,7 +595,10 @@ class TabEditar(QWidget):
         n = self._canvas.page_count()
         self._lbl_info.setText(t("edit.status.pages", n=n))
         self._update_nav()
-        QTimer.singleShot(100, self._load_existing_annotations)
+        QTimer.singleShot(
+            100,
+            lambda: self._load_existing_annotations() if isValid(self) else None,
+        )
         QTimer.singleShot(
             200,
             lambda: self._load_form_fields(p) if isValid(self) else None,
