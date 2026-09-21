@@ -40,6 +40,8 @@ class TextBox:
     color: QColor
     font_size: float = 24.0
     id: int = 0
+    has_stroke: bool = False
+    has_cloud: bool = False
 
 
 _PEN_WIDTH = 3
@@ -66,7 +68,6 @@ def fit_font_size(text: str, rect: QRectF, min_size: float = 8.0, max_size: floa
     avail_h = max(12.0, rect.height() - 10.0)
 
     if not text.strip():
-        # Default proportional font height when empty
         return max(min_size, min(max_size, round(rect.height() * 0.65, 1)))
 
     low = min_size
@@ -105,7 +106,6 @@ def _draw_edge_type_icon(painter: QPainter, size: int, color: QColor) -> None:
     radius = size * 0.18
     painter.drawRoundedRect(box_rect, radius, radius)
 
-    # Serif capital 'T'
     bar_y = size * 0.32
     stem_bottom = size * 0.72
     mid_x = size * 0.5
@@ -113,16 +113,57 @@ def _draw_edge_type_icon(painter: QPainter, size: int, color: QColor) -> None:
     bar_right = size * 0.70
     serif_len = size * 0.10
 
-    # Top horizontal bar
     painter.drawLine(QPointF(bar_left, bar_y), QPointF(bar_right, bar_y))
-    # Top serifs
     painter.drawLine(QPointF(bar_left, bar_y), QPointF(bar_left, bar_y + serif_len))
     painter.drawLine(QPointF(bar_right, bar_y), QPointF(bar_right, bar_y + serif_len))
-    # Vertical stem
     painter.drawLine(QPointF(mid_x, bar_y), QPointF(mid_x, stem_bottom))
-    # Bottom base serif
     base_w = size * 0.14
     painter.drawLine(QPointF(mid_x - base_w, stem_bottom), QPointF(mid_x + base_w, stem_bottom))
+
+
+def _draw_stroke_btn_icon(painter: QPainter, size: int, color: QColor) -> None:
+    """Draw icon representing text outline stroke: stylized double-contoured T."""
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(color, max(1.6, size * 0.08), Qt.PenStyle.SolidLine,
+               Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    # Outer outline of 'T'
+    w_bar = size * 0.68
+    h_bar = size * 0.18
+    left = (size - w_bar) / 2.0
+    top = size * 0.20
+    painter.drawRoundedRect(QRectF(left, top, w_bar, h_bar), 2, 2)
+
+    stem_w = size * 0.22
+    stem_h = size * 0.44
+    stem_x = (size - stem_w) / 2.0
+    stem_y = top + h_bar
+    painter.drawRoundedRect(QRectF(stem_x, stem_y, stem_w, stem_h), 2, 2)
+
+
+def _draw_cloud_btn_icon(painter: QPainter, size: int, color: QColor) -> None:
+    """Draw a clean cloud icon representing the 40% translucent background."""
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(color, max(1.6, size * 0.08), Qt.PenStyle.SolidLine,
+               Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    path = QPainterPath()
+    # Cloud base and rounded puffs
+    bx = size * 0.20
+    by = size * 0.68
+    bw = size * 0.60
+    path.moveTo(bx + 4, by)
+    path.lineTo(bx + bw - 4, by)
+    path.arcTo(QRectF(bx + bw - 10, by - 12, 14, 14), -90, 110)
+    path.arcTo(QRectF(size * 0.54, size * 0.32, size * 0.28, size * 0.28), 0, 130)
+    path.arcTo(QRectF(size * 0.26, size * 0.24, size * 0.32, size * 0.32), 60, 135)
+    path.arcTo(QRectF(bx - 4, by - 14, 16, 16), 135, 135)
+    path.closeSubpath()
+    painter.drawPath(path)
 
 
 def _icon_with_outline(
@@ -222,16 +263,22 @@ class AnnotationOverlay(QWidget):
         self._active_box: TextBox | None = None
         self._cursor_pos: int = 0
         self._cursor_visible: bool = True
+        self._sel_start: int = -1
+        self._sel_end: int = -1
         self._drag_handle: int = self.HANDLE_NONE
         self._drag_start_pos: QPointF = QPointF()
         self._drag_start_rect: QRectF = QRectF()
         self._moving_box: bool = False
 
+        # Defaults for new boxes
+        self._default_text_stroke: bool = False
+        self._default_text_cloud: bool = False
+
         self._blink_timer = QTimer(self)
         self._blink_timer.setInterval(500)
         self._blink_timer.timeout.connect(self._toggle_cursor_blink)
 
-        # Undo / Redo stacks: list of {page_idx: {"strokes": [...], "text_boxes": [...]}}
+        # Undo / Redo stacks
         self._undo_stack: list[dict] = []
         self._redo_stack: list[dict] = []
 
@@ -251,6 +298,7 @@ class AnnotationOverlay(QWidget):
         if self._active_box and not self._active_box.text.strip():
             self._remove_box(self._active_box)
         self._active_box = None
+        self._clear_text_selection()
         self._blink_timer.stop()
         self._current_stroke = None
         if self._tool == ToolMode.LASER and new_tool != ToolMode.LASER:
@@ -284,6 +332,7 @@ class AnnotationOverlay(QWidget):
         if self._active_box and not self._active_box.text.strip():
             self._remove_box(self._active_box)
         self._active_box = None
+        self._clear_text_selection()
         self._blink_timer.stop()
         self._current_page = int(idx)
         self._current_stroke = None
@@ -298,6 +347,7 @@ class AnnotationOverlay(QWidget):
         self._strokes.pop(self._current_page, None)
         self._text_boxes.pop(self._current_page, None)
         self._active_box = None
+        self._clear_text_selection()
         self._current_stroke = None
         self._blink_timer.stop()
         self.update()
@@ -307,6 +357,7 @@ class AnnotationOverlay(QWidget):
         self._strokes.clear()
         self._text_boxes.clear()
         self._active_box = None
+        self._clear_text_selection()
         self._current_stroke = None
         self._laser_pos = None
         self._blink_timer.stop()
@@ -324,6 +375,42 @@ class AnnotationOverlay(QWidget):
         self._laser_pos = QPoint(pos) if pos is not None else None
         self.update()
 
+    # ── Stroke & Cloud Toggles ────────────────────────────────────────────
+
+    def toggle_text_stroke(self) -> bool:
+        """Toggle the 1-pixel black text outline on active box or default for new boxes."""
+        self._push_undo()
+        if self._active_box:
+            self._active_box.has_stroke = not self._active_box.has_stroke
+            res = self._active_box.has_stroke
+        else:
+            self._default_text_stroke = not self._default_text_stroke
+            res = self._default_text_stroke
+        self.update()
+        return res
+
+    def toggle_text_cloud(self) -> bool:
+        """Toggle the 40% white opacity background on active box or default for new boxes."""
+        self._push_undo()
+        if self._active_box:
+            self._active_box.has_cloud = not self._active_box.has_cloud
+            res = self._active_box.has_cloud
+        else:
+            self._default_text_cloud = not self._default_text_cloud
+            res = self._default_text_cloud
+        self.update()
+        return res
+
+    def is_active_box_stroke(self) -> bool:
+        if self._active_box:
+            return self._active_box.has_stroke
+        return self._default_text_stroke
+
+    def is_active_box_cloud(self) -> bool:
+        if self._active_box:
+            return self._active_box.has_cloud
+        return self._default_text_cloud
+
     # ── Undo / Redo ───────────────────────────────────────────────────────
 
     def _push_undo(self) -> None:
@@ -331,7 +418,7 @@ class AnnotationOverlay(QWidget):
             "page": self._current_page,
             "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
             "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id)
+                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
                 for b in self._text_boxes.get(self._current_page, [])
             ],
         }
@@ -347,7 +434,7 @@ class AnnotationOverlay(QWidget):
             "page": self._current_page,
             "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
             "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id)
+                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
                 for b in self._text_boxes.get(self._current_page, [])
             ],
         }
@@ -358,6 +445,7 @@ class AnnotationOverlay(QWidget):
         self._strokes[p] = prev["strokes"]
         self._text_boxes[p] = prev["text_boxes"]
         self._active_box = None
+        self._clear_text_selection()
         self._blink_timer.stop()
         self.update()
         return True
@@ -369,7 +457,7 @@ class AnnotationOverlay(QWidget):
             "page": self._current_page,
             "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
             "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id)
+                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
                 for b in self._text_boxes.get(self._current_page, [])
             ],
         }
@@ -380,11 +468,24 @@ class AnnotationOverlay(QWidget):
         self._strokes[p] = nxt["strokes"]
         self._text_boxes[p] = nxt["text_boxes"]
         self._active_box = None
+        self._clear_text_selection()
         self._blink_timer.stop()
         self.update()
         return True
 
     # ── Text Box Internals ────────────────────────────────────────────────
+
+    def _has_text_selection(self) -> bool:
+        return (self._sel_start != -1 and self._sel_end != -1 and self._sel_start != self._sel_end)
+
+    def _clear_text_selection(self) -> None:
+        self._sel_start = -1
+        self._sel_end = -1
+
+    def _get_selection_range(self) -> tuple[int, int]:
+        if not self._has_text_selection():
+            return (self._cursor_pos, self._cursor_pos)
+        return (min(self._sel_start, self._sel_end), max(self._sel_start, self._sel_end))
 
     def _toggle_cursor_blink(self) -> None:
         self._cursor_visible = not self._cursor_visible
@@ -461,13 +562,13 @@ class AnnotationOverlay(QWidget):
                     hit_stroke = True
                     break
 
-        # Also erase text boxes if clicked directly with eraser
         page_boxes = self._text_boxes.get(self._current_page, [])
         for i in range(len(page_boxes) - 1, -1, -1):
             if page_boxes[i].rect.contains(pos):
                 self._push_undo()
                 if self._active_box is page_boxes[i]:
                     self._active_box = None
+                    self._clear_text_selection()
                     self._blink_timer.stop()
                 page_boxes.pop(i)
                 hit_stroke = True
@@ -488,7 +589,7 @@ class AnnotationOverlay(QWidget):
         if parent is not None and hasattr(parent, "_show_hud"):
             parent._show_hud()
 
-        # Handle active text box interactions
+        # Check resize handles on active box
         if self._active_box is not None:
             handle = self._handle_at(self._active_box, pos_f)
             if handle != self.HANDLE_NONE:
@@ -498,7 +599,7 @@ class AnnotationOverlay(QWidget):
                 e.accept()
                 return
             if self._active_box.rect.contains(pos_f):
-                # Reposition cursor inside active text box
+                self._clear_text_selection()
                 self._cursor_pos = len(self._active_box.text)
                 self._moving_box = True
                 self._drag_start_pos = pos_f
@@ -514,6 +615,7 @@ class AnnotationOverlay(QWidget):
                 if self._active_box and not self._active_box.text.strip() and self._active_box is not hit_box:
                     self._remove_box(self._active_box)
                 self._active_box = hit_box
+                self._clear_text_selection()
                 self._cursor_pos = len(hit_box.text)
                 self._cursor_visible = True
                 self._blink_timer.start()
@@ -531,7 +633,6 @@ class AnnotationOverlay(QWidget):
             self._push_undo()
             w, h = 220.0, 56.0
             new_rect = QRectF(pos_f.x(), pos_f.y(), w, h)
-            # Ensure within window boundaries
             if new_rect.right() > self.width() - 10:
                 new_rect.moveLeft(max(10.0, self.width() - w - 10))
             if new_rect.bottom() > self.height() - 10:
@@ -543,9 +644,12 @@ class AnnotationOverlay(QWidget):
                 color=QColor(self._pen_color),
                 font_size=fit_font_size("", new_rect),
                 id=int(Qt.Key.Key_T) + len(self._text_boxes.get(self._current_page, [])),
+                has_stroke=self._default_text_stroke,
+                has_cloud=self._default_text_cloud,
             )
             self._text_boxes.setdefault(self._current_page, []).append(new_box)
             self._active_box = new_box
+            self._clear_text_selection()
             self._cursor_pos = 0
             self._cursor_visible = True
             self._blink_timer.start()
@@ -554,11 +658,12 @@ class AnnotationOverlay(QWidget):
             e.accept()
             return
 
-        # Deselect active text box if clicking elsewhere
+        # Deselect active box if clicking elsewhere
         if self._active_box is not None:
             if not self._active_box.text.strip():
                 self._remove_box(self._active_box)
             self._active_box = None
+            self._clear_text_selection()
             self._blink_timer.stop()
             self.update()
 
@@ -583,7 +688,7 @@ class AnnotationOverlay(QWidget):
         pos = e.position().toPoint()
         pos_f = QPointF(pos)
 
-        # Dynamic resizing of text box
+        # Resizing text box with dynamic font scaling
         if self._active_box and self._drag_handle != self.HANDLE_NONE:
             dx = pos_f.x() - self._drag_start_pos.x()
             dy = pos_f.y() - self._drag_start_pos.y()
@@ -604,7 +709,6 @@ class AnnotationOverlay(QWidget):
                 r.setTop(min(r.bottom() - min_h, r.top() + dy))
 
             self._active_box.rect = r
-            # Auto-scale font size dynamically with box resize
             self._active_box.font_size = fit_font_size(self._active_box.text, r)
             self.update()
             e.accept()
@@ -621,7 +725,7 @@ class AnnotationOverlay(QWidget):
             e.accept()
             return
 
-        # Update hover cursor over handles or text box
+        # Hover cursors for handles and boxes
         if self._active_box and self._tool in (ToolMode.TYPE, ToolMode.POINTER):
             handle = self._handle_at(self._active_box, pos_f)
             if handle in (self.HANDLE_TL, self.HANDLE_BR):
@@ -704,11 +808,24 @@ class AnnotationOverlay(QWidget):
 
         # Typing in active text box
         if self._active_box is not None:
+            # Ctrl+A Select All in text box
+            if (modifiers & Qt.KeyboardModifier.ControlModifier) and key == Qt.Key.Key_A:
+                self._sel_start = 0
+                self._sel_end = len(self._active_box.text)
+                self._cursor_pos = self._sel_end
+                self._cursor_visible = True
+                self.update()
+                e.accept()
+                return
+
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._push_undo()
                 t = self._active_box.text
-                self._active_box.text = t[:self._cursor_pos] + "\n" + t[self._cursor_pos:]
-                self._cursor_pos += 1
+                s_min, s_max = self._get_selection_range()
+                t = t[:s_min] + "\n" + t[s_max:]
+                self._active_box.text = t
+                self._cursor_pos = s_min + 1
+                self._clear_text_selection()
                 self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
                 self._cursor_visible = True
                 self.update()
@@ -716,37 +833,55 @@ class AnnotationOverlay(QWidget):
                 return
 
             if key == Qt.Key.Key_Backspace:
-                if self._cursor_pos > 0:
-                    self._push_undo()
-                    t = self._active_box.text
+                self._push_undo()
+                t = self._active_box.text
+                if self._has_text_selection():
+                    s_min, s_max = self._get_selection_range()
+                    self._active_box.text = t[:s_min] + t[s_max:]
+                    self._cursor_pos = s_min
+                    self._clear_text_selection()
+                elif self._cursor_pos > 0:
                     self._active_box.text = t[:self._cursor_pos - 1] + t[self._cursor_pos:]
                     self._cursor_pos -= 1
-                    self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
-                    self._cursor_visible = True
-                    self.update()
+                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                self._cursor_visible = True
+                self.update()
                 e.accept()
                 return
 
             if key == Qt.Key.Key_Delete:
+                self._push_undo()
                 t = self._active_box.text
-                if self._cursor_pos < len(t):
-                    self._push_undo()
+                if self._has_text_selection():
+                    s_min, s_max = self._get_selection_range()
+                    self._active_box.text = t[:s_min] + t[s_max:]
+                    self._cursor_pos = s_min
+                    self._clear_text_selection()
+                elif self._cursor_pos < len(t):
                     self._active_box.text = t[:self._cursor_pos] + t[self._cursor_pos + 1:]
-                    self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
-                    self._cursor_visible = True
-                    self.update()
+                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                self._cursor_visible = True
+                self.update()
                 e.accept()
                 return
 
             if key == Qt.Key.Key_Left:
-                self._cursor_pos = max(0, self._cursor_pos - 1)
+                if self._has_text_selection():
+                    self._cursor_pos = min(self._sel_start, self._sel_end)
+                    self._clear_text_selection()
+                else:
+                    self._cursor_pos = max(0, self._cursor_pos - 1)
                 self._cursor_visible = True
                 self.update()
                 e.accept()
                 return
 
             if key == Qt.Key.Key_Right:
-                self._cursor_pos = min(len(self._active_box.text), self._cursor_pos + 1)
+                if self._has_text_selection():
+                    self._cursor_pos = max(self._sel_start, self._sel_end)
+                    self._clear_text_selection()
+                else:
+                    self._cursor_pos = min(len(self._active_box.text), self._cursor_pos + 1)
                 self._cursor_visible = True
                 self.update()
                 e.accept()
@@ -754,6 +889,7 @@ class AnnotationOverlay(QWidget):
 
             if key == Qt.Key.Key_Home:
                 self._cursor_pos = 0
+                self._clear_text_selection()
                 self._cursor_visible = True
                 self.update()
                 e.accept()
@@ -761,6 +897,7 @@ class AnnotationOverlay(QWidget):
 
             if key == Qt.Key.Key_End:
                 self._cursor_pos = len(self._active_box.text)
+                self._clear_text_selection()
                 self._cursor_visible = True
                 self.update()
                 e.accept()
@@ -770,19 +907,32 @@ class AnnotationOverlay(QWidget):
                 if not self._active_box.text.strip():
                     self._remove_box(self._active_box)
                 self._active_box = None
+                self._clear_text_selection()
                 self._blink_timer.stop()
                 self.update()
                 e.accept()
                 return
 
-            # Clipboard paste
+            # Clipboard Copy
+            if (modifiers & Qt.KeyboardModifier.ControlModifier) and key == Qt.Key.Key_C:
+                if self._has_text_selection():
+                    s_min, s_max = self._get_selection_range()
+                    QApplication.clipboard().setText(self._active_box.text[s_min:s_max])
+                else:
+                    QApplication.clipboard().setText(self._active_box.text)
+                e.accept()
+                return
+
+            # Clipboard Paste
             if (modifiers & Qt.KeyboardModifier.ControlModifier) and key == Qt.Key.Key_V:
                 clip_text = QApplication.clipboard().text()
                 if clip_text:
                     self._push_undo()
                     t = self._active_box.text
-                    self._active_box.text = t[:self._cursor_pos] + clip_text + t[self._cursor_pos:]
-                    self._cursor_pos += len(clip_text)
+                    s_min, s_max = self._get_selection_range()
+                    self._active_box.text = t[:s_min] + clip_text + t[s_max:]
+                    self._cursor_pos = s_min + len(clip_text)
+                    self._clear_text_selection()
                     self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
                     self._cursor_visible = True
                     self.update()
@@ -794,8 +944,10 @@ class AnnotationOverlay(QWidget):
             if char and char.isprintable():
                 self._push_undo()
                 t = self._active_box.text
-                self._active_box.text = t[:self._cursor_pos] + char + t[self._cursor_pos:]
-                self._cursor_pos += len(char)
+                s_min, s_max = self._get_selection_range()
+                self._active_box.text = t[:s_min] + char + t[s_max:]
+                self._cursor_pos = s_min + len(char)
+                self._clear_text_selection()
                 self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
                 self._cursor_visible = True
                 self.update()
@@ -839,9 +991,27 @@ class AnnotationOverlay(QWidget):
             p.setFont(font)
             fm = QFontMetricsF(font)
 
+            # Cloud background: 40% white opacity
+            if box.has_cloud:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(255, 255, 255, 102))
+                p.drawRoundedRect(box.rect, 8.0, 8.0)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+
+            inner_rect = box.rect.adjusted(7, 5, -7, -5)
+
+            # 1-pixel black outline stroke if enabled
+            if box.has_stroke:
+                p.setPen(QPen(QColor("#000000")))
+                for dx, dy in _OUTLINE_OFFSETS:
+                    p.drawText(
+                        inner_rect.translated(dx, dy),
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                        box.text,
+                    )
+
             # Draw text
             p.setPen(QPen(box.color))
-            inner_rect = box.rect.adjusted(7, 5, -7, -5)
             p.drawText(
                 inner_rect,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
@@ -860,8 +1030,22 @@ class AnnotationOverlay(QWidget):
                     p.setBrush(QColor("#FFFFFF"))
                     p.drawRect(h_rect)
 
+                # Selection text highlight (Ctrl+A)
+                if self._has_text_selection():
+                    s_min, s_max = self._get_selection_range()
+                    selected_chars = box.text[s_min:s_max]
+                    before_sel = box.text[:s_min]
+                    lines = before_sel.split("\n")
+                    cur_line = lines[-1] if lines else ""
+                    line_idx = max(0, len(lines) - 1)
+                    sx = inner_rect.left() + fm.horizontalAdvance(cur_line)
+                    sy = inner_rect.top() + line_idx * fm.lineSpacing()
+                    sw = max(6.0, fm.horizontalAdvance(selected_chars.replace("\n", "")))
+                    sh = fm.height()
+                    p.fillRect(QRectF(sx, sy, sw, sh), QColor(20, 184, 166, 90))
+
                 # Blinking text cursor
-                if self._cursor_visible and self.hasFocus():
+                elif self._cursor_visible and self.hasFocus():
                     before_cursor = box.text[:self._cursor_pos]
                     lines = before_cursor.split("\n")
                     cur_line = lines[-1] if lines else ""

@@ -10,7 +10,9 @@ from app.constants import (
     _LC, _LO, _LP, _LQ,
 )
 from app.i18n import t
-from app.viewer.annotation_layer import ToolMode, _draw_edge_type_icon
+from app.viewer.annotation_layer import (
+    ToolMode, _draw_edge_type_icon, _draw_stroke_btn_icon, _draw_cloud_btn_icon,
+)
 
 
 def _rgba(hex_color: str, alpha: int) -> str:
@@ -58,6 +60,22 @@ def _tool_qta_icon(name: str, color: str) -> QIcon:
         p.end()
         return QIcon(pix)
 
+    if name == "stroke":
+        pix = QPixmap(_ICON_PX, _ICON_PX)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        _draw_stroke_btn_icon(p, _ICON_PX, QColor(color))
+        p.end()
+        return QIcon(pix)
+
+    if name == "cloud":
+        pix = QPixmap(_ICON_PX, _ICON_PX)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        _draw_cloud_btn_icon(p, _ICON_PX, QColor(color))
+        p.end()
+        return QIcon(pix)
+
     rotation = _ICON_ROTATION.get(name, 0.0)
     pix = qta.icon(name, color=color).pixmap(_ICON_PX, _ICON_PX)
     if rotation:
@@ -76,6 +94,8 @@ class AnnotationHUD(QFrame):
 
     tool_selected = Signal(int)
     color_selected = Signal(QColor)
+    stroke_toggled = Signal()
+    cloud_toggled = Signal()
     clear_requested = Signal()
 
     def __init__(self, parent: QWidget, dark_mode: bool):
@@ -83,6 +103,8 @@ class AnnotationHUD(QFrame):
         self._dark_mode = bool(dark_mode)
         self._active_tool = int(ToolMode.POINTER)
         self._active_color = QColor("#EF4444")
+        self._stroke_active = False
+        self._cloud_active = False
 
         self.setObjectName("present_hud")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -92,6 +114,7 @@ class AnnotationHUD(QFrame):
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(6)
 
+        # 1. Main tool buttons
         self._tool_btns: dict[int, QPushButton] = {}
         for mode, icon_name, tip_key in _TOOLS:
             b = QPushButton(self)
@@ -106,12 +129,44 @@ class AnnotationHUD(QFrame):
             self._tool_btns[int(mode)] = b
             lay.addWidget(b)
 
+        # Separator between tools and text appearance options
+        sep_text = QFrame(self)
+        sep_text.setObjectName("present_hud_sep")
+        sep_text.setFixedWidth(1)
+        lay.addWidget(sep_text)
+        self._sep_text = sep_text
+
+        # 2. Text Stroke (1px black outline) toggle button
+        self._stroke_btn = QPushButton(self)
+        self._stroke_btn.setCheckable(True)
+        self._stroke_btn.setFixedSize(_BTN_SIZE, _BTN_SIZE)
+        self._stroke_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self._stroke_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stroke_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._stroke_btn.setProperty("_icon_name", "stroke")
+        self._stroke_btn.setToolTip("Stroke — 1px black text outline")
+        self._stroke_btn.clicked.connect(self._on_stroke_clicked)
+        lay.addWidget(self._stroke_btn)
+
+        # 3. Text Cloud (40% white opacity background) toggle button
+        self._cloud_btn = QPushButton(self)
+        self._cloud_btn.setCheckable(True)
+        self._cloud_btn.setFixedSize(_BTN_SIZE, _BTN_SIZE)
+        self._cloud_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
+        self._cloud_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cloud_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._cloud_btn.setProperty("_icon_name", "cloud")
+        self._cloud_btn.setToolTip("Cloud — 40% white background")
+        self._cloud_btn.clicked.connect(self._on_cloud_clicked)
+        lay.addWidget(self._cloud_btn)
+
         sep = QFrame(self)
         sep.setObjectName("present_hud_sep")
         sep.setFixedWidth(1)
         lay.addWidget(sep)
         self._sep = sep
 
+        # 4. Clear annotations button
         self._clear_btn = QPushButton(self)
         self._clear_btn.setFixedSize(_BTN_SIZE, _BTN_SIZE)
         self._clear_btn.setIconSize(QSize(_ICON_PX, _ICON_PX))
@@ -128,6 +183,7 @@ class AnnotationHUD(QFrame):
         lay.addWidget(sep2)
         self._sep2 = sep2
 
+        # 5. Color swatches
         self._swatches: list[QPushButton] = []
         for hex_color, _label in _COLORS:
             s = QPushButton(self)
@@ -147,7 +203,7 @@ class AnnotationHUD(QFrame):
         self._refresh_active()
         self._refresh_tooltips()
 
-    # ── public API ────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────
 
     def set_active_tool(self, mode: int) -> None:
         self._active_tool = int(mode)
@@ -158,6 +214,14 @@ class AnnotationHUD(QFrame):
             self._active_color = QColor(color)
         else:
             self._active_color = QColor(color)
+        self._refresh_active()
+
+    def set_stroke_active(self, active: bool) -> None:
+        self._stroke_active = bool(active)
+        self._refresh_active()
+
+    def set_cloud_active(self, active: bool) -> None:
+        self._cloud_active = bool(active)
         self._refresh_active()
 
     def update_theme(self, dark: bool) -> None:
@@ -176,7 +240,7 @@ class AnnotationHUD(QFrame):
         y = parent.height() - self.height() - 28
         self.setGeometry(x, y, w, self.height())
 
-    # ── styling / icon refresh ────────────────────────────────────────────
+    # ── Styling / Icon Refresh ────────────────────────────────────────────
 
     def _theme_colors(self) -> tuple[str, str, str, str]:
         if self._dark_mode:
@@ -213,11 +277,11 @@ class AnnotationHUD(QFrame):
             f"  background: {hover_bg};"
             f"}}"
         )
-        for b in list(self._tool_btns.values()) + [self._clear_btn]:
+        for b in list(self._tool_btns.values()) + [self._stroke_btn, self._cloud_btn, self._clear_btn]:
             b.setStyleSheet(btn_qss)
 
         sep_color = border
-        for s in (self._sep, self._sep2):
+        for s in (self._sep_text, self._sep, self._sep2):
             s.setStyleSheet(
                 f"#present_hud_sep {{"
                 f"  border: none;"
@@ -229,7 +293,7 @@ class AnnotationHUD(QFrame):
 
     def _refresh_icons(self) -> None:
         _bg, _border, fg, _sec = self._theme_colors()
-        for b in list(self._tool_btns.values()) + [self._clear_btn]:
+        for b in list(self._tool_btns.values()) + [self._stroke_btn, self._cloud_btn, self._clear_btn]:
             name = b.property("_icon_name")
             if name:
                 b.setIcon(_tool_qta_icon(name, color=fg))
@@ -265,6 +329,7 @@ class AnnotationHUD(QFrame):
         active_fill = _rgba(ACCENT, 40)
         active_hover = _rgba(ACCENT, 70)
         inactive_hover = _rgba(sec, 40)
+
         active_qss = (
             f"QPushButton {{"
             f"  background: {active_fill};"
@@ -287,6 +352,7 @@ class AnnotationHUD(QFrame):
             f"  background: {inactive_hover};"
             f"}}"
         )
+
         for mode, b in self._tool_btns.items():
             is_active = (mode == self._active_tool)
             b.setChecked(is_active)
@@ -295,6 +361,17 @@ class AnnotationHUD(QFrame):
             if name:
                 col = ACCENT if is_active else fg
                 b.setIcon(_tool_qta_icon(name, color=col))
+
+        # Stroke button styling
+        self._stroke_btn.setChecked(self._stroke_active)
+        self._stroke_btn.setStyleSheet(active_qss if self._stroke_active else inactive_qss)
+        self._stroke_btn.setIcon(_tool_qta_icon("stroke", color=ACCENT if self._stroke_active else fg))
+
+        # Cloud button styling
+        self._cloud_btn.setChecked(self._cloud_active)
+        self._cloud_btn.setStyleSheet(active_qss if self._cloud_active else inactive_qss)
+        self._cloud_btn.setIcon(_tool_qta_icon("cloud", color=ACCENT if self._cloud_active else fg))
+
         self._clear_btn.setStyleSheet(inactive_qss)
         name = self._clear_btn.property("_icon_name")
         if name:
@@ -306,10 +383,16 @@ class AnnotationHUD(QFrame):
             active = hex_color.lower() == active_hex
             self._style_swatch(s, hex_color, active=active)
 
-    # ── signal proxies ────────────────────────────────────────────────────
+    # ── Signal Proxies ────────────────────────────────────────────────────
 
     def _on_tool_clicked(self, mode: int) -> None:
         self.tool_selected.emit(int(mode))
 
     def _on_color_clicked(self, color: QColor) -> None:
         self.color_selected.emit(QColor(color))
+
+    def _on_stroke_clicked(self) -> None:
+        self.stroke_toggled.emit()
+
+    def _on_cloud_clicked(self) -> None:
+        self.cloud_toggled.emit()

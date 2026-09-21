@@ -65,6 +65,8 @@ class PresentationWidget(QWidget):
         self._hud = AnnotationHUD(self, self._dark_mode)
         self._hud.tool_selected.connect(self._on_tool_selected)
         self._hud.color_selected.connect(self._on_color_selected)
+        self._hud.stroke_toggled.connect(self._on_stroke_toggled)
+        self._hud.cloud_toggled.connect(self._on_cloud_toggled)
         self._hud.clear_requested.connect(self._on_clear_requested)
         self._hud.set_active_tool(int(ToolMode.POINTER))
         self._hud.set_active_color(self._overlay.pen_color())
@@ -135,9 +137,15 @@ class PresentationWidget(QWidget):
         self._counter.raise_()
         self._hide_timer.start(3000)
 
+    def _sync_hud_text_options(self):
+        if isValid(self._hud) and isValid(self._overlay):
+            self._hud.set_stroke_active(self._overlay.is_active_box_stroke())
+            self._hud.set_cloud_active(self._overlay.is_active_box_cloud())
+
     def _show_hud(self):
         if not isValid(self._hud):
             return
+        self._sync_hud_text_options()
         if not self._hud.isVisible():
             self._hud.reposition()
             self._hud.show()
@@ -166,8 +174,19 @@ class PresentationWidget(QWidget):
         self._hud.set_active_color(color)
         self._show_hud()
 
+    def _on_stroke_toggled(self):
+        new_state = self._overlay.toggle_text_stroke()
+        self._hud.set_stroke_active(new_state)
+        self._show_hud()
+
+    def _on_cloud_toggled(self):
+        new_state = self._overlay.toggle_text_cloud()
+        self._hud.set_cloud_active(new_state)
+        self._show_hud()
+
     def _on_clear_requested(self):
         self._overlay.clear_current_page()
+        self._sync_hud_text_options()
         self.update()
         self._show_hud()
 
@@ -187,9 +206,10 @@ class PresentationWidget(QWidget):
         key = e.key()
         modifiers = e.modifiers()
 
-        # If a text box is currently being edited, forward keyboard events to it
+        # If an active text box exists, forward keystrokes (typing, Backspace, Ctrl+A, etc.)
         if self._overlay._active_box is not None:
             self._overlay.keyPressEvent(e)
+            self._sync_hud_text_options()
             if e.isAccepted():
                 return
 
@@ -200,14 +220,16 @@ class PresentationWidget(QWidget):
                     self._overlay.redo()
                 else:
                     self._overlay.undo()
+                self._sync_hud_text_options()
                 e.accept()
                 return
             if key == Qt.Key.Key_Y:
                 self._overlay.redo()
+                self._sync_hud_text_options()
                 e.accept()
                 return
 
-        # Skip annotation tool hotkeys when modifiers like Ctrl/Alt/Meta are held
+        # Skip tool hotkeys when Control/Alt/Meta modifiers are held
         if modifiers & (Qt.KeyboardModifier.ControlModifier
                         | Qt.KeyboardModifier.AltModifier
                         | Qt.KeyboardModifier.MetaModifier):
