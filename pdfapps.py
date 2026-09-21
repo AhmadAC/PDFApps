@@ -1,10 +1,19 @@
 """PDFApps – entry point."""
 # pdfapps.py
 import argparse
+import ctypes
 import logging
-import sys
 import os
+import sys
+from pathlib import Path
 
+# Ensure the project directory is always the first lookup path in sys.path,
+# preventing ModuleNotFoundError when Windows launches the script from another folder.
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 try:
@@ -108,6 +117,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main():
+    # Fix Windows Taskbar grouping: Assign a unique AppUserModelID so Windows
+    # displays PDFApps's custom icon rather than grouping it under pythonw.exe.
+    if sys.platform == "win32":
+        try:
+            myappid = "pdfapps.desktop.editor.release"
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+
     setup_logging()
     print("[PDFApps] Initializing application...")
     # Install the global excepthook AFTER setup_logging (so the rotating
@@ -136,6 +154,15 @@ def main():
             sys.exit(0)
 
     app = QApplication(sys.argv)
+
+    # Set application & taskbar icon
+    ico_path = PROJECT_ROOT / "icon.ico"
+    png_path = PROJECT_ROOT / "icon_512.png"
+    icon_file = ico_path if ico_path.is_file() else (png_path if png_path.is_file() else None)
+    if icon_file:
+        app_icon = QIcon(str(icon_file))
+        app.setWindowIcon(app_icon)
+
     app.setApplicationName(" ")
     app.setApplicationDisplayName(" ")
     app.setStyle("Fusion")
@@ -144,6 +171,8 @@ def main():
     app.setStyleSheet(STYLE if dark else STYLE_LIGHT)
 
     window = MainWindow()
+    if icon_file:
+        window.setWindowIcon(QIcon(str(icon_file)))
     window.show()
 
     # Open PDFs passed as arguments (e.g.: double-click on a .pdf file

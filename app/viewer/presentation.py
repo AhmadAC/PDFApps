@@ -4,7 +4,7 @@ import contextlib
 import logging
 import time
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPoint
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from shiboken6 import isValid
@@ -29,8 +29,8 @@ _PALETTE_HOTKEYS = {
 
 
 class PresentationWidget(QWidget):
-    """Fullscreen single-page PDF viewer with keyboard navigation and a
-    PowerPoint/Edge-style annotation HUD (pen / highlighter / eraser / type / laser).
+    """Fullscreen single-page PDF viewer with keyboard navigation, zoom controls,
+    and a PowerPoint/Edge-style annotation HUD (pen / highlighter / eraser / type / laser).
     Annotations are session-scoped — kept per page while the window lives,
     discarded on close."""
 
@@ -45,6 +45,14 @@ class PresentationWidget(QWidget):
         self._ready = False
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
+
+        # Zoom and Pan state
+        self._zoom_factor = 1.0
+        self._pan_x = 0
+        self._pan_y = 0
+        self._is_panning = False
+        self._pan_start_pos = QPoint()
+        self._pan_start_offset = QPoint()
 
         import fitz
         self._doc = fitz.open(self._path)
@@ -100,6 +108,35 @@ class PresentationWidget(QWidget):
         if isValid(self._hud):
             self._hud.update_theme(self._dark_mode)
 
+    # ── Zoom & Pan Controls ───────────────────────────────────────────────
+
+    def _zoom_in(self):
+        self._zoom_factor = min(5.0, round(self._zoom_factor * 1.25, 3))
+        self._render()
+
+    def _zoom_out(self):
+        self._zoom_factor = max(0.4, round(self._zoom_factor / 1.25, 3))
+        if self._zoom_factor <= 1.0:
+            self._pan_x = 0
+            self._pan_y = 0
+        self._render()
+
+    def _zoom_reset(self):
+        self._zoom_factor = 1.0
+        self._pan_x = 0
+        self._pan_y = 0
+        self._render()
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if e.angleDelta().y() > 0:
+                self._zoom_in()
+            else:
+                self._zoom_out()
+            e.accept()
+            return
+        super().wheelEvent(e)
+
     def _render(self):
         import fitz
         try:
@@ -111,7 +148,8 @@ class PresentationWidget(QWidget):
             geom = screen.geometry()
             dpr = screen.devicePixelRatio() or 1.0
             sw, sh = geom.width(), geom.height()
-            zoom = min(sw / page.rect.width, sh / page.rect.height)
+            base_zoom = min(sw / page.rect.width, sh / page.rect.height)
+            zoom = base_zoom * self._zoom_factor
             rz = zoom * dpr
             pix = page.get_pixmap(matrix=fitz.Matrix(rz, rz))
             qp = QPixmap()
@@ -129,7 +167,8 @@ class PresentationWidget(QWidget):
         self.update()
 
     def _update_counter(self):
-        self._counter.setText(f"{self._current + 1} / {self._total}")
+        zoom_str = f"  ·  {int(round(self._zoom_factor * 100))}%" if self._zoom_factor != 1.0 else ""
+        self._counter.setText(f"{self._current + 1} / {self._total}{zoom_str}")
         self._counter.adjustSize()
         lw = self._counter.width()
         self._counter.move(self.width() // 2 - lw // 2, self.height() - 50)
@@ -197,8 +236,8 @@ class PresentationWidget(QWidget):
             dpr = self._pixmap.devicePixelRatio() or 1.0
             pw = self._pixmap.width() / dpr
             ph = self._pixmap.height() / dpr
-            x = (self.width() - pw) / 2
-            y = (self.height() - ph) / 2
+            x = (self.width() - pw) / 2 + self._pan_x
+            y = (self.height() - ph) / 2 + self._pan_y
             p.drawPixmap(int(x), int(y), self._pixmap)
         p.end()
 
@@ -206,7 +245,22 @@ class PresentationWidget(QWidget):
         key = e.key()
         modifiers = e.modifiers()
 
-        # If an active text box exists, forward keystrokes (typing, Backspace, Ctrl+A, etc.)
+        # Zoom shortcuts with Ctrl (+, -, 0)
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self._zoom_in()
+                e.accept()
+                return
+            if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                self._zoom_out()
+                e.accept()
+                return
+            if key == Qt.Key.Key_0:
+                self._zoom_reset()
+                e.accept()
+                return
+
+        # If an active text box exists, forward editing keystrokes to it
         if self._overlay._active_box is not None:
             self._overlay.keyPressEvent(e)
             self._sync_hud_text_options()
@@ -269,24 +323,64 @@ class PresentationWidget(QWidget):
                      Qt.Key.Key_Space, Qt.Key.Key_PageDown):
             if self._current < self._total - 1:
                 self._current += 1
+                self._pan_x = 0
+                self._pan_y = 0
                 self._render()
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up,
                      Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
             if self._current > 0:
                 self._current -= 1
+                self._pan_x = 0
+                self._pan_y = 0
                 self._render()
         elif key == Qt.Key.Key_Home:
             self._current = 0
+            self._pan_x = 0
+            self._pan_y = 0
             self._render()
         elif key == Qt.Key.Key_End:
             self._current = self._total - 1
+            self._pan_x = 0
+            self._pan_y = 0
             self._render()
+
+    def mousePressEvent(self, e):
+        # Pan with MiddleButton or with LeftButton when in Pointer mode and zoomed in
+        if (e.button() == Qt.MouseButton.MiddleButton or
+                (e.button() == Qt.MouseButton.LeftButton and
+                 self._overlay.tool() == int(ToolMode.POINTER) and self._zoom_factor > 1.0)):
+            self._is_panning = True
+            self._pan_start_pos = e.position().toPoint()
+            self._pan_start_offset = QPoint(self._pan_x, self._pan_y)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            e.accept()
+            return
+        super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
         self._show_hud()
+        if self._is_panning:
+            delta = e.position().toPoint() - self._pan_start_pos
+            self._pan_x = self._pan_start_offset.x() + delta.x()
+            self._pan_y = self._pan_start_offset.y() + delta.y()
+            self.update()
+            e.accept()
+            return
+
         if self._overlay.tool() == int(ToolMode.LASER):
             self._overlay.set_laser_pos(e.position().toPoint())
         super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._is_panning:
+            self._is_panning = False
+            if self._overlay.tool() in (int(ToolMode.POINTER), int(ToolMode.TYPE)):
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self.setCursor(Qt.CursorShape.BlankCursor)
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
 
     def resizeEvent(self, _):
         if not self._ready:
