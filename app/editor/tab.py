@@ -1,11 +1,11 @@
 """PDFApps – TabEditar: visual PDF editor tool tab."""
-
+# app/editor/tab.py
 import contextlib
 import logging
 import os
 import tempfile
 
-from PySide6.QtCore import Qt, QEvent, QSize
+from PySide6.QtCore import Qt, QEvent, QSize, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QStackedWidget, QGroupBox,
@@ -376,6 +376,7 @@ class TabEditar(QWidget):
         ctrl_scroll.setFixedWidth(400)
         ctrl_scroll.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         body_h.addWidget(ctrl_scroll)
+        self._ctrl_scroll = ctrl_scroll
         root.addWidget(body, 1)
 
         self._action_bar, _ = ActionBar(t("btn.apply_save"), self._run)
@@ -389,11 +390,18 @@ class TabEditar(QWidget):
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()
 
+    def toggle_controls(self) -> bool:
+        """Toggle the right-hand controls sidebar within the editor."""
+        is_vis = self._ctrl_scroll.isVisible()
+        self._ctrl_scroll.setVisible(not is_vis)
+        if hasattr(self, "_canvas") and self._canvas._doc and self._canvas._zoom_factor == 1.0:
+            QTimer.singleShot(50, self._canvas._layout_and_schedule)
+        return not is_vis
+
     def paintEvent(self, event):
         _paint_bg(self)
 
     def eventFilter(self, obj, event):
-        from PySide6.QtCore import QTimer
         if obj is self._canvas_scroll.viewport() and event.type() == QEvent.Type.Resize:
             if self._canvas._doc and self._canvas._zoom_factor == 1.0:
                 QTimer.singleShot(0, self._canvas._layout_and_schedule)
@@ -581,8 +589,6 @@ class TabEditar(QWidget):
         n = self._canvas.page_count()
         self._lbl_info.setText(t("edit.status.pages", n=n))
         self._update_nav()
-        from PySide6.QtCore import QTimer
-        from shiboken6 import isValid
         QTimer.singleShot(100, self._load_existing_annotations)
         QTimer.singleShot(
             200,

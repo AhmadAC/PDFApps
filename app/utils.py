@@ -1,5 +1,6 @@
 """PDFApps – utility functions and reusable UI factory helpers."""
 
+# app/utils.py
 import contextlib
 import logging
 import logging.handlers
@@ -670,7 +671,7 @@ def _log_path() -> str:
 
 
 def setup_logging() -> None:
-    """Configure a rotating file logger and a console logger (stderr).
+    """Configure a rotating file logger and a console logger (stderr/stdout).
     Idempotent — safe to call multiple times."""
     global _logging_initialised
     if _logging_initialised:
@@ -681,10 +682,12 @@ def setup_logging() -> None:
             "%(asctime)s %(levelname)s [%(name)s] %(message)s"
         )
         root = logging.getLogger()
-        root.setLevel(logging.INFO)
+        level = logging.DEBUG if os.environ.get("PDFAPPS_DEBUG") or os.environ.get("DEBUG") else logging.INFO
+        root.setLevel(level)
 
-        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
+        console_handler.setLevel(level)
         root.addHandler(console_handler)
 
         log_path = _log_path()
@@ -693,6 +696,7 @@ def setup_logging() -> None:
             log_path, maxBytes=1_000_000, backupCount=2, encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
         root.addHandler(file_handler)
     except Exception:
         pass

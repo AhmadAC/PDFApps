@@ -1,4 +1,5 @@
 """PDFApps – reusable widgets: drop-zone, color picker, focus-protected inputs."""
+# app/widgets.py
 
 import os
 
@@ -122,16 +123,24 @@ class DropFileEdit(QWidget):
         return self._path_value
 
     def set_path(self, p: str):
+        if p:
+            p = os.path.abspath(os.path.normpath(p))
         self._path_value = p
-        name = os.path.basename(p)
-        self._lbl.setText(f"  {name}")
+        name = os.path.basename(p) if p else ""
+        self._lbl.setText(f"  {name}" if name else self._placeholder)
         self.path_changed.emit(p)
         self._lbl.setToolTip(p)
-        self._lbl.setProperty("has_file", "true")
-        self._ico.setIcon(qta.icon('fa5s.file-pdf', color=ACCENT))
-        self._ico.setProperty("has_file", "true")
-        self._clr.setIcon(qta.icon('fa5s.times', color=error_color()))
-        self._clr.setVisible(True)
+        self._lbl.setProperty("has_file", "true" if p else "false")
+        if p:
+            self._ico.setIcon(qta.icon('fa5s.file-pdf', color=ACCENT))
+            self._ico.setProperty("has_file", "true")
+            self._clr.setIcon(qta.icon('fa5s.times', color=error_color()))
+            self._clr.setVisible(True)
+        else:
+            muted = _muted_icon_color()
+            self._ico.setIcon(qta.icon('fa5s.cloud-upload-alt', color=muted))
+            self._ico.setProperty("has_file", "false")
+            self._clr.setVisible(False)
         for w in (self._lbl, self._ico):
             w.style().unpolish(w); w.style().polish(w)
 
@@ -205,7 +214,8 @@ class DropFileEdit(QWidget):
                 self, t("msg.info"),
                 t("widgets.drop_first_only", count=len(accepted)),
             )
-        self.set_path(accepted[0].toLocalFile())
+        abs_path = os.path.abspath(accepted[0].toLocalFile())
+        self.set_path(abs_path)
 
     def _browse(self):
         if self._save:
@@ -213,7 +223,7 @@ class DropFileEdit(QWidget):
         else:
             p, _ = QFileDialog.getOpenFileName(self, t("widget.open_file"), DESKTOP, self._filters)
         if p:
-            self.set_path(p)
+            self.set_path(os.path.abspath(p))
 
 
 class MultiDropWidget(QWidget):
@@ -253,7 +263,7 @@ class MultiDropWidget(QWidget):
     def dropEvent(self, e: QDropEvent):
         self.setProperty("drag_active", "false")
         self.style().unpolish(self); self.style().polish(self)
-        paths = [u.toLocalFile() for u in e.mimeData().urls()
+        paths = [os.path.abspath(u.toLocalFile()) for u in e.mimeData().urls()
                  if u.toLocalFile().lower().endswith(".pdf")]
         if paths:
             self._cb(paths)

@@ -1,4 +1,5 @@
 """PDFApps – entry point."""
+# pdfapps.py
 import argparse
 import logging
 import sys
@@ -108,6 +109,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main():
     setup_logging()
+    print("[PDFApps] Initializing application...")
     # Install the global excepthook AFTER setup_logging (so the rotating
     # file handler is in place) and BEFORE QApplication so any crash in
     # window construction is already covered.
@@ -123,17 +125,6 @@ def main():
     # less RAM than a second full process. Must happen BEFORE
     # QApplication() so we never pay the splash/startup cost in the
     # second invocation.
-    #
-    # QLocalSocket.waitForConnected/waitForBytesWritten work standalone
-    # without any QApplication/QCoreApplication instance — so we do NOT
-    # construct a probe app here. A previous version did, then tried to
-    # ``del _probe_app`` before constructing the main app, but ``del``
-    # only drops the Python reference; the Qt singleton survives and
-    # the subsequent QApplication construction raised
-    # ``RuntimeError: Please destroy the QCoreApplication singleton
-    # before creating a new QApplication instance.`` That crashed the
-    # cold-start "open PDF from Explorer" path (the most common second
-    # invocation scenario when PDFApps was not already running).
     pdf_files = [
         os.path.abspath(f) for f in (args.files or [])
         if os.path.isfile(f) and f.lower().endswith(".pdf")
@@ -160,8 +151,9 @@ def main():
     # opens through _load_and_track so it lands in a new tab and is
     # appended to the recents list, matching drag-and-drop semantics.
     for pdf_arg in args.files:
-        if os.path.isfile(pdf_arg) and pdf_arg.lower().endswith(".pdf"):
-            window._load_and_track(pdf_arg)
+        abs_arg = os.path.abspath(pdf_arg)
+        if os.path.isfile(abs_arg) and abs_arg.lower().endswith(".pdf"):
+            window._load_and_track(abs_arg)
 
     sys.exit(app.exec())
 

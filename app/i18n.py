@@ -1,5 +1,5 @@
 """PDFApps – Internationalization (i18n) module."""
-
+# app/i18n.py
 import contextlib
 import json
 import locale
@@ -283,11 +283,10 @@ def get_recent_files() -> list[str]:
     # R11 M3: use lexists instead of isfile so OneDrive Files-On-Demand
     # placeholders aren't force-downloaded on every startup. isfile
     # triggers a sync that can freeze the UI for seconds the first time
-    # the app starts on a OneDrive folder. Note: UNC paths to offline
-    # SMB shares may still cause a network round-trip but won't trigger
-    # placeholder hydration like isfile would.
+    # the app starts on a OneDrive folder. Exclude directories so folder
+    # drops never masquerade as PDF documents.
     valid = [p for p in recents
-             if isinstance(p, str) and os.path.lexists(p)]
+             if isinstance(p, str) and os.path.lexists(p) and not os.path.isdir(p)]
     # R11 M3: writeback when entries were dropped so the next call has
     # less to re-check on disk. Routed through _update_config to keep
     # serialization with concurrent writers (add_recent_file etc.).
@@ -300,7 +299,11 @@ def get_recent_files() -> list[str]:
 
 
 def add_recent_file(path: str):
-    path = os.path.normpath(path)
+    if not path or not isinstance(path, str):
+        return
+    path = os.path.abspath(os.path.normpath(path))
+    if os.path.isdir(path):
+        return
 
     def _mutate(cfg: dict) -> None:
         recents = cfg.get("recent_files", [])

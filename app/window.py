@@ -1,3 +1,4 @@
+
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
@@ -372,16 +373,24 @@ class MainWindow(QMainWindow):
     def _toggle_right_pane(self):
         if self._current_tool < 0:
             return
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if hasattr(edit_w, "toggle_controls"):
+                edit_w.toggle_controls()
+            elif hasattr(edit_w, "_ctrl_scroll"):
+                is_vis = edit_w._ctrl_scroll.isVisible()
+                edit_w._ctrl_scroll.setVisible(not is_vis)
+            return
+
         is_visible = self._right_tool_container.isVisible()
         if is_visible:
-            # Collapse completely: 0px width, zero wasted space
             self._saved_right_width = max(320, self._right_tool_container.width())
             self._right_tool_container.setVisible(False)
             self.stack.setVisible(False)
             total = self._splitter.width()
             self._splitter.setSizes([total, 0])
         else:
-            # Expand back to previous tool width
             self._right_tool_container.setVisible(True)
             self.stack.setVisible(True)
             tool_w = min(600, max(320, getattr(self, "_saved_right_width", 400)))
@@ -436,8 +445,6 @@ class MainWindow(QMainWindow):
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         v = PdfViewerPanel()
-        if hasattr(v, "_pages_header"):
-            v._pages_header.setVisible(False)
         self._viewers.append(v)
         self._viewer_stack.addWidget(v)
         idx = self._tab_bar.addTab(t("viewer.title"))
@@ -652,6 +659,7 @@ class MainWindow(QMainWindow):
             self.stack.setVisible(False)
             self._right_tool_container.setVisible(False)
             self._right_pane_toggle_btn.setVisible(False)
+            self._pages_toggle_btn.setVisible(True)
             self._tab_container.setVisible(True)
             self._breadcrumb.setText(t("workspace.title"))
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
@@ -675,8 +683,11 @@ class MainWindow(QMainWindow):
                 self._right_tool_container.setMinimumWidth(0)
                 self._right_tool_container.setMaximumWidth(16777215)
                 self._tab_container.setVisible(False)
+                self._pages_toggle_btn.setVisible(False)
                 self._setup_zoom_bar(True)
                 edit_w = self.stack.widget(edit_idx)
+                if hasattr(edit_w, "_ctrl_scroll"):
+                    edit_w._ctrl_scroll.setVisible(True)
                 self._undo_top_btn.setVisible(True)
                 self._redo_top_btn.setVisible(True)
                 prev = getattr(self, "_undo_redo_handlers", None)
@@ -693,6 +704,7 @@ class MainWindow(QMainWindow):
                 self._viewer.set_crop_preview(None)
                 self._viewer.set_page_crops({})
             else:
+                self._pages_toggle_btn.setVisible(True)
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
                 self._right_tool_container.setMinimumWidth(320)
@@ -979,7 +991,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Release any open document locks in viewers before overwriting file on Windows
         for v in self._viewers:
             if v.current_path() and os.path.abspath(v.current_path()) == os.path.abspath(path):
                 v._canvas.close_doc()
