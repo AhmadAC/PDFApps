@@ -52,6 +52,7 @@ _POINT_MERGE_SQ = 4
 _CURSOR_ICON_PX = 24
 _OUTLINE_PAD = 2
 _HANDLE_SIZE = 8.0
+_DEFAULT_FONT_SIZE = 24.0
 
 _OUTLINE_OFFSETS = (
     (-1, 0), (1, 0), (0, -1), (0, 1),
@@ -60,7 +61,7 @@ _OUTLINE_OFFSETS = (
 
 
 def fit_font_size(text: str, rect: QRectF, min_size: float = 8.0, max_size: float = 220.0) -> float:
-    """Calculate the optimal font size so that the text fits snugly within the bounding rect."""
+    """Calculate the font size so text fits within a manually resized bounding box."""
     if rect.width() < 16 or rect.height() < 16:
         return min_size
     lines = text.split("\n") if text else [" "]
@@ -91,6 +92,37 @@ def fit_font_size(text: str, rect: QRectF, min_size: float = 8.0, max_size: floa
             high = mid - 0.5
 
     return max(min_size, round(best, 1))
+
+
+def auto_fit_box_to_text(box: TextBox, overlay_width: float, overlay_height: float,
+                         pad_x: float = 16.0, pad_y: float = 12.0) -> None:
+    """Dynamically expand or shrink the text box to fit typed text at its current font size."""
+    font = QFont("Segoe UI", int(box.font_size))
+    font.setPointSizeF(box.font_size)
+    fm = QFontMetricsF(font)
+
+    lines = box.text.split("\n") if box.text else [""]
+    max_line_w = max((fm.horizontalAdvance(line) for line in lines), default=0.0)
+    cursor_reserve = max(12.0, fm.averageCharWidth() * 1.5)
+
+    needed_w = max(52.0, max_line_w + pad_x + cursor_reserve)
+    line_h = fm.lineSpacing()
+    needed_h = max(34.0, line_h * max(1, len(lines)) + pad_y)
+
+    x0 = box.rect.left()
+    y0 = box.rect.top()
+
+    # Shift left if the expanded box reaches past the right boundary of the window
+    if x0 + needed_w > overlay_width - 10.0:
+        x0 = max(10.0, overlay_width - 10.0 - needed_w)
+
+    max_avail_w = max(52.0, overlay_width - 16.0)
+    needed_w = min(needed_w, max_avail_w)
+
+    max_avail_h = max(34.0, overlay_height - 10.0 - y0)
+    needed_h = min(needed_h, max_avail_h)
+
+    box.rect = QRectF(x0, y0, needed_w, needed_h)
 
 
 def _draw_edge_type_icon(painter: QPainter, size: int, color: QColor) -> None:
@@ -129,7 +161,6 @@ def _draw_stroke_btn_icon(painter: QPainter, size: int, color: QColor) -> None:
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
 
-    # Outer outline of 'T'
     w_bar = size * 0.68
     h_bar = size * 0.18
     left = (size - w_bar) / 2.0
@@ -152,7 +183,6 @@ def _draw_cloud_btn_icon(painter: QPainter, size: int, color: QColor) -> None:
     painter.setBrush(Qt.BrushStyle.NoBrush)
 
     path = QPainterPath()
-    # Cloud base and rounded puffs
     bx = size * 0.20
     by = size * 0.68
     bw = size * 0.60
@@ -626,23 +656,30 @@ class AnnotationOverlay(QWidget):
                 e.accept()
                 return
 
-        # Clicking on empty space in TYPE mode -> create new box
+        # Clicking on empty space in TYPE mode -> create snug text box that expands as you type
         if self._tool == ToolMode.TYPE:
             if self._active_box and not self._active_box.text.strip():
                 self._remove_box(self._active_box)
             self._push_undo()
-            w, h = 220.0, 56.0
-            new_rect = QRectF(pos_f.x(), pos_f.y(), w, h)
-            if new_rect.right() > self.width() - 10:
-                new_rect.moveLeft(max(10.0, self.width() - w - 10))
-            if new_rect.bottom() > self.height() - 10:
-                new_rect.moveTop(max(10.0, self.height() - h - 10))
+
+            font = QFont("Segoe UI", int(_DEFAULT_FONT_SIZE))
+            font.setPointSizeF(_DEFAULT_FONT_SIZE)
+            fm = QFontMetricsF(font)
+            init_w = max(52.0, fm.averageCharWidth() * 3 + 16.0)
+            init_h = max(34.0, fm.lineSpacing() + 12.0)
+
+            x_init = pos_f.x()
+            y_init = pos_f.y()
+            if x_init + init_w > self.width() - 10:
+                x_init = max(10.0, self.width() - init_w - 10)
+            if y_init + init_h > self.height() - 10:
+                y_init = max(10.0, self.height() - init_h - 10)
 
             new_box = TextBox(
-                rect=new_rect,
+                rect=QRectF(x_init, y_init, init_w, init_h),
                 text="",
                 color=QColor(self._pen_color),
-                font_size=fit_font_size("", new_rect),
+                font_size=_DEFAULT_FONT_SIZE,
                 id=int(Qt.Key.Key_T) + len(self._text_boxes.get(self._current_page, [])),
                 has_stroke=self._default_text_stroke,
                 has_cloud=self._default_text_cloud,
@@ -806,7 +843,7 @@ class AnnotationOverlay(QWidget):
                 e.accept()
                 return
 
-        # Typing in active text box
+        # Typing in active text box with dynamic auto-expansion
         if self._active_box is not None:
             # Ctrl+A Select All in text box
             if (modifiers & Qt.KeyboardModifier.ControlModifier) and key == Qt.Key.Key_A:
@@ -818,15 +855,16 @@ class AnnotationOverlay(QWidget):
                 e.accept()
                 return
 
+            # Pressing Enter adds newline and expands text box downward
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._push_undo()
-                t = self._active_box.text
+                t_str = self._active_box.text
                 s_min, s_max = self._get_selection_range()
-                t = t[:s_min] + "\n" + t[s_max:]
-                self._active_box.text = t
+                t_str = t_str[:s_min] + "\n" + t_str[s_max:]
+                self._active_box.text = t_str
                 self._cursor_pos = s_min + 1
                 self._clear_text_selection()
-                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                auto_fit_box_to_text(self._active_box, self.width(), self.height())
                 self._cursor_visible = True
                 self.update()
                 e.accept()
@@ -834,34 +872,38 @@ class AnnotationOverlay(QWidget):
 
             if key == Qt.Key.Key_Backspace:
                 self._push_undo()
-                t = self._active_box.text
+                t_str = self._active_box.text
                 if self._has_text_selection():
                     s_min, s_max = self._get_selection_range()
-                    self._active_box.text = t[:s_min] + t[s_max:]
+                    self._active_box.text = t_str[:s_min] + t_str[s_max:]
                     self._cursor_pos = s_min
                     self._clear_text_selection()
                 elif self._cursor_pos > 0:
-                    self._active_box.text = t[:self._cursor_pos - 1] + t[self._cursor_pos:]
+                    self._active_box.text = t_str[:self._cursor_pos - 1] + t_str[self._cursor_pos:]
                     self._cursor_pos -= 1
-                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                auto_fit_box_to_text(self._active_box, self.width(), self.height())
                 self._cursor_visible = True
                 self.update()
                 e.accept()
                 return
 
             if key == Qt.Key.Key_Delete:
-                self._push_undo()
-                t = self._active_box.text
+                t_str = self._active_box.text
                 if self._has_text_selection():
+                    self._push_undo()
                     s_min, s_max = self._get_selection_range()
-                    self._active_box.text = t[:s_min] + t[s_max:]
+                    self._active_box.text = t_str[:s_min] + t_str[s_max:]
                     self._cursor_pos = s_min
                     self._clear_text_selection()
-                elif self._cursor_pos < len(t):
-                    self._active_box.text = t[:self._cursor_pos] + t[self._cursor_pos + 1:]
-                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
-                self._cursor_visible = True
-                self.update()
+                    auto_fit_box_to_text(self._active_box, self.width(), self.height())
+                    self._cursor_visible = True
+                    self.update()
+                elif self._cursor_pos < len(t_str):
+                    self._push_undo()
+                    self._active_box.text = t_str[:self._cursor_pos] + t_str[self._cursor_pos + 1:]
+                    auto_fit_box_to_text(self._active_box, self.width(), self.height())
+                    self._cursor_visible = True
+                    self.update()
                 e.accept()
                 return
 
@@ -928,27 +970,29 @@ class AnnotationOverlay(QWidget):
                 clip_text = QApplication.clipboard().text()
                 if clip_text:
                     self._push_undo()
-                    t = self._active_box.text
+                    t_str = self._active_box.text
                     s_min, s_max = self._get_selection_range()
-                    self._active_box.text = t[:s_min] + clip_text + t[s_max:]
+                    t_str = t_str[:s_min] + clip_text + t_str[s_max:]
+                    self._active_box.text = t_str
                     self._cursor_pos = s_min + len(clip_text)
                     self._clear_text_selection()
-                    self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                    auto_fit_box_to_text(self._active_box, self.width(), self.height())
                     self._cursor_visible = True
                     self.update()
                 e.accept()
                 return
 
-            # Printable characters
+            # Typing printable characters expands the box width in real time
             char = e.text()
             if char and char.isprintable():
                 self._push_undo()
-                t = self._active_box.text
+                t_str = self._active_box.text
                 s_min, s_max = self._get_selection_range()
-                self._active_box.text = t[:s_min] + char + t[s_max:]
+                t_str = t_str[:s_min] + char + t_str[s_max:]
+                self._active_box.text = t_str
                 self._cursor_pos = s_min + len(char)
                 self._clear_text_selection()
-                self._active_box.font_size = fit_font_size(self._active_box.text, self._active_box.rect)
+                auto_fit_box_to_text(self._active_box, self.width(), self.height())
                 self._cursor_visible = True
                 self.update()
                 e.accept()
@@ -1006,7 +1050,7 @@ class AnnotationOverlay(QWidget):
                 for dx, dy in _OUTLINE_OFFSETS:
                     p.drawText(
                         inner_rect.translated(dx, dy),
-                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                         box.text,
                     )
 
@@ -1014,7 +1058,7 @@ class AnnotationOverlay(QWidget):
             p.setPen(QPen(box.color))
             p.drawText(
                 inner_rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                 box.text,
             )
 
