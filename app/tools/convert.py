@@ -17,15 +17,7 @@ def _clean(text: str) -> str:
 
 
 def _atomic_save(out_path: str, write_cb):
-    """Run ``write_cb(tmp_path)`` then atomically rename onto ``out_path``.
-
-    Mirrors BasePage._atomic_pdf_write for non-PDF outputs (DOCX, TXT,
-    PPTX, XLSX, HTML, EPUB) so a crash or cancel mid-save can no longer
-    leave a half-written file in place of the user's previous output —
-    the original output (if any) survives untouched until the rename
-    succeeds. Same-directory tempfile ensures os.replace is a single
-    filesystem operation (no cross-device move).
-    """
+    """Run ``write_cb(tmp_path)`` then atomically rename onto ``out_path``."""
     suffix = os.path.splitext(out_path)[1] or ".tmp"
     out_dir = os.path.dirname(out_path) or "."
     fd, tmp = tempfile.mkstemp(suffix=suffix, dir=out_dir)
@@ -34,9 +26,6 @@ def _atomic_save(out_path: str, write_cb):
         write_cb(tmp)
         os.replace(tmp, out_path)
     except BaseException:
-        # BaseException so KeyboardInterrupt / cancellation also cleans
-        # up. Suppress the cleanup OSError because the original error
-        # is the one the caller needs to see.
         with contextlib.suppress(OSError):
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -44,7 +33,7 @@ def _atomic_save(out_path: str, write_cb):
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QComboBox, QLabel, QFileDialog,
+    QGroupBox, QFormLayout, QLabel, QFileDialog,
     QMessageBox, QProgressDialog,
 )
 
@@ -55,7 +44,7 @@ from app.utils import (
     CancelledError, format_size_localized, WrongPasswordError,
 )
 from app.constants import DESKTOP
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox
 
 
 class TabConverter(BasePage):
@@ -82,7 +71,7 @@ class TabConverter(BasePage):
         grp_fmt = QGroupBox(t("tool.convert.format_section"))
         gf = QFormLayout(grp_fmt)
         gf.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.cmb_format = QComboBox()
+        self.cmb_format = FocusComboBox()
         self.cmb_format.addItems([
             t("tool.convert.png"), t("tool.convert.jpg"),
             t("tool.convert.docx"), t("tool.convert.txt"),
@@ -97,7 +86,7 @@ class TabConverter(BasePage):
         self._grp_dpi = QGroupBox(t("tool.convert.img_options"))
         gd = QFormLayout(self._grp_dpi)
         gd.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.cmb_dpi = QComboBox()
+        self.cmb_dpi = FocusComboBox()
         self.cmb_dpi.addItems([
             t("tool.convert.dpi_72"), t("tool.convert.dpi_150"), t("tool.convert.dpi_300"),
         ])
@@ -128,16 +117,13 @@ class TabConverter(BasePage):
         f.addWidget(self.lbl_result)
         f.addStretch()
         self._compact_hidden = [sec_src, self.drop_in, self.lbl_info]
-        # Hide all output sections — save dialog prompts automatically
         for w in (sec_out_folder, self._drop_folder, self._section_file, self._drop_file):
             w.setVisible(False)
 
     def update_theme(self, dark: bool) -> None:
         super().update_theme(dark)
         try: self.lbl_result.setStyleSheet(result_label_style(dark))
-        except RuntimeError: pass  # widget destroyed
-
-    # ── UI callbacks ──────────────────────────────────────────────────────
+        except RuntimeError: pass
 
     _EXT_MAP = {2: ".docx", 3: ".txt", 4: ".pptx", 5: ".xlsx", 6: ".html", 7: ".epub"}
 
@@ -175,7 +161,6 @@ class TabConverter(BasePage):
                                     size=format_size_localized(size / 1024)))
         except Exception as e:
             self.lbl_info.setText(t("tool.split.error_info", e=e))
-        # auto-set output paths
         base = os.path.splitext(p)[0]
         if not self._drop_folder.path():
             self._drop_folder.blockSignals(True)
@@ -197,10 +182,13 @@ class TabConverter(BasePage):
         if path and not self.drop_in.path():
             self._load_input(path)
 
-    # ── conversion logic ──────────────────────────────────────────────────
-
     def _run(self):
         pdf_path = self.drop_in.path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
         if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
             return
@@ -219,14 +207,6 @@ class TabConverter(BasePage):
             7: self._convert_epub,
         }
         converters[fmt](pdf_path)
-
-    def _make_progress(self, total: int, label: str) -> QProgressDialog:
-        progress = QProgressDialog(label, t("progress.cancel"), 0, total, self)
-        progress.setWindowTitle(t("progress.compress.title"))
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        return progress
 
     def _convert_images(self, pdf_path: str, fmt: int):
         out_dir = self._resolve_output_dir(self._drop_folder, pdf_path)
@@ -250,10 +230,6 @@ class TabConverter(BasePage):
             import fitz
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
@@ -297,7 +273,6 @@ class TabConverter(BasePage):
                                              filter_key="file_filter.docx")
         if not out_path:
             return
-        # Pre-flight on main thread: dep checks + page count + capture pwd.
         try:
             import fitz  # noqa: F401
         except ImportError:
@@ -332,15 +307,9 @@ class TabConverter(BasePage):
             )
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
-                # Pass 1: extract assets for every page (text blocks, images,
-                # widgets, annotations) using the shared helper.
                 pages_assets = []
                 for i in range(doc.page_count):
                     if worker.is_cancelled():
@@ -348,18 +317,12 @@ class TabConverter(BasePage):
                     pages_assets.append(extract_page_assets(doc, i))
                     worker.progress.emit(i, f"{i + 1}/{total}…")
 
-                # Pass 2: detect headers/footers that repeat across pages so
-                # they are not duplicated in the body flow. The helper uses
-                # each page's own height, so mixed portrait/landscape PDFs
-                # are handled correctly; the second arg is just a fallback.
                 skip = detect_repeated_regions(pages_assets)
 
-                # Pass 3: write the DOCX out of the cached assets.
                 docx_doc = Document()
                 for pa in pages_assets:
                     if worker.is_cancelled():
                         return None
-                    # 3a. Inline images (best-effort).
                     for img in pa.images:
                         if not img.bytes:
                             continue
@@ -368,13 +331,6 @@ class TabConverter(BasePage):
                             run = para.add_run()
                             run.add_picture(io.BytesIO(img.bytes), width=Inches(5.0))
 
-                    # 3a-bis. Detect colored callout / card regions and
-                    # rasterize them as inline PNG images at 200 DPI. Text
-                    # blocks contained within a card are consumed (suppressed
-                    # from the flow below) to avoid duplication. Tables —
-                    # grids of filled cells — are excluded by the card
-                    # detector and handled by ``detect_table_regions`` below
-                    # so they survive as real ``<w:tbl>`` elements.
                     try:
                         card_regions = detect_card_regions(pa)
                     except Exception as exc:
@@ -383,16 +339,6 @@ class TabConverter(BasePage):
                             pa.page_index, exc,
                         )
                         card_regions = []
-                    # 3a-ter. Detect tabular grids — Phase E3. Cards and
-                    # tables should be mutually exclusive (the card
-                    # detector already drops grid-like regions) but a
-                    # standalone "callout" can occasionally bbox-overlap
-                    # a multi-cell layout that the table detector also
-                    # picks up. We give tables priority and drop any
-                    # card whose bbox is largely covered by a detected
-                    # table region — that prevents the same text from
-                    # appearing both inside a rasterized card image and
-                    # again inside the table cell.
                     try:
                         table_regions = detect_table_regions(pa)
                     except Exception as exc:
@@ -417,9 +363,6 @@ class TabConverter(BasePage):
                         return inter / a_area
 
                     if table_regions:
-                        # Drop cards whose bbox is mostly inside a table
-                        # (>= 50 % of the card's own area). Mutual
-                        # exclusion: text shows up only as table cells.
                         card_regions = [
                             cr for cr in card_regions
                             if not any(
@@ -441,10 +384,6 @@ class TabConverter(BasePage):
                     for tr in table_regions:
                         for ti in tr.text_block_indices:
                             consumed_text_indices.add(ti)
-                        # Phase E3 fix: widgets / annotations whose bbox
-                        # is inside the table region are already rendered
-                        # by the cell text, so suppress them from the
-                        # trailing widget / annotation passes.
                         for wi in tr.widget_indices:
                             consumed_widget_indices.add(wi)
                         for ai in tr.annotation_indices:
@@ -453,20 +392,6 @@ class TabConverter(BasePage):
                     def _emit_card(cr) -> None:
                         try:
                             page = doc[pa.page_index]
-                            # Defensive: page.get_drawings() returns coords in
-                            # the post-rotation space and get_pixmap(clip=...)
-                            # expects the same, so the existing flow already
-                            # works for rotated pages. If a regression ever
-                            # surfaces we may need to apply
-                            # ``page.derotation_matrix`` to the clip rect.
-                            # TODO(E3): explicit derotation if a real-world
-                            # rotated PDF reproduces a misalignment.
-                            if getattr(page, "rotation", 0):
-                                _log.debug(
-                                    "page %d rotated %d°, card clip may "
-                                    "need derotation",
-                                    pa.page_index, page.rotation,
-                                )
                             clip = fitz.Rect(*cr.bbox)
                             pix = page.get_pixmap(
                                 clip=clip,
@@ -474,17 +399,12 @@ class TabConverter(BasePage):
                                 colorspace=fitz.csRGB,
                             )
                             data = pix.tobytes("png")
-                            pix = None  # release native buffer
+                            pix = None
                             if not data:
                                 return
                             page_w = pa.width or 1.0
                             card_w = max(0.0, cr.bbox[2] - cr.bbox[0])
-                            # Word usable width ~ 6 inches (Letter, 1" margins).
                             width_in = (card_w / page_w) * 6.0
-                            # Floor very low so narrow sidebar callouts are
-                            # not blown up 2x; cap below the Letter usable
-                            # width so a near-full-page card doesn't push
-                            # past the right margin.
                             width_in = max(width_in, 1.0)
                             width_in = min(width_in, 6.5)
                             para = docx_doc.add_paragraph()
@@ -504,9 +424,6 @@ class TabConverter(BasePage):
                             docx_table = docx_doc.add_table(
                                 rows=tr.rows, cols=tr.cols
                             )
-                            # Default Word style — produces visible borders.
-                            # Borderless detection is recorded in
-                            # ``tr.has_borders`` for future styling work.
                             with contextlib.suppress(Exception):
                                 docx_table.style = "Table Grid"
                             for cell in tr.cells:
@@ -527,13 +444,6 @@ class TabConverter(BasePage):
                                     docx_cell = docx_table.rows[cell.row].cells[
                                         cell.col
                                     ]
-                                    # ``cell.text = "\n".join(...)`` injects a
-                                    # literal '\n' character into a single
-                                    # paragraph — Word does not interpret it
-                                    # as a line break. Instead, seed the cell
-                                    # with the first line and append the rest
-                                    # as additional paragraphs so the visual
-                                    # multi-line layout survives.
                                     docx_cell.text = texts[0] if texts else ""
                                     for extra in texts[1:]:
                                         docx_cell.add_paragraph(extra)
@@ -545,9 +455,6 @@ class TabConverter(BasePage):
                                 pa.page_index, exc,
                             )
 
-                    # Merge cards + tables into a single Y-ordered queue so
-                    # the flush logic below preserves visual order when
-                    # both kinds appear on the same page.
                     pending: list[tuple[float, str, object]] = []
                     for cr in card_regions:
                         pending.append((cr.bbox[1], "card", cr))
@@ -568,12 +475,9 @@ class TabConverter(BasePage):
                                 _emit_table(obj)
                             pending_idx += 1
 
-                    # 3b. Text blocks (skip repeated header/footer).
                     for bi, block in enumerate(pa.text_blocks):
                         if (pa.page_index, bi) in skip:
                             continue
-                        # Emit any pending cards / tables whose top edge is
-                        # above the current block — keeps visual order.
                         _flush_until(block.bbox[1])
                         if bi in consumed_text_indices:
                             continue
@@ -588,14 +492,11 @@ class TabConverter(BasePage):
                         ).strip()
                         if not block_text:
                             continue
-                        # Skip standalone page numbers
                         if _re.match(r"^\s*(?:page\s+)?\d{1,4}(?:\s+of\s+\d{1,4})?\s*$",
                                      block_text, _re.IGNORECASE):
                             continue
-                        # Skip TOC dot-leader lines
                         if _re.search(r'\.[\s.]*\.[\s.]*\.[\s.]*\.', block_text):
                             continue
-                        # Detect heading level by font size
                         max_size = max((s.size or 12) for s in all_spans)
                         any_bold = any((s.flags & 16) for s in all_spans)
                         if max_size >= 20:
@@ -627,15 +528,10 @@ class TabConverter(BasePage):
                             if li < len(lines) - 1:
                                 para.add_run(" ")
 
-                    # Flush any remaining cards / tables that sat below the
-                    # last text block (or pages whose only content is a
-                    # card / table).
                     _flush_until(float("inf"))
 
-                    # 3c. Form widgets — emit captured values so they are not lost.
                     for wi, w in enumerate(pa.widgets):
                         if wi in consumed_widget_indices:
-                            # Already visible inside a rasterized card.
                             continue
                         value = _clean(w.field_value).strip()
                         if not value:
@@ -643,10 +539,8 @@ class TabConverter(BasePage):
                         name = _clean(w.field_name).strip() or w.field_type or "field"
                         docx_doc.add_paragraph(f"[Form: {name}] {value}")
 
-                    # 3d. Annotations — sticky notes, FreeText, etc.
                     for ai, a in enumerate(pa.annotations):
                         if ai in consumed_annotation_indices:
-                            # Already visible inside a rasterized card.
                             continue
                         content = _clean(a.content).strip()
                         if not content:
@@ -688,10 +582,6 @@ class TabConverter(BasePage):
             import fitz
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             cancelled = False
@@ -702,9 +592,6 @@ class TabConverter(BasePage):
                         for i, page in enumerate(doc):
                             if worker.is_cancelled():
                                 cancelled = True
-                                # Bail out via exception so _atomic_save
-                                # discards the half-written tmp and does
-                                # not replace the user's previous output.
                                 raise CancelledError()
                             if i > 0:
                                 f.write(t("tool.convert.txt.page_separator",
@@ -729,8 +616,6 @@ class TabConverter(BasePage):
 
         self._run_background(do_work, total, t("tool.convert.converting"),
                              on_done=on_done)
-
-    # ── PDF → PPTX ──────────────────────────────────────────────────────
 
     def _convert_pptx(self, pdf_path: str):
         out_path = self._resolve_output_file(self._drop_file, pdf_path,
@@ -765,15 +650,10 @@ class TabConverter(BasePage):
             from pptx.oxml.ns import qn
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
 
             def _rgb(c):
-                """fitz colors are 0..1 floats; PPTX wants 0..255 ints."""
                 if c is None:
                     return None
                 try:
@@ -792,13 +672,6 @@ class TabConverter(BasePage):
                         return None
                     slide = prs.slides.add_slide(blank)
 
-                    # ── Phase 1: vector drawings (filled rects, lines).
-                    # Headers, banner bars, card backgrounds, separators
-                    # in slide-builder PDFs are vector drawings, not text
-                    # or images. Without this phase the slide looked
-                    # "naked" — only text floating on a white background.
-                    # Added FIRST so subsequent text/image shapes land on
-                    # top in PowerPoint's z-order.
                     try:
                         drawings = page.get_drawings()
                     except Exception:
@@ -816,23 +689,9 @@ class TabConverter(BasePage):
                         w = x1 - x0; h = y1 - y0
                         if w <= 0 or h <= 0:
                             continue
-                        # Sub-point noise (anti-aliasing or clipping
-                        # artifacts) — skip
                         if w * h < 0.25:
                             continue
                         kinds = {it[0] for it in items}
-                        # Render *any* drawing with a fill colour as a
-                        # rectangle at its bbox. The earlier strict
-                        # filter (only `re`+`l` paths) silently
-                        # rejected rounded-rect cards drawn with `c`
-                        # curves at the corners — common in modern
-                        # slide-builder PDFs (Genially, Canva, etc.).
-                        # Map drawings whose path contains Bezier
-                        # curves to ROUNDED_RECTANGLE for better
-                        # fidelity; sharp paths (only `re`/`l`) stay
-                        # RECTANGLE.
-                        # Stroked-only thin shapes still become a thin
-                        # filled rect in the stroke colour.
                         is_filled = fill is not None and items
                         is_line = (fill is None and stroke is not None
                                    and items
@@ -852,50 +711,21 @@ class TabConverter(BasePage):
                             shape.fill.solid()
                             shape.fill.fore_color.rgb = fill if is_filled else stroke
                             try:
-                                # Border off — PDF drawings are usually
-                                # fill-only; the stroke (if any) is the
-                                # same colour or absent.
                                 shape.line.fill.background()
                             except Exception:
-                                pass  # noqa: S110
-                            # Strip the auto-generated <p:style> block
-                            # python-pptx adds to every add_shape call.
-                            # That block carries `effectRef idx="2"` and
-                            # `fillRef idx="3"` pointing to theme presets;
-                            # PowerPoint silently applies those *on top of*
-                            # the explicit `<a:solidFill>` we just set on
-                            # some slides, leading to invisible / wrongly
-                            # tinted shapes (observed: slide 6 of the user's
-                            # UFCD deck rendered as blank white in
-                            # PowerPoint despite all 13 rects being in the
-                            # XML with valid coords and colours). Removing
-                            # the style block forces PowerPoint to use only
-                            # `<p:spPr>`, which is what we control.
+                                pass
                             try:
                                 style_el = shape._element.find(qn("p:style"))
                                 if style_el is not None:
                                     shape._element.remove(style_el)
                             except Exception:
-                                pass  # noqa: S110
+                                pass
                         except Exception:
-                            # Some MSO_SHAPE / fill combinations fail
-                            # silently in older python-pptx; skip the
-                            # drawing rather than abort the whole slide.
-                            pass  # noqa: S110
+                            pass
 
-                    # ── Phase 2: text / image blocks.
-                    # Editable extraction: image blocks become picture
-                    # shapes; each *line* of a text block becomes its
-                    # own textbox at the line's bbox so PowerPoint
-                    # doesn't re-flow lines (one textbox per block was
-                    # wrong — multi-line blocks lost their original
-                    # vertical positions when PowerPoint re-laid out
-                    # the text). Spans within the same line stay as
-                    # runs in a single paragraph so inline formatting
-                    # (bold/italic mid-sentence) is preserved.
                     blocks = page.get_text("dict").get("blocks", [])
                     for block in blocks:
-                        if block.get("type") == 1:  # image block
+                        if block.get("type") == 1:
                             bbox = block.get("bbox")
                             img_data = block.get("image")
                             if not (bbox and img_data):
@@ -914,10 +744,6 @@ class TabConverter(BasePage):
                                     Emu(int(iw * 12700)),
                                     Emu(int(ih * 12700)))
                             except Exception:
-                                # Image format not supported by python-pptx
-                                # (rare formats like JBIG2). Skip the
-                                # block — the rest of the slide is still
-                                # produced.
                                 pass
                             continue
 
@@ -930,10 +756,6 @@ class TabConverter(BasePage):
                             if not lbb:
                                 continue
                             lx0, ly0, lx1, ly1 = lbb
-                            # Pad horizontally so PowerPoint's slightly
-                            # different glyph metrics don't clip the
-                            # last character; vertically use the line
-                            # bbox as-is to keep baselines aligned.
                             lx0 = max(0, lx0 - 1)
                             ly0 = max(0, ly0)
                             lx1 = min(slide_w_pt, lx1 + 4)
@@ -950,22 +772,16 @@ class TabConverter(BasePage):
                             except Exception:
                                 continue
                             tf = tb.text_frame
-                            tf.word_wrap = False  # one line — no wrap
-                            # Zero internal padding so the textbox bbox
-                            # matches the PDF line bbox more faithfully.
-                            # Older python-pptx versions reject Emu(0)
-                            # for margins; tolerate that.
+                            tf.word_wrap = False
                             for attr in ("margin_left", "margin_right",
                                          "margin_top", "margin_bottom"):
                                 try: setattr(tf, attr, 0)
-                                except Exception: pass  # noqa: S110
+                                except Exception: pass
 
                             para = tf.paragraphs[0]
                             first_run = True
                             for span in spans:
                                 text = span["text"]
-                                # Reuse the auto-created empty run for
-                                # the first span; add new runs after.
                                 if first_run and len(para.runs) > 0:
                                     run = para.runs[0]
                                 else:
@@ -973,25 +789,17 @@ class TabConverter(BasePage):
                                 first_run = False
                                 run.text = text
                                 size = span.get("size", 12)
-                                # Pt() rejects negative or non-numeric
-                                # sizes; if the PDF span had a junk
-                                # value, fall back to the theme default.
                                 try: run.font.size = Pt(size)
-                                except Exception: pass  # noqa: S110
+                                except Exception: pass
                                 flags = span.get("flags", 0)
                                 run.font.bold = bool(flags & 16)
                                 run.font.italic = bool(flags & 2)
-                                # PDF subset fonts come prefixed with
-                                # 6 random caps + "+", strip them so
-                                # PowerPoint can substitute the
-                                # canonical face: e.g. "ABCDEF+Arial"
-                                # → "Arial".
                                 font_name = span.get("font", "") or ""
                                 if len(font_name) > 7 and font_name[6] == "+":
                                     font_name = font_name[7:]
                                 if font_name:
                                     try: run.font.name = font_name
-                                    except Exception: pass  # noqa: S110
+                                    except Exception: pass
                                 color = span.get("color", 0)
                                 if color:
                                     try:
@@ -1000,9 +808,6 @@ class TabConverter(BasePage):
                                             (color >> 8) & 0xFF,
                                             color & 0xFF)
                                     except Exception:
-                                        # Some run types reject explicit
-                                        # color (e.g. inside placeholder
-                                        # layouts); leave the default.
                                         pass
                     worker.progress.emit(i, f"{i + 1}/{total}…")
                 if worker.is_cancelled():
@@ -1020,8 +825,6 @@ class TabConverter(BasePage):
 
         self._run_background(do_work, total, t("tool.convert.converting"),
                              on_done=on_done)
-
-    # ── PDF → XLSX ──────────────────────────────────────────────────────
 
     def _convert_xlsx(self, pdf_path: str):
         out_path = self._resolve_output_file(self._drop_file, pdf_path,
@@ -1049,10 +852,6 @@ class TabConverter(BasePage):
             from openpyxl import Workbook
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
@@ -1065,7 +864,7 @@ class TabConverter(BasePage):
                         title=t("tool.convert.xlsx.sheet_name", n=i + 1))
                     blocks = page.get_text("blocks")
                     for row_idx, block in enumerate(blocks):
-                        if block[6] != 0:  # skip image blocks
+                        if block[6] != 0:
                             continue
                         text = _clean(block[4].strip())
                         if text:
@@ -1091,8 +890,6 @@ class TabConverter(BasePage):
         self._run_background(do_work, total, t("tool.convert.converting"),
                              on_done=on_done)
 
-    # ── PDF → HTML ──────────────────────────────────────────────────────
-
     def _convert_html(self, pdf_path: str):
         out_path = self._resolve_output_file(self._drop_file, pdf_path,
                                              filter_key="file_filter.html")
@@ -1113,10 +910,6 @@ class TabConverter(BasePage):
             import fitz
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
@@ -1185,8 +978,6 @@ class TabConverter(BasePage):
         self._run_background(do_work, total, t("tool.convert.converting"),
                              on_done=on_done)
 
-    # ── PDF → EPUB ──────────────────────────────────────────────────────
-
     def _convert_epub(self, pdf_path: str):
         out_path = self._resolve_output_file(self._drop_file, pdf_path,
                                              filter_key="file_filter.epub")
@@ -1213,10 +1004,6 @@ class TabConverter(BasePage):
             from ebooklib import epub
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
-                # Verify authenticate() succeeded: an unchecked call on a
-                # doc whose password changed since _load_input would leave
-                # it locked and produce empty/garbled output. Mirror
-                # _open_fitz and raise a clear password error.
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:

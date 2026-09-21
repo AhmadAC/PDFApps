@@ -40,7 +40,6 @@ class TabInfo(BasePage):
         self._apply_txt_theme()
         f.addWidget(self.txt); f.addStretch()
 
-        # No buttons needed — info is shown automatically from the viewer PDF
         self._action_bar.setVisible(False)
         self._path = ""
 
@@ -69,8 +68,6 @@ class TabInfo(BasePage):
 
     def _show(self, path: str):
         try:
-            # _open_reader transparently decrypts using the password
-            # propagated from the viewer (BasePage helper).
             reader = self._open_reader(path)
             meta = reader.metadata or {}
             size = os.path.getsize(path)

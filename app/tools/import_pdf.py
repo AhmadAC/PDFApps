@@ -1,35 +1,28 @@
 """PDFApps – TabImport: convert TXT, Images, Markdown, DOCX, PPTX, XLSX, HTML, EPUB to PDF."""
 
+import contextlib
 import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QComboBox, QLabel, QFileDialog,
+    QGroupBox, QFormLayout, QLabel, QFileDialog,
     QMessageBox, QListWidget, QListWidgetItem,
     QAbstractItemView, QHBoxLayout, QPushButton,
 )
 
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.utils import section, danger_btn, result_label_style
 from app.constants import DESKTOP
-from app.widgets import DropFileEdit
+from app.widgets import DropFileEdit, FocusComboBox
 
 
 _IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp", ".gif")
 
 
 class _NoContent:
-    """Sentinel result: a converter produced a zero-page document.
-
-    Returned (instead of the output path) when every input was empty,
-    rejected or unreadable so ``do_work`` never hands a page-less
-    ``fitz.Document`` to ``doc.save()`` — which raises the cryptic
-    ``ValueError: cannot save with zero pages``. It is truthy/non-None so
-    ``_run_background`` treats it as success (not a cancel) and routes it
-    to the friendly ``tool.import.no_content`` message. ``skipped`` carries
-    any per-item skip count so the images path keeps its existing detail.
-    """
+    """Sentinel result: a converter produced a zero-page document."""
 
     __slots__ = ("skipped",)
 
@@ -48,7 +41,7 @@ class TabImport(BasePage):
         grp = QGroupBox(t("tool.import.type_section"))
         gf = QFormLayout(grp)
         gf.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.cmb_type = QComboBox()
+        self.cmb_type = FocusComboBox()
         self.cmb_type.addItems([
             t("tool.import.type_txt"),
             t("tool.import.type_images"),
@@ -95,7 +88,7 @@ class TabImport(BasePage):
     def update_theme(self, dark: bool) -> None:
         super().update_theme(dark)
         try: self.lbl_result.setStyleSheet(result_label_style(dark))
-        except RuntimeError: pass  # widget destroyed
+        except RuntimeError: pass
 
     def _on_type_changed(self, index: int):
         self._file_list.clear()
@@ -133,9 +126,17 @@ class TabImport(BasePage):
         if not files:
             QMessageBox.warning(self, t("msg.warning"), t("tool.import.select_file"))
             return
-        out = self._resolve_output_file(self.drop_out, files[0])
+        
+        default_name = "output.pdf"
+        if files:
+            base, _ = os.path.splitext(os.path.basename(files[0]))
+            default_name = f"{base}.pdf"
+        start_dir = os.path.dirname(files[0]) if files else ""
+        out = self._prompt_save_as(default_name, start_dir)
         if not out:
             return
+        self.drop_out.set_path(out)
+
         self.lbl_result.setText("")
         converters = {
             0: self._convert_txt,
@@ -151,10 +152,6 @@ class TabImport(BasePage):
 
     def _convert_txt(self, sources: list, out_path: str):
         n = len(sources)
-        # Mirror page_numbers.py L4: ``helv`` is a Type-1 Latin-1 font; any
-        # codepoint > U+00FF (CJK, Cyrillic, Arabic, etc.) renders as tofu.
-        # Pre-scan a bounded prefix of each input so the user gets the same
-        # status-bar warning as the page-numbers tool surfaces.
         try:
             for _src in sources:
                 with open(_src, "r", encoding="utf-8", errors="replace") as _f:
@@ -163,8 +160,6 @@ class TabImport(BasePage):
                     self._status(t("tool.warn.font_latin_only"))
                     break
         except OSError:
-            # File read errors will be surfaced again inside do_work; the
-            # warning pre-scan is best-effort and must never block the run.
             pass
 
         def do_work(worker):
@@ -173,13 +168,9 @@ class TabImport(BasePage):
             for i, src in enumerate(sources):
                 if worker.is_cancelled():
                     return None
-                # errors="replace" mirrors the font pre-scan above: a
-                # Notepad/Excel .txt saved as Windows-1252/Latin-1 must not
-                # crash the real conversion with UnicodeDecodeError after
-                # the pre-scan told the user the file was fine.
                 with open(src, "r", encoding="utf-8", errors="replace") as f:
                     all_lines.extend(f.read().split("\n"))
-                all_lines.append("")  # separator between files
+                all_lines.append("")
                 worker.progress.emit(i + 1, f"{i + 1}/{n}…")
             doc = fitz.open()
             page = None
@@ -188,13 +179,13 @@ class TabImport(BasePage):
             line_height = fontsize * 1.4
             margin_x = 50
             max_y = 792
-            max_width = 495  # 595 - 2*50
+            max_width = 495
             for line in all_lines:
                 if worker.is_cancelled():
                     doc.close()
                     return None
                 if page is None or y + fontsize > max_y:
-                    page = doc.new_page(width=595, height=842)  # A4
+                    page = doc.new_page(width=595, height=842)
                     y = 50
                 if not line.strip():
                     y += line_height
@@ -210,17 +201,24 @@ class TabImport(BasePage):
                                                fontname="helv")
                 est_lines = max(1, len(line) * fontsize * 0.5 / max_width + 1)
                 y += line_height * est_lines
-            # Guard against an all-empty input set: doc.save() raises the
-            # cryptic "cannot save with zero pages" otherwise.
             if doc.page_count == 0:
                 doc.close()
                 return _NoContent()
             try:
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
@@ -228,11 +226,6 @@ class TabImport(BasePage):
                              on_done=lambda r: self._on_result(r, out_path))
 
     def _convert_images(self, sources: list, out_path: str):
-        # R11-L1: filter to recognised image extensions up front. The
-        # _IMG_EXTS tuple was previously declared but unused (dead code);
-        # using it here catches obvious mistakes (user picked a .pdf or
-        # .txt in the multi-select dialog) before fitz.open raises an
-        # unhelpful error.
         sources = [p for p in sources
                    if os.path.splitext(p)[1].lower() in _IMG_EXTS]
         n = len(sources)
@@ -246,11 +239,6 @@ class TabImport(BasePage):
                 for i, img_path in enumerate(sources):
                     if worker.is_cancelled():
                         return None
-                    # Mirror the editor's gigapixel guard — a single
-                    # 50000x50000 TIFF in the import list would otherwise
-                    # make fitz allocate multi-GB and bring down the
-                    # worker thread (which on a frozen PyInstaller build
-                    # takes the whole app with it).
                     ok, _w, _h = check_image_size(img_path)
                     if not ok:
                         skipped += 1
@@ -266,17 +254,23 @@ class TabImport(BasePage):
                     finally:
                         img.close()
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
-                # When every image was non-image/rejected/unreadable the
-                # doc has no pages. Signal that (carrying the skip count)
-                # rather than letting doc.save() raise "cannot save with
-                # zero pages" — which used to mask the skipped feedback.
                 if doc.page_count == 0:
                     return _NoContent(skipped)
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return skipped
 
         def on_done(result):
@@ -300,8 +294,6 @@ class TabImport(BasePage):
             for i, src in enumerate(sources):
                 if worker.is_cancelled():
                     return None
-                # errors="replace": tolerate legacy Latin-1/Windows-1252
-                # .md files instead of aborting with UnicodeDecodeError.
                 with open(src, "r", encoding="utf-8", errors="replace") as f:
                     all_md.append(f.read())
                 worker.progress.emit(i + 1, f"{i + 1}/{n}…")
@@ -313,7 +305,7 @@ class TabImport(BasePage):
                 for i in range(0, max(len(lines), 1), chunk):
                     if worker.is_cancelled():
                         return None
-                    page = doc.new_page(width=595, height=842)  # A4
+                    page = doc.new_page(width=595, height=842)
                     y = 50
                     for text, size, bold in lines[i:i + chunk]:
                         if y > 780:
@@ -328,11 +320,21 @@ class TabImport(BasePage):
                         y += size * 1.5
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
@@ -340,7 +342,6 @@ class TabImport(BasePage):
                              on_done=lambda r: self._on_result(r, out_path))
 
     def _md_to_lines(self, md: str) -> list:
-        """Convert markdown to list of (text, fontsize, bold) tuples."""
         result = []
         for line in md.split("\n"):
             stripped = line.strip()
@@ -355,20 +356,17 @@ class TabImport(BasePage):
             elif stripped.startswith("- ") or stripped.startswith("* "):
                 result.append(("  \u2022  " + stripped[2:], 10, False))
             elif stripped.startswith("```"):
-                continue  # skip code fences
+                continue
             elif stripped == "---" or stripped == "***":
                 result.append(("\u2500" * 60, 8, False))
             elif stripped == "":
                 result.append(("", 10, False))
             else:
-                # Remove inline formatting markers
                 clean = stripped.replace("**", "").replace("__", "")
                 clean = clean.replace("*", "").replace("_", "")
                 clean = clean.replace("`", "")
                 result.append((clean, 10, False))
         return result
-
-    # ── DOCX → PDF ──────────────────────────────────────────────────────
 
     def _convert_docx(self, sources: list, out_path: str):
         try:
@@ -414,23 +412,28 @@ class TabImport(BasePage):
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
                 if worker.is_cancelled():
                     return None
-                # Empty/blank inputs (e.g. a text-less DOCX or an all-empty
-                # workbook) leave the doc page-less; signal that instead of
-                # letting doc.save() raise "cannot save with zero pages".
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
                              label=t("tool.import.converting"),
                              on_done=lambda r: self._on_result(r, out_path))
-
-    # ── PPTX → PDF ──────────────────────────────────────────────────────
 
     def _convert_pptx(self, sources: list, out_path: str):
         try:
@@ -481,30 +484,33 @@ class TabImport(BasePage):
                                     page.insert_text(fitz.Point(40, y), text,
                                                      fontsize=size, fontname="helv")
                                 y += size * 1.4
-                        # Slide-granular progress within the file; advance
-                        # the dialog by (file index + slide fraction).
                         worker.progress.emit(
                             fi + 1,
                             f"{fi + 1}/{n}: {i + 1}/{total_slides}…")
                 if worker.is_cancelled():
                     return None
-                # Empty/blank inputs (e.g. a text-less DOCX or an all-empty
-                # workbook) leave the doc page-less; signal that instead of
-                # letting doc.save() raise "cannot save with zero pages".
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
                              label=t("tool.import.converting"),
                              on_done=lambda r: self._on_result(r, out_path))
-
-    # ── XLSX → PDF ──────────────────────────────────────────────────────
 
     def _convert_xlsx(self, sources: list, out_path: str):
         try:
@@ -537,23 +543,28 @@ class TabImport(BasePage):
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
                 if worker.is_cancelled():
                     return None
-                # Empty/blank inputs (e.g. a text-less DOCX or an all-empty
-                # workbook) leave the doc page-less; signal that instead of
-                # letting doc.save() raise "cannot save with zero pages".
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
                              label=t("tool.import.converting"),
                              on_done=lambda r: self._on_result(r, out_path))
-
-    # ── HTML → PDF ──────────────────────────────────────────────────────
 
     def _convert_html(self, sources: list, out_path: str):
         try:
@@ -571,8 +582,6 @@ class TabImport(BasePage):
                 for i, src in enumerate(sources):
                     if worker.is_cancelled():
                         return None
-                    # errors="replace": tolerate legacy Latin-1/Windows-1252
-                    # .html files instead of aborting with UnicodeDecodeError.
                     with open(src, "r", encoding="utf-8", errors="replace") as f:
                         soup = BeautifulSoup(f.read(), "html.parser")
                     lines = self._html_to_lines(soup)
@@ -580,16 +589,23 @@ class TabImport(BasePage):
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
                 if worker.is_cancelled():
                     return None
-                # Empty/blank inputs (e.g. a text-less DOCX or an all-empty
-                # workbook) leave the doc page-less; signal that instead of
-                # letting doc.save() raise "cannot save with zero pages".
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
@@ -623,8 +639,6 @@ class TabImport(BasePage):
             if tag in tag_map:
                 lines.append(("", 10, False))
         return lines
-
-    # ── EPUB → PDF ──────────────────────────────────────────────────────
 
     def _convert_epub(self, sources: list, out_path: str):
         try:
@@ -661,26 +675,30 @@ class TabImport(BasePage):
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
                 if worker.is_cancelled():
                     return None
-                # Empty/blank inputs (e.g. a text-less DOCX or an all-empty
-                # workbook) leave the doc page-less; signal that instead of
-                # letting doc.save() raise "cannot save with zero pages".
                 if doc.page_count == 0:
                     return _NoContent()
-                # R11-M8: atomic write — avoids truncating a pre-existing
-                # output file if the save crashes or the process is killed.
-                BasePage._atomic_pdf_write(doc, out_path)
+
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(doc, out_path, close_writer=True)
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
             return out_path
 
         self._run_background(do_work, total=max(n, 1),
                              label=t("tool.import.converting"),
                              on_done=lambda r: self._on_result(r, out_path))
 
-    # ── Shared line renderer ────────────────────────────────────────────
-
     def _render_lines_to_doc(self, doc, lines: list):
-        """Render a list of (text, fontsize, bold) tuples to pages in an open fitz doc."""
         import fitz
         page = None
         y = 50
@@ -701,13 +719,6 @@ class TabImport(BasePage):
             y += size * 1.5
 
     def _on_result(self, result, out_path: str):
-        """Shared completion handler for every converter.
-
-        Surfaces a friendly, translated message when the converter yielded
-        no pages (``_NoContent``) instead of letting the raw
-        ``ValueError: cannot save with zero pages`` escape; otherwise
-        finishes normally.
-        """
         if isinstance(result, _NoContent):
             if result.skipped:
                 self._status(t("tool.import.skipped_images",
@@ -722,5 +733,14 @@ class TabImport(BasePage):
     def _done(self, out_path: str):
         self.lbl_result.setText(f"  \u2192 {os.path.basename(out_path)}")
         self._status(t("tool.import.status.done", path=out_path))
+
+        win = self.window()
+        viewer = getattr(win, "_viewer", None)
+        if win and hasattr(win, "_cleanup_pipeline") and viewer:
+            win._cleanup_pipeline(id(viewer))
+
+        if viewer:
+            viewer.load(out_path)
+
         QMessageBox.information(self, t("msg.done"),
                                 t("tool.import.done", path=out_path))

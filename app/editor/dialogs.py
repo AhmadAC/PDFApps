@@ -7,8 +7,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter, QPen, QColor, QFont, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFrame, QTextEdit, QSpinBox, QComboBox,
-    QTabWidget, QWidget, QCheckBox, QFileDialog, QMessageBox,
+    QPushButton, QFrame, QTextEdit, QTabWidget, QWidget,
+    QCheckBox, QFileDialog, QMessageBox,
 )
 import qtawesome as qta
 
@@ -18,6 +18,7 @@ from app.constants import (
 )
 from app.i18n import t
 from app.utils import error_color, format_size_localized
+from app.widgets import FocusComboBox, FocusSpinBox
 
 
 def _theme_colors(parent):
@@ -43,14 +44,8 @@ class _PdfPasswordDialog(QDialog):
 
         top = QHBoxLayout(); top.setSpacing(14)
         ico = QLabel()
-        # Honour the actual screen DPR instead of hardcoding 2.0 — on
-        # a 1.0 (regular) monitor the icon was over-sized then scaled
-        # down (blur); on a 1.5/2.5 (mixed-DPI multi-monitor) layout
-        # the position drifted by a few pixels. Sampling the dialog's
-        # devicePixelRatioF gives a crisp 40x40 logical-pixel render
-        # on every monitor without per-platform fork.
         dpr = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
-        if dpr <= 0:  # paranoia: some headless / mocked widgets report 0
+        if dpr <= 0:
             dpr = 1.0
         size = int(40 * dpr)
         _pix = qta.icon("fa5s.lock", color=ACCENT).pixmap(size, size)
@@ -94,12 +89,6 @@ class _PdfPasswordDialog(QDialog):
         btns.addWidget(ca); btns.addWidget(ok)
         v.addLayout(btns)
 
-        # R11 G1: without an explicit tab order Qt walks widgets in the
-        # construction order (icon → title → password → Cancel → OK),
-        # but the dialog opens with focus on Cancel via the addStretch
-        # quirk on some platforms. Force a predictable, accessible
-        # path: password field → OK → Cancel. Keyboard-only users now
-        # land on the field they need to fill in first.
         self._edit.setFocus()
         self.setTabOrder(self._edit, ok)
         self.setTabOrder(ok, ca)
@@ -133,20 +122,7 @@ class _TextEditDialog(QDialog):
         lbl_new.setStyleSheet(f"color:{pri}; font-size:10pt;")
         v.addWidget(lbl_new)
 
-        # R11 B2: the previous QTextEdit accepted newlines that
-        # ``page.insert_text`` (PyMuPDF) cannot render — each \n got
-        # rasterized as a "?" glyph in the output PDF. Use QLineEdit
-        # so the input is restricted to what the writer can actually
-        # produce; Enter submits via returnPressed, matching the
-        # password dialog above.
         self._edit = QLineEdit()
-        # R11 review F6: ``old_text`` can contain ``\n``/``\r`` when the
-        # viewer extracted text that spans multiple PDF lines. QLineEdit
-        # silently truncates at the first newline, which hides the
-        # remainder of the original content from the user. Collapse
-        # newlines into spaces so the whole detected string stays
-        # editable; PyMuPDF's writer cannot render real newlines anyway
-        # (see R11 B2 above).
         safe_text = (old_text or "").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
         self._edit.setText(safe_text)
         self._edit.returnPressed.connect(self.accept)
@@ -174,7 +150,7 @@ class _TextDialog(QDialog):
         v.addWidget(self.edit)
         row = QHBoxLayout()
         row.addWidget(QLabel(t("dialog.insert_size")))
-        self.font_size = QSpinBox(); self.font_size.setMinimum(4); self.font_size.setMaximum(144); self.font_size.setValue(12)
+        self.font_size = FocusSpinBox(); self.font_size.setMinimum(4); self.font_size.setMaximum(144); self.font_size.setValue(12)
         row.addWidget(self.font_size); row.addSpacing(12)
         row.addWidget(QLabel(t("dialog.insert_color")))
         from app.widgets import ColorPickerButton
@@ -258,8 +234,6 @@ class _SignatureCanvas(QWidget):
         self.update()
 
     def is_empty(self):
-        # Include any in-progress stroke so clicking OK with the mouse
-        # button still held doesn't lose the final stroke.
         return not self._strokes and len(self._current) < 2
 
     def _all_strokes(self):
@@ -347,7 +321,7 @@ class _SignatureDialog(QDialog):
         tv.addWidget(self._type_input)
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel(t("edit.signature.font")))
-        self._font_combo = QComboBox()
+        self._font_combo = FocusComboBox()
         from PySide6.QtGui import QFontDatabase
         available = QFontDatabase.families()
         for f in self._FONTS:
@@ -383,12 +357,10 @@ class _SignatureDialog(QDialog):
 
         self._tabs = tabs
 
-        # Save checkbox
         self._save_cb = QCheckBox(t("edit.signature.save_reuse"))
         self._save_cb.setChecked(True)
         v.addWidget(self._save_cb)
 
-        # Buttons
         btns = QHBoxLayout(); btns.setSpacing(8); btns.addStretch()
         ca = QPushButton(t("btn.cancel")); ca.setFixedHeight(34)
         ca.clicked.connect(self.reject)
@@ -397,9 +369,6 @@ class _SignatureDialog(QDialog):
         btns.addWidget(ca); btns.addWidget(ok)
         v.addLayout(btns)
 
-        # R11-M12: explicit tab order — without this, focus jumps
-        # erratically between tabs/buttons depending on widget add order.
-        # Path: tabs -> type input -> font combo -> save cb -> cancel -> ok.
         self.setTabOrder(tabs, self._type_input)
         self.setTabOrder(self._type_input, self._font_combo)
         self.setTabOrder(self._font_combo, self._save_cb)
@@ -431,9 +400,6 @@ class _SignatureDialog(QDialog):
             self, t("edit.signature.import"), "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff)")
         if p and os.path.isfile(p):
-            # Reject pathological / malicious gigapixel images BEFORE
-            # QPixmap allocates a multi-GB buffer (a 50000x50000 TIFF
-            # would crash the editor process). See utils.check_image_size.
             from app.utils import check_image_size
             ok, w, h = check_image_size(p)
             if not ok:
@@ -450,11 +416,6 @@ class _SignatureDialog(QDialog):
                 Qt.TransformationMode.SmoothTransformation))
 
     def _validate_tab(self, tab: int) -> bool:
-        """Show a warning + return False when the active tab is empty.
-
-        Previously the dialog returned silently when the user clicked OK
-        with nothing drawn / typed / imported, which felt broken.
-        """
         if tab == 0 and self._draw_canvas.is_empty():
             QMessageBox.warning(self, t("msg.warning"),
                                 t("editor.signature.empty_draw"))
@@ -476,13 +437,13 @@ class _SignatureDialog(QDialog):
         fd, tmp = tempfile.mkstemp(suffix=".png")
         os.close(fd)
 
-        if tab == 0:  # Draw
+        if tab == 0:
             img = self._draw_canvas.to_image()
             if img is None:
                 os.unlink(tmp)
                 return
             img.save(tmp, "PNG")
-        elif tab == 1:  # Type
+        elif tab == 1:
             text = self._type_input.text().strip()
             if not text:
                 os.unlink(tmp)
@@ -502,7 +463,7 @@ class _SignatureDialog(QDialog):
             p.drawText(pad - br.x(), pad - br.y(), text)
             p.end()
             img.save(tmp, "PNG")
-        elif tab == 2:  # Import
+        elif tab == 2:
             if not self._imp_path or not os.path.isfile(self._imp_path):
                 os.unlink(tmp)
                 return
@@ -513,10 +474,6 @@ class _SignatureDialog(QDialog):
             from app.i18n import save_signature
             save_signature(tmp)
 
-        # Restrict the in-flight tmp signature to user-only on POSIX so
-        # other users on the host cannot read it before the editor
-        # stamps it into the PDF. NTFS ACLs already cover the Windows
-        # case via the profile owner; chmod there is a no-op.
         try:
             os.chmod(tmp, 0o600)
         except OSError:
