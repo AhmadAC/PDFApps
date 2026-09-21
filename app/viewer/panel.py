@@ -2,6 +2,7 @@
 """PDFApps – PdfViewerPanel: PDF viewer with drag & drop and text selection."""
 
 import os
+import contextlib
 
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -68,8 +69,8 @@ class PdfViewerPanel(QWidget):
 
         self._toc_btn      = _nav_btn('fa5s.bookmark')
         _a11y(self._toc_btn, t("viewer.toc"))
-        self._toc_btn.clicked.connect(self._toggle_toc)
-        self._toc_btn.setVisible(False)  # only visible when PDF has TOC
+        self._toc_btn.clicked.connect(self._toggle_pages_sidebar)
+        self._toc_btn.setVisible(False)
 
         self._night_btn    = _nav_btn('fa5s.moon')
         _a11y(self._night_btn, t("viewer.night_mode"))
@@ -170,6 +171,44 @@ class PdfViewerPanel(QWidget):
         self._pages_tab_idx = self._sidebar_tabs.addTab(
             self._thumbnails, t("viewer.sidebar.pages"))
 
+        def _on_tab_title_change(idx):
+            if idx >= 0:
+                self._pages_title_lbl.setText(self._sidebar_tabs.tabText(idx))
+        self._sidebar_tabs.currentChanged.connect(_on_tab_title_change)
+
+        # Left Sidebar Panel hosting burger button & tabs
+        self._sidebar_panel = QWidget()
+        self._sidebar_panel.setObjectName("viewer_left_sidebar")
+        sp_lay = QVBoxLayout(self._sidebar_panel)
+        sp_lay.setContentsMargins(0, 0, 0, 0)
+        sp_lay.setSpacing(0)
+
+        # Header bar with burger toggle for Pages sidebar
+        self._pages_header = QWidget()
+        self._pages_header.setObjectName("viewer_pages_header")
+        self._pages_header.setFixedHeight(34)
+        ph_bar = QHBoxLayout(self._pages_header)
+        ph_bar.setContentsMargins(4, 3, 4, 3)
+        ph_bar.setSpacing(6)
+
+        self._pages_toggle_btn = QPushButton()
+        self._pages_toggle_btn.setIcon(qta.icon("fa5s.bars", color=TEXT_SEC))
+        self._pages_toggle_btn.setObjectName("viewer_nav_btn")
+        self._pages_toggle_btn.setFixedSize(28, 28)
+        self._pages_toggle_btn.setToolTip(t("sidebar.collapse_expand"))
+        self._pages_toggle_btn.setAccessibleName(t("sidebar.collapse_expand"))
+        self._pages_toggle_btn.clicked.connect(self._toggle_pages_sidebar)
+        ph_bar.addWidget(self._pages_toggle_btn)
+
+        self._pages_title_lbl = QLabel(t("viewer.sidebar.pages"))
+        self._pages_title_lbl.setStyleSheet("font-weight: 600; font-size: 10pt;")
+        ph_bar.addWidget(self._pages_title_lbl, 1)
+        sp_lay.addWidget(self._pages_header)
+        sp_lay.addWidget(self._sidebar_tabs, 1)
+
+        self._pages_sidebar_collapsed = False
+        self._saved_sidebar_width = 220
+
         # ── Canvas with continuous scroll of all pages ──────────────────
         self._canvas = _SelectCanvas()
         self._canvas.zoom_changed.connect(self._on_zoom_changed)
@@ -190,15 +229,15 @@ class PdfViewerPanel(QWidget):
 
         # Splitter: sidebar | canvas
         self._viewer_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._viewer_splitter.addWidget(self._sidebar_tabs)
+        self._viewer_splitter.addWidget(self._sidebar_panel)
         self._viewer_splitter.addWidget(self._canvas_scroll)
         self._viewer_splitter.setStretchFactor(0, 0)
         self._viewer_splitter.setStretchFactor(1, 1)
         self._viewer_splitter.setSizes([220, 800])
-        self._viewer_splitter.setCollapsible(0, True)
+        self._viewer_splitter.setCollapsible(0, False)
         self._viewer_splitter.setCollapsible(1, False)
         self._viewer_splitter.setVisible(False)
-        self._sidebar_tabs.setVisible(False)
+        self._sidebar_panel.setVisible(False)
         layout.addWidget(self._viewer_splitter, 1)
 
         # ── Search bar (Ctrl+F) ───────────────────────────────────────────
@@ -254,6 +293,27 @@ class PdfViewerPanel(QWidget):
         self._sel_status.setVisible(False)
         layout.addWidget(self._sel_status)
         self._canvas.text_copied.connect(self._on_text_copied)
+
+    def _toggle_pages_sidebar(self):
+        if not self._pages_sidebar_collapsed:
+            self._saved_sidebar_width = max(180, self._sidebar_panel.width())
+            self._pages_sidebar_collapsed = True
+            self._sidebar_tabs.setVisible(False)
+            self._pages_title_lbl.setVisible(False)
+            self._sidebar_panel.setMinimumWidth(36)
+            self._sidebar_panel.setMaximumWidth(36)
+            self._sidebar_panel.setFixedWidth(36)
+            total = self._viewer_splitter.width()
+            self._viewer_splitter.setSizes([36, max(300, total - 36)])
+        else:
+            self._pages_sidebar_collapsed = False
+            self._sidebar_tabs.setVisible(True)
+            self._pages_title_lbl.setVisible(True)
+            self._sidebar_panel.setMinimumWidth(180)
+            self._sidebar_panel.setMaximumWidth(400)
+            w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
+            total = self._viewer_splitter.width()
+            self._viewer_splitter.setSizes([w, max(300, total - w)])
 
     def set_crop_mode(self, active: bool):
         if hasattr(self, "_canvas"):
@@ -343,6 +403,8 @@ class PdfViewerPanel(QWidget):
         self._search_prev_btn.setIcon(qta.icon('fa5s.chevron-up',     color=c))
         self._search_next_btn.setIcon(qta.icon('fa5s.chevron-down',   color=c))
         self._search_close_btn.setIcon(qta.icon('fa5s.times',         color=c))
+        if hasattr(self, "_pages_toggle_btn"):
+            self._pages_toggle_btn.setIcon(qta.icon("fa5s.bars", color=c))
         link_style = self._recent_link_style(dark)
         for link in self._recent_links:
             link.setStyleSheet(link_style)
@@ -495,15 +557,6 @@ class PdfViewerPanel(QWidget):
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
 
-    def _toggle_toc(self):
-        visible = self._sidebar_tabs.isVisible()
-        self._sidebar_tabs.setVisible(not visible)
-        if not visible:
-            self._viewer_splitter.setSizes(
-                [220, max(800, self._viewer_splitter.width() - 220)])
-        if self._canvas._doc and self._canvas._zoom_factor == 1.0:
-            QTimer.singleShot(50, self._canvas._layout_and_schedule)
-
     def _toggle_night_mode(self):
         self._canvas.set_night_mode(self._night_btn.isChecked())
 
@@ -524,7 +577,7 @@ class PdfViewerPanel(QWidget):
         self.set_page_crops({})
         self._placeholder.setVisible(True)
         self._viewer_splitter.setVisible(False)
-        self._sidebar_tabs.setVisible(False)
+        self._sidebar_panel.setVisible(False)
         self._sel_status.setVisible(False)
         self._name_lbl.setText(t("viewer.title"))
         self._page_lbl.setText("— / —")
@@ -582,7 +635,13 @@ class PdfViewerPanel(QWidget):
         self._canvas_scroll.verticalScrollBar().setValue(0)
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
+        self._sidebar_panel.setVisible(True)
+        self._pages_sidebar_collapsed = False
         self._sidebar_tabs.setVisible(True)
+        self._pages_title_lbl.setVisible(True)
+        self._sidebar_panel.setMinimumWidth(180)
+        self._sidebar_panel.setMaximumWidth(400)
+        self._viewer_splitter.setSizes([220, 800])
         self._sel_status.setVisible(True)
         self._name_lbl.setText(os.path.basename(path))
         self._zoom_lbl.setText(t("zoom.fit"))

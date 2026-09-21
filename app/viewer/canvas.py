@@ -1,4 +1,3 @@
-
 # app/viewer/canvas.py
 
 """PDFApps – _SelectCanvas: continuous scroll with lazy rendering via threads."""
@@ -110,7 +109,7 @@ class _SelectCanvas(QWidget):
     zoom_changed        = Signal(int)   # current zoom percentage
     text_copied         = Signal(str)   # copied text (empty = no text layer)
     doc_replaced        = Signal(object)  # new fitz.Document after a close/reopen
-    crop_selected       = Signal(int, object)  # (page_idx, (x0, y0, x1, y1))
+    crop_selected       = Signal(int, object)  # (page_idx, (x0, y0, x1, y1, pw, ph))
     crop_applied        = Signal()
     crop_undo_requested = Signal()
     crop_redo_requested = Signal()
@@ -667,10 +666,10 @@ class _SelectCanvas(QWidget):
                         continue
                     e = self._entries[i]
                     x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
-                    cx0 = x + int(left_m * z)
-                    cy0 = e.y_off + int(top_m * z)
-                    cx1 = x + e.w - int(right_m * z)
-                    cy1 = e.y_off + e.h - int(bot_m * z)
+                    cx0 = x + int(round(left_m * z))
+                    cy0 = e.y_off + int(round(top_m * z))
+                    cx1 = x + e.w - int(round(right_m * z))
+                    cy1 = e.y_off + e.h - int(round(bot_m * z))
                     if cx1 > cx0 and cy1 > cy0:
                         self._draw_crop_box(p, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
 
@@ -732,7 +731,9 @@ class _SelectCanvas(QWidget):
                 p_y0 = max(0.0, min(start.y() - entry.y_off, end.y() - entry.y_off) / z)
                 p_x1 = min(entry.w / z, max(start.x() - x_off, end.x() - x_off) / z)
                 p_y1 = min(entry.h / z, max(start.y() - entry.y_off, end.y() - entry.y_off) / z)
-                self.crop_selected.emit(page_idx, (p_x0, p_y0, p_x1, p_y1))
+                pw = entry.w / z
+                ph = entry.h / z
+                self.crop_selected.emit(page_idx, (p_x0, p_y0, p_x1, p_y1, pw, ph))
             self.update()
             e.accept()
             return

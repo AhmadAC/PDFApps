@@ -8,9 +8,10 @@ import shutil
 from typing import Iterable
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QPushButton, QLabel
+)
 from shiboken6 import isValid
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFileDialog,
-                               QPushButton, QLabel)
 
 from app import pdf_io
 from app.constants import DESKTOP, ACCENT
@@ -440,7 +441,8 @@ class BasePage(QWidget):
     @staticmethod
     def _atomic_pdf_write(writer, dst: str, *,
                           sources: "Iterable[str] | None" = None,
-                          save_opts: "dict | None" = None) -> None:
+                          save_opts: "dict | None" = None,
+                          close_writer: bool = False) -> None:
         """Write a PdfWriter (pypdf) or fitz.Document to ``dst`` atomically.
 
         Thin wrapper around :func:`app.pdf_io.atomic_pdf_write` (R3):
@@ -464,16 +466,17 @@ class BasePage(QWidget):
         ``writer`` may be a pypdf ``PdfWriter`` (uses ``writer.write(fh)``)
         or a PyMuPDF ``fitz.Document`` (uses ``writer.save(tmp)``).
         Anything else with a ``.write(fh)`` method is accepted. The
-        writer is left OPEN (BasePage tools never save back onto the
-        input handle); the editor opts into ``close_writer`` directly
-        via ``pdf_io.atomic_pdf_write``.
+        writer is left OPEN by default (BasePage tools never save back onto the
+        input handle); passing ``close_writer=True`` closes the writer
+        after saving but before the ``os.replace`` rename.
 
         Raises :class:`RuntimeError` with a translated message when the
         same-source check fails; the caller's existing ``show_error``
         path surfaces it as a friendly dialog.
         """
         pdf_io.atomic_pdf_write(writer, dst, sources=sources,
-                                save_opts=save_opts)
+                                save_opts=save_opts,
+                                close_writer=close_writer)
 
     # ── background-task helper ────────────────────────────────────────────
 

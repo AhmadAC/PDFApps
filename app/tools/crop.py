@@ -1,7 +1,7 @@
-
 # app/tools/crop.py
 
 """PDFApps – TabCortar: crop PDF pages tool."""
+import contextlib
 import os
 
 from PySide6.QtCore import Qt, Signal
@@ -16,6 +16,7 @@ import fitz
 
 from app import i18n
 from app.base import BasePage
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t, get_language
 from app.utils import section, info_lbl, parse_pages, show_error
 from app.constants import ACCENT, DESKTOP, TEXT_PRI, TEXT_SEC, _LQ
@@ -318,6 +319,37 @@ for _lang, _entries in _CROP_I18N.items():
         i18n._TRANSLATIONS[_lang].update(_entries)
 
 
+class FocusSpinBox(QSpinBox):
+    """QSpinBox that ignores mouse wheel events unless it explicitly has keyboard focus."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        if self.lineEdit():
+            self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        has_focus = self.hasFocus() or (self.lineEdit() and self.lineEdit().hasFocus())
+        if has_focus:
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class FocusComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel events unless it explicitly has keyboard focus."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class TabCortar(BasePage):
     """Crop PDF pages with Foxit-style margin controls, range selection, live preview and undo/redo."""
 
@@ -372,7 +404,7 @@ class TabCortar(BasePage):
         form_opts = QFormLayout(grp_opts)
         form_opts.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self.cmb_page_mode = QComboBox()
+        self.cmb_page_mode = FocusComboBox()
         self.cmb_page_mode.addItems([
             t("tool.crop.pages_all"),
             t("tool.crop.pages_current"),
@@ -381,7 +413,7 @@ class TabCortar(BasePage):
         self.cmb_page_mode.currentIndexChanged.connect(self._on_mode_changed)
         form_opts.addRow(t("tool.crop.pages_label"), self.cmb_page_mode)
 
-        self.spin_current_page = QSpinBox()
+        self.spin_current_page = FocusSpinBox()
         self.spin_current_page.setRange(1, 99999)
         self.spin_current_page.setValue(1)
         self.spin_current_page.valueChanged.connect(self._on_controls_changed)
@@ -394,7 +426,7 @@ class TabCortar(BasePage):
         self.edit_custom_pages.setVisible(False)
         form_opts.addRow("", self.edit_custom_pages)
 
-        self.cmb_subset = QComboBox()
+        self.cmb_subset = FocusComboBox()
         self.cmb_subset.addItems([
             t("tool.crop.subset_all"),
             t("tool.crop.subset_odd"),
@@ -414,7 +446,7 @@ class TabCortar(BasePage):
         grid.setSpacing(6)
 
         def _make_spin():
-            sb = QSpinBox()
+            sb = FocusSpinBox()
             sb.setRange(0, 5000)
             sb.setValue(0)
             sb.setSuffix(" pt")
@@ -651,7 +683,7 @@ class TabCortar(BasePage):
 
         doc = None
         try:
-            doc = fitz.open(pdf_path)
+            doc = self._open_fitz(pdf_path)
             new_crops = dict(self._applied_crops)
             any_changed = False
             for idx in targets:
@@ -690,7 +722,8 @@ class TabCortar(BasePage):
             show_error(self, exc)
         finally:
             if doc is not None:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
 
     def _undo(self):
         if not self._undo_stack:
@@ -711,6 +744,11 @@ class TabCortar(BasePage):
 
     def _on_crop_history_changed(self):
         pdf_path = self.drop_in.path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
         ref_idx = max(0, min(self.spin_current_page.value() - 1, self._page_count - 1))
         if ref_idx in self._applied_crops:
             c = self._applied_crops[ref_idx]
@@ -718,7 +756,7 @@ class TabCortar(BasePage):
             self._ref_height = c[3] - c[1]
         elif pdf_path and os.path.isfile(pdf_path):
             try:
-                doc = fitz.open(pdf_path)
+                doc = self._open_fitz(pdf_path)
                 r = doc[ref_idx].rect
                 self._ref_width = r.width
                 self._ref_height = r.height
@@ -741,22 +779,32 @@ class TabCortar(BasePage):
 
     def on_canvas_crop_selected(self, page_idx: int, rect: tuple):
         """Called when the user drags a rubber-band rectangle on the viewer canvas."""
-        p_x0, p_y0, p_x1, p_y1 = rect
-        doc_path = self.drop_in.path()
-        if doc_path and os.path.isfile(doc_path):
-            try:
-                doc = fitz.open(doc_path)
-                p_rect = doc[page_idx].rect
-                if page_idx in self._applied_crops:
-                    c = self._applied_crops[page_idx]
-                    self._ref_width = c[2] - c[0]
-                    self._ref_height = c[3] - c[1]
-                else:
-                    self._ref_width = p_rect.width
-                    self._ref_height = p_rect.height
-                doc.close()
-            except Exception:
-                pass
+        if len(rect) >= 6:
+            p_x0, p_y0, p_x1, p_y1, pw, ph = rect[:6]
+            self._ref_width = pw
+            self._ref_height = ph
+        else:
+            p_x0, p_y0, p_x1, p_y1 = rect
+            doc_path = self.drop_in.path()
+            if not doc_path or not os.path.isfile(doc_path):
+                win = self.window()
+                viewer = getattr(win, "_viewer", None)
+                if viewer and viewer.current_path():
+                    doc_path = viewer.current_path()
+            if doc_path and os.path.isfile(doc_path):
+                try:
+                    doc = self._open_fitz(doc_path)
+                    p_rect = doc[page_idx].rect
+                    if page_idx in self._applied_crops:
+                        c = self._applied_crops[page_idx]
+                        self._ref_width = c[2] - c[0]
+                        self._ref_height = c[3] - c[1]
+                    else:
+                        self._ref_width = p_rect.width
+                        self._ref_height = p_rect.height
+                    doc.close()
+                except Exception:
+                    pass
 
         left = max(0.0, p_x0)
         top = max(0.0, p_y0)
@@ -839,6 +887,11 @@ class TabCortar(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
             return
 
@@ -877,9 +930,19 @@ class TabCortar(BasePage):
             QMessageBox.warning(self, t("msg.warning"), t("tool.crop.no_pages"))
             return
 
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
+        # Always open a Save As dialog so the user can choose a destination file and name
+        default_name = "cropped.pdf"
+        if pdf_path:
+            base, ext = os.path.splitext(os.path.basename(pdf_path))
+            default_name = f"{base}_cropped{ext}"
+        start_dir = os.path.dirname(pdf_path) if pdf_path else ""
+        out_path = self._prompt_save_as(default_name, start_dir)
         if not out_path:
             return
+        self.drop_out.set_path(out_path)
+
+        win = self.window()
+        viewer = getattr(win, "_viewer", None)
 
         try:
             doc = self._open_fitz(pdf_path)
@@ -891,19 +954,34 @@ class TabCortar(BasePage):
                         if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
                             page.set_cropbox(crop_rect)
 
-                self._atomic_pdf_write(
+                # Release document locks in viewer if saving onto an open file
+                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
+                    viewer._canvas.close_doc()
+                    if viewer._fitz_doc:
+                        with contextlib.suppress(Exception):
+                            viewer._fitz_doc.close()
+                        viewer._fitz_doc = None
+                    viewer._thumbnails._stop_all_workers()
+
+                atomic_pdf_write(
                     doc, out_path, sources=[pdf_path],
                     save_opts={"garbage": 4, "deflate": True},
                     close_writer=True,
                 )
             finally:
-                doc.close()
+                with contextlib.suppress(Exception):
+                    doc.close()
 
             self._status(t("tool.crop.status.done", name=os.path.basename(out_path)))
             msg = t("tool.crop.done", path=out_path)
-            if self._pipeline_active:
-                self._pipeline_success(msg, out_path)
-            else:
-                QMessageBox.information(self, t("msg.done"), msg)
+
+            if win and hasattr(win, "_cleanup_pipeline") and viewer:
+                win._cleanup_pipeline(id(viewer))
+
+            if viewer:
+                viewer.load(out_path)
+
+            QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e:
             show_error(self, e)
+

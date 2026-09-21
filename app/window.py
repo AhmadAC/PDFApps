@@ -1,3 +1,4 @@
+
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
@@ -85,7 +86,7 @@ class MainWindow(QMainWindow):
         # Wire top bar events
         self._sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         self._open_pdf_btn.clicked.connect(self._open_pdf)
-        self._toc_top_btn.clicked.connect(lambda: self._viewer._toggle_toc())
+        self._toc_top_btn.clicked.connect(lambda: self._viewer._toggle_pages_sidebar())
         self._night_top_btn.clicked.connect(self._toggle_night_mode_top)
         self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf())
         self._present_btn.clicked.connect(self._start_presentation)
@@ -249,6 +250,41 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(cls(self._set_status))
         self.stack.setVisible(False)
 
+        # ── Right Tool Container with Burger Collapse Header ───────────────────
+        self._right_tool_container = QWidget()
+        self._right_tool_container.setObjectName("right_tool_container")
+        rc_lay = QVBoxLayout(self._right_tool_container)
+        rc_lay.setContentsMargins(0, 0, 0, 0)
+        rc_lay.setSpacing(0)
+
+        right_header = QWidget()
+        right_header.setObjectName("right_tool_header")
+        right_header.setFixedHeight(34)
+        rh_lay = QHBoxLayout(right_header)
+        rh_lay.setContentsMargins(4, 3, 4, 3)
+        rh_lay.setSpacing(6)
+
+        self._right_toggle_btn = QPushButton()
+        self._right_toggle_btn.setIcon(qta.icon("fa5s.bars", color=TEXT_PRI))
+        self._right_toggle_btn.setObjectName("viewer_nav_btn")
+        self._right_toggle_btn.setFixedSize(28, 28)
+        self._right_toggle_btn.setToolTip(t("sidebar.collapse_expand"))
+        self._right_toggle_btn.setAccessibleName(t("sidebar.collapse_expand"))
+        self._right_toggle_btn.clicked.connect(self._toggle_right_pane)
+        rh_lay.addWidget(self._right_toggle_btn)
+
+        self._right_pane_title = QLabel("")
+        self._right_pane_title.setStyleSheet("font-weight: 600; font-size: 10pt;")
+        rh_lay.addWidget(self._right_pane_title, 1)
+
+        self._right_header = right_header
+        rc_lay.addWidget(right_header)
+        rc_lay.addWidget(self.stack, 1)
+
+        self._right_pane_collapsed = False
+        self._saved_right_width = 400
+        self._right_tool_container.setVisible(False)
+
         # ── Tabbed Viewer ────────────────────────────────────────────────────
         self._tab_container = QWidget()
         tc_lay = QVBoxLayout(self._tab_container); tc_lay.setContentsMargins(0, 0, 0, 0); tc_lay.setSpacing(0)
@@ -271,8 +307,8 @@ class MainWindow(QMainWindow):
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setHandleWidth(1); self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(self._tab_container)
-        self._splitter.addWidget(self.stack)
-        self._splitter.setCollapsible(0, False); self._splitter.setCollapsible(1, True)
+        self._splitter.addWidget(self._right_tool_container)
+        self._splitter.setCollapsible(0, False); self._splitter.setCollapsible(1, False)
 
         main_h.addWidget(self._sidebar)
         main_h.addWidget(self._splitter, 1)
@@ -340,6 +376,27 @@ class MainWindow(QMainWindow):
 
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
+
+    def _toggle_right_pane(self):
+        if not self._right_pane_collapsed:
+            self._saved_right_width = max(320, self._right_tool_container.width())
+            self._right_pane_collapsed = True
+            self.stack.setVisible(False)
+            self._right_pane_title.setVisible(False)
+            self._right_tool_container.setMinimumWidth(36)
+            self._right_tool_container.setMaximumWidth(36)
+            self._right_tool_container.setFixedWidth(36)
+            total = self._splitter.width()
+            self._splitter.setSizes([max(300, total - 36), 36])
+        else:
+            self._right_pane_collapsed = False
+            self.stack.setVisible(True)
+            self._right_pane_title.setVisible(True)
+            self._right_tool_container.setMinimumWidth(320)
+            self._right_tool_container.setMaximumWidth(600)
+            tool_w = min(600, max(320, getattr(self, "_saved_right_width", 400)))
+            total = self._splitter.width()
+            self._splitter.setSizes([max(300, total - tool_w), tool_w])
 
     @property
     def _viewer(self) -> PdfViewerPanel:
@@ -505,6 +562,7 @@ class MainWindow(QMainWindow):
                 self._current_tool = i
                 self.stack.setCurrentIndex(i)
                 self.stack.setVisible(True)
+                self._right_tool_container.setVisible(True)
                 self._tab_container.setVisible(False)
                 self._breadcrumb.setText(f"{t('workspace.title')}  ›  {name}")
                 self._try_auto_load(i)
@@ -599,6 +657,7 @@ class MainWindow(QMainWindow):
             self.nav.clearSelection()
             self._current_tool = -1
             self.stack.setVisible(False)
+            self._right_tool_container.setVisible(False)
             self._tab_container.setVisible(True)
             self._breadcrumb.setText(t("workspace.title"))
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
@@ -612,11 +671,18 @@ class MainWindow(QMainWindow):
             self._setup_zoom_bar(False)
             self._current_tool = row
             self.stack.setCurrentIndex(row)
+            self._right_tool_container.setVisible(True)
+            self._right_pane_collapsed = False
             self.stack.setVisible(True)
+            self._right_pane_title.setVisible(True)
+            self._right_pane_title.setText(NAV_ITEMS[row][0])
 
             if row == edit_idx:
                 self.stack.setMinimumWidth(0)
                 self.stack.setMaximumWidth(16777215)
+                self._right_tool_container.setMinimumWidth(0)
+                self._right_tool_container.setMaximumWidth(16777215)
+                self._right_header.setVisible(False)
                 self._tab_container.setVisible(False)
                 self._setup_zoom_bar(True)
                 edit_w = self.stack.widget(edit_idx)
@@ -636,8 +702,11 @@ class MainWindow(QMainWindow):
                 self._viewer.set_crop_preview(None)
                 self._viewer.set_page_crops({})
             else:
+                self._right_header.setVisible(True)
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
+                self._right_tool_container.setMinimumWidth(320)
+                self._right_tool_container.setMaximumWidth(600)
                 self._tab_container.setVisible(True)
                 total = self._splitter.width()
                 tool_w = max(380, min(450, total // 3))
@@ -919,6 +988,17 @@ class MainWindow(QMainWindow):
                 _logging.getLogger("pdfapps").warning("Pipeline save destination is a symlink: %s -> %s", path, os.path.realpath(path))
         except Exception:
             pass
+
+        # Release any open document locks in viewers before overwriting file on Windows
+        for v in self._viewers:
+            if v.current_path() and os.path.abspath(v.current_path()) == os.path.abspath(path):
+                v._canvas.close_doc()
+                if v._fitz_doc:
+                    with contextlib.suppress(Exception):
+                        v._fitz_doc.close()
+                    v._fitz_doc = None
+                v._thumbnails._stop_all_workers()
+
         try:
             dst_dir = os.path.dirname(path) or "."
             fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=dst_dir)
@@ -932,11 +1012,12 @@ class MainWindow(QMainWindow):
                 raise
         except OSError:
             shutil.copy2(ps["temp_path"], path)
+
+        self._cleanup_pipeline(vid)
         self._viewer.load(path)
         idx = self._viewer_stack.currentIndex()
         self._tab_bar.setTabText(idx, os.path.basename(path))
         self._tab_bar.setTabToolTip(idx, path)
-        self._cleanup_pipeline(vid)
         self._sb.showMessage(t("pipeline.saved"))
 
     def _cleanup_pipeline(self, viewer_id: int):
@@ -1104,6 +1185,9 @@ class MainWindow(QMainWindow):
                 it.setForeground(QColor(nav_color))
         for v in self._viewers:
             v.update_theme(self._dark_mode)
+        pri = TEXT_PRI if self._dark_mode else _LQ
+        if hasattr(self, "_right_toggle_btn"):
+            self._right_toggle_btn.setIcon(qta.icon("fa5s.bars", color=pri))
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if hasattr(w, 'update_theme'):
