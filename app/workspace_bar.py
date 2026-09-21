@@ -24,6 +24,7 @@ class WorkspaceBar(QWidget):
             btn.setToolTip(tip)
             btn.setAccessibleName(tip)
 
+        # ── Left Side: App Sidebar Toggle & Pages Sidebar Toggle ──────
         self._sidebar_toggle_btn = QPushButton()
         self._ico_bars = qta.icon("fa5s.bars", color=TEXT_PRI)
         self._ico_times = qta.icon("fa5s.times", color=TEXT_PRI)
@@ -33,10 +34,20 @@ class WorkspaceBar(QWidget):
         _a11y(self._sidebar_toggle_btn, t("sidebar.collapse_expand"))
         layout.addWidget(self._sidebar_toggle_btn)
 
+        # Pages / Thumbnails sidebar toggle button with two-page icon
+        self._pages_toggle_btn = QPushButton()
+        self._ico_pages = qta.icon("fa5s.copy", color=TEXT_PRI)
+        self._pages_toggle_btn.setIcon(self._ico_pages)
+        self._pages_toggle_btn.setObjectName("viewer_nav_btn")
+        self._pages_toggle_btn.setFixedSize(28, 28)
+        _a11y(self._pages_toggle_btn, t("viewer.sidebar.pages"))
+        layout.addWidget(self._pages_toggle_btn)
+
         self._breadcrumb = QLabel(t("workspace.title"))
         self._breadcrumb.setObjectName("workspace_title")
         layout.addWidget(self._breadcrumb, 1)
 
+        # ── Viewer Action Buttons ─────────────────────────────────────
         self._open_pdf_btn = QPushButton()
         self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=TEXT_PRI))
         self._open_pdf_btn.setObjectName("viewer_nav_btn")
@@ -197,11 +208,23 @@ class WorkspaceBar(QWidget):
         )
         layout.addWidget(self._update_btn)
 
+        # ── Far Right: Tool Pane Burger Toggle ────────────────────────
+        self._right_pane_toggle_btn = QPushButton()
+        self._right_pane_toggle_btn.setIcon(self._ico_bars)
+        self._right_pane_toggle_btn.setObjectName("viewer_nav_btn")
+        self._right_pane_toggle_btn.setFixedSize(28, 28)
+        _a11y(self._right_pane_toggle_btn, t("sidebar.collapse_expand"))
+        self._right_pane_toggle_btn.setVisible(False)
+        layout.addWidget(self._right_pane_toggle_btn)
+
     def update_theme(self, dark: bool, sidebar_collapsed: bool = False):
         bar_color = TEXT_PRI if dark else _LQ
         self._ico_bars = qta.icon("fa5s.bars", color=bar_color)
         self._ico_times = qta.icon("fa5s.times", color=bar_color)
+        self._ico_pages = qta.icon("fa5s.copy", color=bar_color)
         self._sidebar_toggle_btn.setIcon(self._ico_bars if sidebar_collapsed else self._ico_times)
+        self._pages_toggle_btn.setIcon(self._ico_pages)
+        self._right_pane_toggle_btn.setIcon(self._ico_bars)
         self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=bar_color))
         self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=bar_color))
         self._night_top_btn.setIcon(qta.icon("fa5s.moon", color=bar_color))

@@ -1,4 +1,3 @@
-
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
@@ -59,6 +58,8 @@ class MainWindow(QMainWindow):
         self._workspace_bar = WorkspaceBar(self)
         wb = self._workspace_bar
         self._sidebar_toggle_btn = wb._sidebar_toggle_btn
+        self._pages_toggle_btn = wb._pages_toggle_btn
+        self._right_pane_toggle_btn = wb._right_pane_toggle_btn
         self._breadcrumb = wb._breadcrumb
         self._open_pdf_btn = wb._open_pdf_btn
         self._toc_top_btn = wb._toc_top_btn
@@ -85,8 +86,10 @@ class MainWindow(QMainWindow):
 
         # Wire top bar events
         self._sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
+        self._pages_toggle_btn.clicked.connect(self._toggle_pages_sidebar)
+        self._right_pane_toggle_btn.clicked.connect(self._toggle_right_pane)
         self._open_pdf_btn.clicked.connect(self._open_pdf)
-        self._toc_top_btn.clicked.connect(lambda: self._viewer._toggle_pages_sidebar())
+        self._toc_top_btn.clicked.connect(self._toggle_pages_sidebar)
         self._night_top_btn.clicked.connect(self._toggle_night_mode_top)
         self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf())
         self._present_btn.clicked.connect(self._start_presentation)
@@ -244,46 +247,20 @@ class MainWindow(QMainWindow):
             pass
         self._qapp: QApplication = QApplication.instance()
 
-        # ── Tool Stack ───────────────────────────────────────────────────────
+        # ── Tool Stack & Right Tool Container ────────────────────────────────
         self.stack = QStackedWidget(); self.stack.setObjectName("content_area")
         for _, __, cls in NAV_ITEMS:
             self.stack.addWidget(cls(self._set_status))
         self.stack.setVisible(False)
 
-        # ── Right Tool Container with Burger Collapse Header ───────────────────
         self._right_tool_container = QWidget()
         self._right_tool_container.setObjectName("right_tool_container")
         rc_lay = QVBoxLayout(self._right_tool_container)
         rc_lay.setContentsMargins(0, 0, 0, 0)
         rc_lay.setSpacing(0)
-
-        right_header = QWidget()
-        right_header.setObjectName("right_tool_header")
-        right_header.setFixedHeight(34)
-        rh_lay = QHBoxLayout(right_header)
-        rh_lay.setContentsMargins(4, 3, 4, 3)
-        rh_lay.setSpacing(6)
-
-        self._right_toggle_btn = QPushButton()
-        self._right_toggle_btn.setIcon(qta.icon("fa5s.bars", color=TEXT_PRI))
-        self._right_toggle_btn.setObjectName("viewer_nav_btn")
-        self._right_toggle_btn.setFixedSize(28, 28)
-        self._right_toggle_btn.setToolTip(t("sidebar.collapse_expand"))
-        self._right_toggle_btn.setAccessibleName(t("sidebar.collapse_expand"))
-        self._right_toggle_btn.clicked.connect(self._toggle_right_pane)
-        rh_lay.addWidget(self._right_toggle_btn)
-
-        self._right_pane_title = QLabel("")
-        self._right_pane_title.setStyleSheet("font-weight: 600; font-size: 10pt;")
-        rh_lay.addWidget(self._right_pane_title, 1)
-
-        self._right_header = right_header
-        rc_lay.addWidget(right_header)
         rc_lay.addWidget(self.stack, 1)
-
-        self._right_pane_collapsed = False
-        self._saved_right_width = 400
         self._right_tool_container.setVisible(False)
+        self._saved_right_width = 400
 
         # ── Tabbed Viewer ────────────────────────────────────────────────────
         self._tab_container = QWidget()
@@ -377,23 +354,36 @@ class MainWindow(QMainWindow):
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
 
+    def _toggle_pages_sidebar(self):
+        v = self._viewer
+        if hasattr(v, "_toggle_pages_sidebar"):
+            v._toggle_pages_sidebar()
+        elif hasattr(v, "_sidebar_panel"):
+            is_vis = v._sidebar_panel.isVisible()
+            v._sidebar_panel.setVisible(not is_vis)
+            if not is_vis:
+                w = min(400, max(180, getattr(v, "_saved_sidebar_width", 220)))
+                total = v._viewer_splitter.width()
+                v._viewer_splitter.setSizes([w, max(300, total - w)])
+            else:
+                total = v._viewer_splitter.width()
+                v._viewer_splitter.setSizes([0, total])
+
     def _toggle_right_pane(self):
-        if not self._right_pane_collapsed:
+        if self._current_tool < 0:
+            return
+        is_visible = self._right_tool_container.isVisible()
+        if is_visible:
+            # Collapse completely: 0px width, zero wasted space
             self._saved_right_width = max(320, self._right_tool_container.width())
-            self._right_pane_collapsed = True
+            self._right_tool_container.setVisible(False)
             self.stack.setVisible(False)
-            self._right_pane_title.setVisible(False)
-            self._right_tool_container.setMinimumWidth(36)
-            self._right_tool_container.setMaximumWidth(36)
-            self._right_tool_container.setFixedWidth(36)
             total = self._splitter.width()
-            self._splitter.setSizes([max(300, total - 36), 36])
+            self._splitter.setSizes([total, 0])
         else:
-            self._right_pane_collapsed = False
+            # Expand back to previous tool width
+            self._right_tool_container.setVisible(True)
             self.stack.setVisible(True)
-            self._right_pane_title.setVisible(True)
-            self._right_tool_container.setMinimumWidth(320)
-            self._right_tool_container.setMaximumWidth(600)
             tool_w = min(600, max(320, getattr(self, "_saved_right_width", 400)))
             total = self._splitter.width()
             self._splitter.setSizes([max(300, total - tool_w), tool_w])
@@ -446,6 +436,8 @@ class MainWindow(QMainWindow):
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         v = PdfViewerPanel()
+        if hasattr(v, "_pages_header"):
+            v._pages_header.setVisible(False)
         self._viewers.append(v)
         self._viewer_stack.addWidget(v)
         idx = self._tab_bar.addTab(t("viewer.title"))
@@ -563,6 +555,7 @@ class MainWindow(QMainWindow):
                 self.stack.setCurrentIndex(i)
                 self.stack.setVisible(True)
                 self._right_tool_container.setVisible(True)
+                self._right_pane_toggle_btn.setVisible(True)
                 self._tab_container.setVisible(False)
                 self._breadcrumb.setText(f"{t('workspace.title')}  ›  {name}")
                 self._try_auto_load(i)
@@ -658,6 +651,7 @@ class MainWindow(QMainWindow):
             self._current_tool = -1
             self.stack.setVisible(False)
             self._right_tool_container.setVisible(False)
+            self._right_pane_toggle_btn.setVisible(False)
             self._tab_container.setVisible(True)
             self._breadcrumb.setText(t("workspace.title"))
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
@@ -672,17 +666,14 @@ class MainWindow(QMainWindow):
             self._current_tool = row
             self.stack.setCurrentIndex(row)
             self._right_tool_container.setVisible(True)
-            self._right_pane_collapsed = False
             self.stack.setVisible(True)
-            self._right_pane_title.setVisible(True)
-            self._right_pane_title.setText(NAV_ITEMS[row][0])
+            self._right_pane_toggle_btn.setVisible(True)
 
             if row == edit_idx:
                 self.stack.setMinimumWidth(0)
                 self.stack.setMaximumWidth(16777215)
                 self._right_tool_container.setMinimumWidth(0)
                 self._right_tool_container.setMaximumWidth(16777215)
-                self._right_header.setVisible(False)
                 self._tab_container.setVisible(False)
                 self._setup_zoom_bar(True)
                 edit_w = self.stack.widget(edit_idx)
@@ -702,7 +693,6 @@ class MainWindow(QMainWindow):
                 self._viewer.set_crop_preview(None)
                 self._viewer.set_page_crops({})
             else:
-                self._right_header.setVisible(True)
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
                 self._right_tool_container.setMinimumWidth(320)
@@ -1185,9 +1175,6 @@ class MainWindow(QMainWindow):
                 it.setForeground(QColor(nav_color))
         for v in self._viewers:
             v.update_theme(self._dark_mode)
-        pri = TEXT_PRI if self._dark_mode else _LQ
-        if hasattr(self, "_right_toggle_btn"):
-            self._right_toggle_btn.setIcon(qta.icon("fa5s.bars", color=pri))
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if hasattr(w, 'update_theme'):
