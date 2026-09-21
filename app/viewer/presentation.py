@@ -300,7 +300,7 @@ class PresentationWidget(QWidget):
 
     def closeEvent(self, event):
         if isValid(self._overlay):
-            self._overlay.clear_all()
+            self._overlay.clear_all(record_undo=False)
         for tmr in (getattr(self, "_hide_timer", None),
                     getattr(self, "_hud_hide_timer", None)):
             if tmr is not None and isValid(tmr):

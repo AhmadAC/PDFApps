@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -58,6 +57,30 @@ _OUTLINE_OFFSETS = (
     (-1, 0), (1, 0), (0, -1), (0, 1),
     (-1, -1), (1, 1), (-1, 1), (1, -1),
 )
+
+
+def _copy_stroke(s: Stroke) -> Stroke:
+    """Clone a Stroke using native Qt copy constructors rather than pickle."""
+    return Stroke(
+        path=QPainterPath(s.path),
+        color=QColor(s.color),
+        width=s.width,
+        kind=s.kind,
+        points=[QPoint(p) for p in s.points],
+    )
+
+
+def _copy_box(b: TextBox) -> TextBox:
+    """Clone a TextBox safely."""
+    return TextBox(
+        rect=QRectF(b.rect),
+        text=b.text,
+        color=QColor(b.color),
+        font_size=b.font_size,
+        id=b.id,
+        has_stroke=b.has_stroke,
+        has_cloud=b.has_cloud,
+    )
 
 
 def fit_font_size(text: str, rect: QRectF, min_size: float = 8.0, max_size: float = 220.0) -> float:
@@ -382,8 +405,9 @@ class AnnotationOverlay(QWidget):
         self._blink_timer.stop()
         self.update()
 
-    def clear_all(self) -> None:
-        self._push_undo()
+    def clear_all(self, record_undo: bool = True) -> None:
+        if record_undo and (self._strokes.get(self._current_page) or self._text_boxes.get(self._current_page)):
+            self._push_undo()
         self._strokes.clear()
         self._text_boxes.clear()
         self._active_box = None
@@ -446,11 +470,8 @@ class AnnotationOverlay(QWidget):
     def _push_undo(self) -> None:
         page_state = {
             "page": self._current_page,
-            "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
-            "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
-                for b in self._text_boxes.get(self._current_page, [])
-            ],
+            "strokes": [_copy_stroke(s) for s in self._strokes.get(self._current_page, [])],
+            "text_boxes": [_copy_box(b) for b in self._text_boxes.get(self._current_page, [])],
         }
         self._undo_stack.append(page_state)
         if len(self._undo_stack) > 50:
@@ -462,18 +483,15 @@ class AnnotationOverlay(QWidget):
             return False
         current_state = {
             "page": self._current_page,
-            "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
-            "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
-                for b in self._text_boxes.get(self._current_page, [])
-            ],
+            "strokes": [_copy_stroke(s) for s in self._strokes.get(self._current_page, [])],
+            "text_boxes": [_copy_box(b) for b in self._text_boxes.get(self._current_page, [])],
         }
         self._redo_stack.append(current_state)
         prev = self._undo_stack.pop()
         p = prev["page"]
         self._current_page = p
-        self._strokes[p] = prev["strokes"]
-        self._text_boxes[p] = prev["text_boxes"]
+        self._strokes[p] = [_copy_stroke(s) for s in prev["strokes"]]
+        self._text_boxes[p] = [_copy_box(b) for b in prev["text_boxes"]]
         self._active_box = None
         self._clear_text_selection()
         self._blink_timer.stop()
@@ -485,18 +503,15 @@ class AnnotationOverlay(QWidget):
             return False
         current_state = {
             "page": self._current_page,
-            "strokes": copy.deepcopy(self._strokes.get(self._current_page, [])),
-            "text_boxes": [
-                TextBox(QRectF(b.rect), b.text, QColor(b.color), b.font_size, b.id, b.has_stroke, b.has_cloud)
-                for b in self._text_boxes.get(self._current_page, [])
-            ],
+            "strokes": [_copy_stroke(s) for s in self._strokes.get(self._current_page, [])],
+            "text_boxes": [_copy_box(b) for b in self._text_boxes.get(self._current_page, [])],
         }
         self._undo_stack.append(current_state)
         nxt = self._redo_stack.pop()
         p = nxt["page"]
         self._current_page = p
-        self._strokes[p] = nxt["strokes"]
-        self._text_boxes[p] = nxt["text_boxes"]
+        self._strokes[p] = [_copy_stroke(s) for s in nxt["strokes"]]
+        self._text_boxes[p] = [_copy_box(b) for b in nxt["text_boxes"]]
         self._active_box = None
         self._clear_text_selection()
         self._blink_timer.stop()
