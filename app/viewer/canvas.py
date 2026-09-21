@@ -1,7 +1,7 @@
-#app/viewer/canvas.py
+
+# app/viewer/canvas.py
 
 """PDFApps – _SelectCanvas: continuous scroll with lazy rendering via threads."""
-# canvas.py
 from __future__ import annotations
 
 import contextlib
@@ -30,11 +30,12 @@ class _RenderSignals(QObject):
 
 
 class _PageJob(QRunnable):
-    """Renders a fitz page in a background thread with optional rotation."""
+    """Renders a fitz page in a background thread with optional rotation and crop."""
 
     def __init__(self, path: str, password: str, idx: int,
                  zoom: float, dpr: float, gen: int, signals: _RenderSignals,
-                 night_mode: bool = False, rotation: int = 0):
+                 night_mode: bool = False, rotation: int = 0,
+                 crop: tuple[float, float, float, float] | None = None):
         super().__init__()
         self._path       = path
         self._password   = password
@@ -44,6 +45,7 @@ class _PageJob(QRunnable):
         self._gen        = gen
         self._night_mode = night_mode
         self._rotation   = rotation
+        self._crop       = crop
         self.signals     = signals
         self.setAutoDelete(True)
 
@@ -56,6 +58,10 @@ class _PageJob(QRunnable):
             if self._password:
                 doc.authenticate(self._password)
             page = doc[self._idx]
+            if self._crop:
+                crop_rect = fitz.Rect(self._crop) & page.mediabox
+                if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                    page.set_cropbox(crop_rect)
             rot = self._rotation % 360
             rz = self._zoom * self._dpr
             mat = fitz.Matrix(rz, rz)
@@ -101,10 +107,13 @@ class _PageEntry:
 class _SelectCanvas(QWidget):
     """Continuous scroll of all pages with lazy background rendering."""
 
-    zoom_changed  = Signal(int)   # current zoom percentage
-    text_copied   = Signal(str)   # copied text (empty = no text layer)
-    doc_replaced  = Signal(object)  # new fitz.Document after a close/reopen
-    crop_selected = Signal(int, object)  # (page_idx, (x0, y0, x1, y1))
+    zoom_changed        = Signal(int)   # current zoom percentage
+    text_copied         = Signal(str)   # copied text (empty = no text layer)
+    doc_replaced        = Signal(object)  # new fitz.Document after a close/reopen
+    crop_selected       = Signal(int, object)  # (page_idx, (x0, y0, x1, y1))
+    crop_applied        = Signal()
+    crop_undo_requested = Signal()
+    crop_redo_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -118,6 +127,7 @@ class _SelectCanvas(QWidget):
         self._gen         = 0       # generation — invalidates old renders
         self._pending: set[int] = set()
         self._page_rotations: dict[int, int] = {}  # page_idx -> rotation angle preview
+        self._page_crops: dict[int, tuple[float, float, float, float]] = {}  # page_idx -> cropbox
 
         self._crop_mode   = False
         self._crop_preview = None   # dict with {"margins": (t, b, l, r), "targets": set(...)}
@@ -152,6 +162,7 @@ class _SelectCanvas(QWidget):
         self._password = password
         self._zoom_factor = 1.0
         self._page_rotations = {}
+        self._page_crops = {}
         self._crop_mode = False
         self._crop_preview = None
         self._gen     += 1
@@ -163,6 +174,11 @@ class _SelectCanvas(QWidget):
     def set_page_rotations(self, rotations: dict[int, int]):
         """Update in-memory preview rotations for pages without saving."""
         self._page_rotations = {int(k): int(v) % 360 for k, v in rotations.items()}
+        self._invalidate_and_relayout()
+
+    def set_page_crops(self, crops: dict[int, tuple]):
+        """Update in-memory preview cropboxes for pages without saving."""
+        self._page_crops = {int(k): tuple(float(x) for x in v) for k, v in crops.items()}
         self._invalidate_and_relayout()
 
     def set_crop_mode(self, active: bool):
@@ -232,6 +248,7 @@ class _SelectCanvas(QWidget):
         self._gen += 1
         self._pending.clear()
         self._page_rotations = {}
+        self._page_crops = {}
         self._crop_mode = False
         self._crop_preview = None
         if self._doc is not None:
@@ -278,6 +295,7 @@ class _SelectCanvas(QWidget):
     def _layout_and_schedule(self):
         if not self._doc or self._doc.page_count == 0:
             return
+        import fitz
 
         if self._zoom_factor == 1.0:
             from PySide6.QtWidgets import QScrollArea as _SA
@@ -288,6 +306,11 @@ class _SelectCanvas(QWidget):
 
         rot0 = getattr(self, "_page_rotations", {}).get(0, 0) % 360
         r0 = self._doc[0].rect
+        crop0 = getattr(self, "_page_crops", {}).get(0)
+        if crop0:
+            cr0 = fitz.Rect(crop0) & self._doc[0].mediabox
+            if not cr0.is_empty and cr0.width >= 10 and cr0.height >= 10:
+                r0 = cr0
         ref_w = r0.height if rot0 in (90, 270) else r0.width
         self._zoom = (self._base_avail / max(ref_w, 1.0)) * self._zoom_factor
 
@@ -296,6 +319,11 @@ class _SelectCanvas(QWidget):
         max_w   = 0
         for i in range(self._doc.page_count):
             r = self._doc[i].rect
+            crop = getattr(self, "_page_crops", {}).get(i)
+            if crop:
+                cr = fitz.Rect(crop) & self._doc[i].mediabox
+                if not cr.is_empty and cr.width >= 10 and cr.height >= 10:
+                    r = cr
             rot = getattr(self, "_page_rotations", {}).get(i, 0) % 360
             if rot in (90, 270):
                 pw = round(r.height * self._zoom)
@@ -367,10 +395,12 @@ class _SelectCanvas(QWidget):
             if e.pixmap is None and i not in self._pending:
                 self._pending.add(i)
                 rot = getattr(self, "_page_rotations", {}).get(i, 0)
+                crop = getattr(self, "_page_crops", {}).get(i)
                 pool.start(_PageJob(self._path, self._password, i,
                                     self._zoom, dpr, gen, self._signals,
                                     night_mode=self._night_mode,
-                                    rotation=rot))
+                                    rotation=rot,
+                                    crop=crop))
 
     def _on_page_ready(self, gen: int, idx: int, pixmap, words):
         if gen != self._gen:
@@ -594,7 +624,6 @@ class _SelectCanvas(QWidget):
                                txt)
 
         # Search highlights
-        z = self._zoom
         for hi_idx, (pg_idx, fr) in enumerate(self._search_highlights):
             if pg_idx < first or pg_idx > last:
                 continue
@@ -632,17 +661,18 @@ class _SelectCanvas(QWidget):
             margins = self._crop_preview.get("margins", (0, 0, 0, 0))
             targets = self._crop_preview.get("targets")
             top_m, bot_m, left_m, right_m = margins
-            for i in range(first, last + 1):
-                if targets is not None and i not in targets:
-                    continue
-                e = self._entries[i]
-                x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
-                cx0 = x + int(left_m * z)
-                cy0 = e.y_off + int(top_m * z)
-                cx1 = x + e.w - int(right_m * z)
-                cy1 = e.y_off + e.h - int(bot_m * z)
-                if cx1 > cx0 and cy1 > cy0:
-                    self._draw_crop_box(p, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
+            if any(m > 0 for m in margins):
+                for i in range(first, last + 1):
+                    if targets is not None and i not in targets:
+                        continue
+                    e = self._entries[i]
+                    x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
+                    cx0 = x + int(left_m * z)
+                    cy0 = e.y_off + int(top_m * z)
+                    cx1 = x + e.w - int(right_m * z)
+                    cy1 = e.y_off + e.h - int(bot_m * z)
+                    if cx1 > cx0 and cy1 > cy0:
+                        self._draw_crop_box(p, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
 
     # ── Mouse ─────────────────────────────────────────────────────────────────
 
@@ -678,6 +708,13 @@ class _SelectCanvas(QWidget):
             self._compute_selection()
             self.update()
             e.accept()
+
+    def mouseDoubleClickEvent(self, e):
+        if self._crop_mode and e.button() == Qt.MouseButton.LeftButton:
+            self.crop_applied.emit()
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
 
     def mouseReleaseEvent(self, e):
         if self._crop_mode and self._crop_drag_start:
@@ -746,6 +783,22 @@ class _SelectCanvas(QWidget):
     # ── Keyboard ───────────────────────────────────────────────────────────────
 
     def keyPressEvent(self, e):
+        if self._crop_mode and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.crop_applied.emit()
+            e.accept()
+            return
+        if self._crop_mode and (e.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if e.key() == Qt.Key.Key_Z:
+                if e.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self.crop_redo_requested.emit()
+                else:
+                    self.crop_undo_requested.emit()
+                e.accept()
+                return
+            elif e.key() == Qt.Key.Key_Y:
+                self.crop_redo_requested.emit()
+                e.accept()
+                return
         if (e.modifiers() & Qt.KeyboardModifier.ControlModifier
                 and e.key() == Qt.Key.Key_C and self._sel_text):
             QApplication.clipboard().setText(self._sel_text)
@@ -872,5 +925,3 @@ class _SelectCanvas(QWidget):
             t("viewer.copy_chars", n=len(self._sel_text)))
         act.triggered.connect(lambda: QApplication.clipboard().setText(self._sel_text))
         menu.exec(e.globalPos())
-
-

@@ -1,3 +1,4 @@
+# app/viewer/thumbnails.py
 """PDFApps – PDF page thumbnails panel for the viewer sidebar.
 # Thumbnails.py
 """
@@ -77,7 +78,7 @@ HIDDEN_WINDOW = 12
 
 
 class ThumbnailWorker(QThread):
-    """Render a batch of page thumbnails in a background thread with rotation support."""
+    """Render a batch of page thumbnails in a background thread with rotation and crop support."""
 
     thumbnail_ready = Signal(int, QImage, int)
     render_failed = Signal(int, str)
@@ -85,6 +86,7 @@ class ThumbnailWorker(QThread):
     def __init__(self, doc_path: str, page_indices: list[int],
                  password: str = "", epoch: int = 0, dpr: float = 1.0,
                  rotations: dict[int, int] | None = None,
+                 crops: dict[int, tuple[float, float, float, float]] | None = None,
                  parent=None) -> None:
         super().__init__(parent)
         self._doc_path = doc_path
@@ -93,6 +95,7 @@ class ThumbnailWorker(QThread):
         self._dpr = float(dpr) if dpr and dpr > 0 else 1.0
         self._epoch = epoch
         self._rotations = dict(rotations) if rotations else {}
+        self._crops = dict(crops) if crops else {}
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -127,6 +130,11 @@ class ThumbnailWorker(QThread):
                         idx + 1, page_count,
                     )
                     page = doc[idx]
+                    if self._crops and idx in self._crops:
+                        crop_rect = fitz.Rect(self._crops[idx]) & page.mediabox
+                        if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                            page.set_cropbox(crop_rect)
+
                     rot = self._rotations.get(idx, 0) % 360
 
                     rect = page.rect
@@ -349,6 +357,7 @@ class ThumbnailPanel(QWidget):
         self._doc_path = ""
         self._password = ""
         self._rotations: dict[int, int] = {}
+        self._crops: dict[int, tuple[float, float, float, float]] = {}
         self._workers: list[ThumbnailWorker] = []
         self._inflight: set[int] = set()
         self._anchor = 0
@@ -394,6 +403,7 @@ class ThumbnailPanel(QWidget):
         self._doc_path = doc_path
         self._password = password or ""
         self._rotations = {}
+        self._crops = {}
         self._stop_all_workers()
         self._epoch += 1
         self._inflight.clear()
@@ -415,10 +425,19 @@ class ThumbnailPanel(QWidget):
         self._inflight.clear()
         self._render_visible()
 
+    def set_page_crops(self, crops: dict[int, tuple[float, float, float, float]]) -> None:
+        """Update preview crops in memory without saving to disk."""
+        self._crops = {int(k): tuple(float(x) for x in v) for k, v in crops.items()}
+        self._model.clear_cache()
+        self._stop_all_workers()
+        self._inflight.clear()
+        self._render_visible()
+
     def clear(self) -> None:
         self._doc_path = ""
         self._password = ""
         self._rotations = {}
+        self._crops = {}
         self._stop_all_workers()
         self._epoch += 1
         self._inflight.clear()
@@ -502,7 +521,7 @@ class ThumbnailPanel(QWidget):
             dpr = 1.0
         worker = ThumbnailWorker(
             self._doc_path, page_indices, self._password, self._epoch,
-            dpr, rotations=self._rotations, parent=self)
+            dpr, rotations=self._rotations, crops=self._crops, parent=self)
         worker.thumbnail_ready.connect(
             self._on_image_ready,
             Qt.ConnectionType.QueuedConnection,

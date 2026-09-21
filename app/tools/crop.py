@@ -1,3 +1,6 @@
+
+# app/tools/crop.py
+
 """PDFApps – TabCortar: crop PDF pages tool."""
 import os
 
@@ -7,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QPushButton, QLabel, QFileDialog, QMessageBox,
     QVBoxLayout,
 )
+from PySide6.QtGui import QShortcut, QKeySequence
 import qtawesome as qta
 import fitz
 
@@ -45,9 +49,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "Trim 10%",
         "tool.crop.trim_half_in": "Trim 0.5 in",
         "tool.crop.draw_btn": "✂  Drag Crop Box on Page",
-        "tool.crop.drag_hint": "💡 Click the button above to drag a selection box directly on the page.",
+        "tool.crop.apply_preview": "✂  Crop / Preview (Enter)",
+        "tool.crop.drag_hint": "💡 Drag a box on the page or enter margins. Press Enter or click Crop to preview. Use Ctrl+Z to undo.",
         "tool.crop.done": "Cropped PDF saved at:\n{path}",
         "tool.crop.status.done": "✔ Cropped → {name}",
+        "tool.crop.status.preview_applied": "✔ Crop preview applied (Ctrl+Z to undo)",
+        "tool.crop.status.undone": "↩ Crop undone (Ctrl+Y to redo)",
+        "tool.crop.status.redone": "↪ Crop redone",
         "tool.crop.invalid_margins": "The crop margins exceed the page dimensions.",
         "tool.crop.no_pages": "No pages selected to crop.",
     },
@@ -77,9 +85,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "Cortar 10%",
         "tool.crop.trim_half_in": "Cortar 0.5 in",
         "tool.crop.draw_btn": "✂  Desenhar Caixa de Recorte",
-        "tool.crop.drag_hint": "💡 Clica no botão acima e arrasta uma caixa diretamente na página.",
+        "tool.crop.apply_preview": "✂  Recortar / Pré-visualizar (Enter)",
+        "tool.crop.drag_hint": "💡 Arrasta uma caixa na página ou insere margens. Prime Enter ou clica em Recortar para ver o resultado. Usa Ctrl+Z para anular.",
         "tool.crop.done": "PDF recortado guardado em:\n{path}",
         "tool.crop.status.done": "✔ Recortado → {name}",
+        "tool.crop.status.preview_applied": "✔ Pré-visualização de recorte aplicada (Ctrl+Z para anular)",
+        "tool.crop.status.undone": "↩ Recorte anulado (Ctrl+Y para refazer)",
+        "tool.crop.status.redone": "↪ Recorte refeito",
         "tool.crop.invalid_margins": "As margens de recorte excedem as dimensões da página.",
         "tool.crop.no_pages": "Nenhuma página selecionada para recortar.",
     },
@@ -109,9 +121,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "Cortar 10%",
         "tool.crop.trim_half_in": "Cortar 0.5 in",
         "tool.crop.draw_btn": "✂  Dibujar Cuadro de Recorte",
-        "tool.crop.drag_hint": "💡 Haz clic arriba y arrastra un cuadro directamente en la página.",
+        "tool.crop.apply_preview": "✂  Recortar / Vista previa (Enter)",
+        "tool.crop.drag_hint": "💡 Arrastra un cuadro en la página o introduce márgenes. Pulsa Enter o haz clic en Recortar para previsualizar. Usa Ctrl+Z para deshacer.",
         "tool.crop.done": "PDF recortado guardado en:\n{path}",
         "tool.crop.status.done": "✔ Recortado → {name}",
+        "tool.crop.status.preview_applied": "✔ Vista previa de recorte aplicada (Ctrl+Z para deshacer)",
+        "tool.crop.status.undone": "↩ Recorte deshecho (Ctrl+Y para rehacer)",
+        "tool.crop.status.redone": "↪ Recorte rehecho",
         "tool.crop.invalid_margins": "Los márgenes de recorte exceden las dimensiones de la página.",
         "tool.crop.no_pages": "No se han seleccionado páginas para recortar.",
     },
@@ -141,9 +157,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "Rogner 10%",
         "tool.crop.trim_half_in": "Rogner 0.5 in",
         "tool.crop.draw_btn": "✂  Dessiner la Zone de Recadrage",
-        "tool.crop.drag_hint": "💡 Cliquez sur le bouton ci-dessus et glissez directement sur la page.",
+        "tool.crop.apply_preview": "✂  Recadrer / Aperçu (Entrée)",
+        "tool.crop.drag_hint": "💡 Glissez un cadre sur la page ou saisissez des marges. Appuyez sur Entrée ou cliquez sur Recadrer pour prévisualiser. Utilisez Ctrl+Z pour annuler.",
         "tool.crop.done": "PDF recadré enregistré sous :\n{path}",
         "tool.crop.status.done": "✔ Recadré → {name}",
+        "tool.crop.status.preview_applied": "✔ Aperçu du recadrage appliqué (Ctrl+Z pour annuler)",
+        "tool.crop.status.undone": "↩ Recadrage annulé (Ctrl+Y pour rétablir)",
+        "tool.crop.status.redone": "↪ Recadrage rétabli",
         "tool.crop.invalid_margins": "Les marges de recadrage dépassent les dimensions de la page.",
         "tool.crop.no_pages": "Aucune page sélectionnée pour le recadrage.",
     },
@@ -173,9 +193,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "10% beschneiden",
         "tool.crop.trim_half_in": "0.5 in beschneiden",
         "tool.crop.draw_btn": "✂  Zuschnittbereich auf Seite ziehen",
-        "tool.crop.drag_hint": "💡 Klicken Sie oben und ziehen Sie einen Rahmen direkt auf der Seite.",
+        "tool.crop.apply_preview": "✂  Zuschneiden / Vorschau (Eingabe)",
+        "tool.crop.drag_hint": "💡 Rahmen auf der Seite ziehen oder Ränder eingeben. Eingabe drücken oder Zuschneiden klicken für Vorschau. Strg+Z zum Rückgängigmachen.",
         "tool.crop.done": "Zugeschnittenes PDF gespeichert unter:\n{path}",
         "tool.crop.status.done": "✔ Zugeschnitten → {name}",
+        "tool.crop.status.preview_applied": "✔ Zuschnitt-Vorschau angewendet (Strg+Z zum Rückgängigmachen)",
+        "tool.crop.status.undone": "↩ Zuschnitt rückgängig gemacht (Strg+Y zum Wiederholen)",
+        "tool.crop.status.redone": "↪ Zuschnitt wiederholt",
         "tool.crop.invalid_margins": "Die Schnittränder überschreiten die Seitenabmessungen.",
         "tool.crop.no_pages": "Keine Seiten zum Zuschneiden ausgewählt.",
     },
@@ -205,9 +229,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "裁剪 10%",
         "tool.crop.trim_half_in": "裁剪 0.5 英寸",
         "tool.crop.draw_btn": "✂  在页面上拖动裁剪框",
-        "tool.crop.drag_hint": "💡 点击上方按钮后直接在页面上拖拽拉框裁剪。",
+        "tool.crop.apply_preview": "✂  裁剪 / 预览 (Enter)",
+        "tool.crop.drag_hint": "💡 在页面上拖动选框或输入边距。按 Enter 或点击裁剪以预览效果。使用 Ctrl+Z 撤销。",
         "tool.crop.done": "已裁剪的 PDF 保存至：\n{path}",
         "tool.crop.status.done": "✔ 已裁剪 → {name}",
+        "tool.crop.status.preview_applied": "✔ 已应用裁剪预览（按 Ctrl+Z 撤销）",
+        "tool.crop.status.undone": "↩ 已撤销裁剪（按 Ctrl+Y 重做）",
+        "tool.crop.status.redone": "↪ 已重做裁剪",
         "tool.crop.invalid_margins": "裁剪边距超过了页面尺寸。",
         "tool.crop.no_pages": "未选择要裁剪的页面。",
     },
@@ -237,9 +265,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "Taglia 10%",
         "tool.crop.trim_half_in": "Taglia 0.5 in",
         "tool.crop.draw_btn": "✂  Disegna Riquadro sulla Pagina",
-        "tool.crop.drag_hint": "💡 Clicca sul pulsante sopra e trascina direttamente sulla pagina.",
+        "tool.crop.apply_preview": "✂  Ritaglia / Anteprima (Invio)",
+        "tool.crop.drag_hint": "💡 Trascina un riquadro sulla pagina o inserisci i margini. Premi Invio o clicca Ritaglia per l'anteprima. Usa Ctrl+Z per annullare.",
         "tool.crop.done": "PDF ritagliato salvato in:\n{path}",
         "tool.crop.status.done": "✔ Ritagliato → {name}",
+        "tool.crop.status.preview_applied": "✔ Anteprima ritaglio applicata (Ctrl+Z per annullare)",
+        "tool.crop.status.undone": "↩ Ritaglio annullato (Ctrl+Y per ripristinare)",
+        "tool.crop.status.redone": "↪ Ritaglio ripristinato",
         "tool.crop.invalid_margins": "I margini di ritaglio superano le dimensioni della pagina.",
         "tool.crop.no_pages": "Nessuna pagina selezionata da ritagliare.",
     },
@@ -269,9 +301,13 @@ _CROP_I18N = {
         "tool.crop.trim_10": "10% bijsnijden",
         "tool.crop.trim_half_in": "0.5 in bijsnijden",
         "tool.crop.draw_btn": "✂  Bijsnijdkader op Pagina Slepen",
-        "tool.crop.drag_hint": "💡 Klik op de knop hierboven en sleep direct een kader op de pagina.",
+        "tool.crop.apply_preview": "✂  Bijsnijden / Voorbeeld (Enter)",
+        "tool.crop.drag_hint": "💡 Sleep een kader op de pagina of voer marges in. Druk op Enter of klik op Bijsnijden voor voorbeeld. Gebruik Ctrl+Z om te herstellen.",
         "tool.crop.done": "Bijgesneden PDF opgeslagen op:\n{path}",
         "tool.crop.status.done": "✔ Bijgesneden → {name}",
+        "tool.crop.status.preview_applied": "✔ Bijsnijdvoorbeeld toegepast (Ctrl+Z om ongedaan te maken)",
+        "tool.crop.status.undone": "↩ Bijsnijden ongedaan gemaakt (Ctrl+Y om opnieuw uit te voeren)",
+        "tool.crop.status.redone": "↪ Bijsnijden opnieuw uitgevoerd",
         "tool.crop.invalid_margins": "De bijsnijdmarges overschrijden de pagina-afmetingen.",
         "tool.crop.no_pages": "Geen pagina's geselecteerd om bij te snijden.",
     },
@@ -283,10 +319,11 @@ for _lang, _entries in _CROP_I18N.items():
 
 
 class TabCortar(BasePage):
-    """Crop PDF pages with Foxit-style margin controls, range selection, and presets."""
+    """Crop PDF pages with Foxit-style margin controls, range selection, live preview and undo/redo."""
 
     crop_changed = Signal(object)
     crop_mode_toggled = Signal(bool)
+    crops_changed = Signal(object)
 
     def __init__(self, status_fn):
         super().__init__("fa5s.crop-alt", t("tool.crop.name"),
@@ -297,6 +334,10 @@ class TabCortar(BasePage):
         self._ref_width = 595.0
         self._ref_height = 842.0
         self._updating = False
+
+        self._applied_crops: dict[int, tuple[float, float, float, float]] = {}
+        self._undo_stack: list[dict[int, tuple[float, float, float, float]]] = []
+        self._redo_stack: list[dict[int, tuple[float, float, float, float]]] = []
 
         f = self._form
 
@@ -401,6 +442,38 @@ class TabCortar(BasePage):
         self.lbl_dimensions.setStyleSheet("font-weight: 600; color: #14B8A6; padding: 2px;")
         v_margins.addWidget(self.lbl_dimensions)
 
+        # Apply preview button
+        self.btn_apply_crop = QPushButton(t("tool.crop.apply_preview"))
+        self.btn_apply_crop.setIcon(qta.icon("fa5s.check", color="#FFFFFF"))
+        self.btn_apply_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_apply_crop.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: white; font-weight: bold; padding: 8px 14px; border-radius: 6px; border: none; font-size: 11pt; }}"
+            f"QPushButton:hover {{ background: #0D9488; }}"
+            f"QPushButton:pressed {{ background: #0F766E; }}"
+        )
+        self.btn_apply_crop.clicked.connect(self.apply_crop_preview)
+        v_margins.addWidget(self.btn_apply_crop)
+
+        # Undo / Redo buttons
+        undo_redo_row = QHBoxLayout()
+        undo_redo_row.setSpacing(6)
+
+        self.btn_undo = QPushButton("↶ " + t("btn.undo"))
+        self.btn_undo.setToolTip("Ctrl+Z")
+        self.btn_undo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_undo.clicked.connect(self._undo)
+        self.btn_undo.setEnabled(False)
+
+        self.btn_redo = QPushButton("↷ " + t("btn.redo"))
+        self.btn_redo.setToolTip("Ctrl+Y")
+        self.btn_redo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_redo.clicked.connect(self._redo)
+        self.btn_redo.setEnabled(False)
+
+        undo_redo_row.addWidget(self.btn_undo)
+        undo_redo_row.addWidget(self.btn_redo)
+        v_margins.addLayout(undo_redo_row)
+
         # Quick preset buttons (Foxit style)
         btn_presets = QHBoxLayout()
         btn_presets.setSpacing(4)
@@ -440,6 +513,15 @@ class TabCortar(BasePage):
         sec_out.setVisible(False)
         self.drop_out.setVisible(False)
 
+        # Keyboard shortcuts within the tool panel
+        sc_enter1 = QShortcut(QKeySequence(Qt.Key.Key_Return), self, self.apply_crop_preview)
+        sc_enter2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self, self.apply_crop_preview)
+        sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
+        sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._redo)
+        sc_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
+        for sc in (sc_enter1, sc_enter2, sc_undo, sc_redo1, sc_redo2):
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
     def _on_draw_btn_clicked(self):
         active = self.btn_draw_crop.isChecked()
         self.crop_mode_toggled.emit(active)
@@ -450,6 +532,14 @@ class TabCortar(BasePage):
         self._on_controls_changed()
 
     def _preset_reset(self):
+        if self._applied_crops:
+            self._undo_stack.append(dict(self._applied_crops))
+            self._redo_stack.clear()
+            self._applied_crops = {}
+            self._on_crop_history_changed()
+            self._status(t("tool.crop.reset"))
+            return
+
         self._updating = True
         self.spin_top.setValue(0)
         self.spin_bottom.setValue(0)
@@ -536,6 +626,119 @@ class TabCortar(BasePage):
             "ref_page": self.spin_current_page.value() - 1,
         })
 
+    def apply_crop_preview(self):
+        """Commit the current margin controls into the applied in-memory crop state."""
+        pdf_path = self.drop_in.path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            win = self.window()
+            viewer = getattr(win, "_viewer", None)
+            if viewer and viewer.current_path():
+                pdf_path = viewer.current_path()
+        if not pdf_path or not os.path.isfile(pdf_path):
+            return
+
+        targets = self._get_target_pages()
+        if not targets:
+            return
+
+        top_m = self.spin_top.value()
+        bot_m = self.spin_bottom.value()
+        left_m = self.spin_left.value()
+        right_m = self.spin_right.value()
+
+        if top_m == 0 and bot_m == 0 and left_m == 0 and right_m == 0:
+            return
+
+        doc = None
+        try:
+            doc = fitz.open(pdf_path)
+            new_crops = dict(self._applied_crops)
+            any_changed = False
+            for idx in targets:
+                if idx < 0 or idx >= doc.page_count:
+                    continue
+                page = doc[idx]
+                if idx in self._applied_crops:
+                    base_x0, base_y0, base_x1, base_y1 = self._applied_crops[idx]
+                else:
+                    base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
+
+                new_x0 = base_x0 + left_m
+                new_y0 = base_y0 + top_m
+                new_x1 = base_x1 - right_m
+                new_y1 = base_y1 - bot_m
+
+                if (new_x1 - new_x0 < 10) or (new_y1 - new_y0 < 10):
+                    continue
+
+                crop_rect = fitz.Rect(new_x0, new_y0, new_x1, new_y1) & page.mediabox
+                if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                    new_crops[idx] = (crop_rect.x0, crop_rect.y0, crop_rect.x1, crop_rect.y1)
+                    any_changed = True
+
+            if not any_changed:
+                QMessageBox.warning(self, t("msg.warning"), t("tool.crop.invalid_margins"))
+                return
+
+            self._undo_stack.append(dict(self._applied_crops))
+            self._redo_stack.clear()
+            self._applied_crops = new_crops
+
+            self._on_crop_history_changed()
+            self._status(t("tool.crop.status.preview_applied"))
+        except Exception as exc:
+            show_error(self, exc)
+        finally:
+            if doc is not None:
+                doc.close()
+
+    def _undo(self):
+        if not self._undo_stack:
+            self._status("ℹ  " + t("edit.undo_tip") + ": " + t("recent.empty"))
+            return
+        self._redo_stack.append(dict(self._applied_crops))
+        self._applied_crops = self._undo_stack.pop()
+        self._on_crop_history_changed()
+        self._status(t("tool.crop.status.undone"))
+
+    def _redo(self):
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(dict(self._applied_crops))
+        self._applied_crops = self._redo_stack.pop()
+        self._on_crop_history_changed()
+        self._status(t("tool.crop.status.redone"))
+
+    def _on_crop_history_changed(self):
+        pdf_path = self.drop_in.path()
+        ref_idx = max(0, min(self.spin_current_page.value() - 1, self._page_count - 1))
+        if ref_idx in self._applied_crops:
+            c = self._applied_crops[ref_idx]
+            self._ref_width = c[2] - c[0]
+            self._ref_height = c[3] - c[1]
+        elif pdf_path and os.path.isfile(pdf_path):
+            try:
+                doc = fitz.open(pdf_path)
+                r = doc[ref_idx].rect
+                self._ref_width = r.width
+                self._ref_height = r.height
+                doc.close()
+            except Exception:
+                pass
+
+        self._updating = True
+        self.spin_top.setValue(0)
+        self.spin_bottom.setValue(0)
+        self.spin_left.setValue(0)
+        self.spin_right.setValue(0)
+        self._updating = False
+
+        self._update_dim_label()
+        self.crop_changed.emit(None)
+        self.crops_changed.emit(self._applied_crops)
+        self.btn_undo.setEnabled(len(self._undo_stack) > 0)
+        self.btn_redo.setEnabled(len(self._redo_stack) > 0)
+
     def on_canvas_crop_selected(self, page_idx: int, rect: tuple):
         """Called when the user drags a rubber-band rectangle on the viewer canvas."""
         p_x0, p_y0, p_x1, p_y1 = rect
@@ -544,8 +747,13 @@ class TabCortar(BasePage):
             try:
                 doc = fitz.open(doc_path)
                 p_rect = doc[page_idx].rect
-                self._ref_width = p_rect.width
-                self._ref_height = p_rect.height
+                if page_idx in self._applied_crops:
+                    c = self._applied_crops[page_idx]
+                    self._ref_width = c[2] - c[0]
+                    self._ref_height = c[3] - c[1]
+                else:
+                    self._ref_width = p_rect.width
+                    self._ref_height = p_rect.height
                 doc.close()
             except Exception:
                 pass
@@ -583,6 +791,13 @@ class TabCortar(BasePage):
         if not self.drop_out.path():
             base, ext = os.path.splitext(p)
             self.drop_out.set_path(base + "_cropped" + ext)
+
+        self._applied_crops = {}
+        self._undo_stack = []
+        self._redo_stack = []
+        self.btn_undo.setEnabled(False)
+        self.btn_redo.setEnabled(False)
+
         try:
             doc = self._open_fitz(p)
             self._page_count = doc.page_count
@@ -606,6 +821,7 @@ class TabCortar(BasePage):
         self.lbl_info.setText(t("edit.status.pages", n=self._page_count))
         self._update_dim_label()
         self._emit_preview()
+        self.crops_changed.emit(self._applied_crops)
 
     def auto_load(self, path: str):
         if path:
@@ -615,18 +831,15 @@ class TabCortar(BasePage):
         super().update_theme(dark)
         pri = TEXT_PRI if dark else _LQ
         self.btn_reset.setStyleSheet(f"color: {pri};")
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.setStyleSheet(f"color: {pri};")
+        if hasattr(self, "btn_redo"):
+            self.btn_redo.setStyleSheet(f"color: {pri};")
 
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
-            return
-        targets = self._get_target_pages()
-        if not targets:
-            QMessageBox.warning(self, t("msg.warning"), t("tool.crop.no_pages"))
-            return
-        out_path = self._resolve_output_file(self.drop_out, pdf_path)
-        if not out_path:
             return
 
         top_m = self.spin_top.value()
@@ -634,22 +847,49 @@ class TabCortar(BasePage):
         left_m = self.spin_left.value()
         right_m = self.spin_right.value()
 
+        crops_to_save = dict(self._applied_crops)
+
+        if top_m > 0 or bot_m > 0 or left_m > 0 or right_m > 0:
+            targets = self._get_target_pages()
+            doc_probe = None
+            try:
+                doc_probe = self._open_fitz(pdf_path)
+                for idx in targets:
+                    if idx < 0 or idx >= doc_probe.page_count:
+                        continue
+                    page = doc_probe[idx]
+                    if idx in crops_to_save:
+                        base_x0, base_y0, base_x1, base_y1 = crops_to_save[idx]
+                    else:
+                        base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
+                    new_x0 = base_x0 + left_m
+                    new_y0 = base_y0 + top_m
+                    new_x1 = base_x1 - right_m
+                    new_y1 = base_y1 - bot_m
+                    crop_rect = fitz.Rect(new_x0, new_y0, new_x1, new_y1) & page.mediabox
+                    if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                        crops_to_save[idx] = (crop_rect.x0, crop_rect.y0, crop_rect.x1, crop_rect.y1)
+            finally:
+                if doc_probe is not None:
+                    doc_probe.close()
+
+        if not crops_to_save:
+            QMessageBox.warning(self, t("msg.warning"), t("tool.crop.no_pages"))
+            return
+
+        out_path = self._resolve_output_file(self.drop_out, pdf_path)
+        if not out_path:
+            return
+
         try:
             doc = self._open_fitz(pdf_path)
             try:
-                for idx in targets:
-                    page = doc[idx]
-                    rect = page.rect
-                    new_x0 = rect.x0 + left_m
-                    new_y0 = rect.y0 + top_m
-                    new_x1 = rect.x1 - right_m
-                    new_y1 = rect.y1 - bot_m
-                    if (new_x1 - new_x0 < 10) or (new_y1 - new_y0 < 10):
-                        QMessageBox.warning(self, t("msg.warning"), t("tool.crop.invalid_margins"))
-                        return
-                    crop_rect = fitz.Rect(new_x0, new_y0, new_x1, new_y1)
-                    crop_rect = crop_rect & page.mediabox
-                    page.set_cropbox(crop_rect)
+                for idx, crop_tuple in crops_to_save.items():
+                    if 0 <= idx < doc.page_count:
+                        page = doc[idx]
+                        crop_rect = fitz.Rect(crop_tuple) & page.mediabox
+                        if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                            page.set_cropbox(crop_rect)
 
                 self._atomic_pdf_write(
                     doc, out_path, sources=[pdf_path],

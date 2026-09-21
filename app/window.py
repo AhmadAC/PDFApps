@@ -1,3 +1,5 @@
+# app/window.py
+
 """PDFApps – MainWindow: application main window."""
 import contextlib
 import os
@@ -15,7 +17,7 @@ import qtawesome as qta
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP, BORDER
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
-from app.utils import resource_path, _make_palette
+from app.utils import resource_path, _make_palette, show_error
 from app.widgets import DropFileEdit, MultiDropWidget
 from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
@@ -309,6 +311,7 @@ class MainWindow(QMainWindow):
                 w.rotations_changed.connect(self._on_rotations_changed)
             if isinstance(w, TabCortar):
                 w.crop_changed.connect(self._on_crop_changed)
+                w.crops_changed.connect(self._on_crops_changed)
                 w.crop_mode_toggled.connect(self._on_crop_mode_toggled)
 
         self._pipeline_state: dict[int, dict] = {}
@@ -357,6 +360,9 @@ class MainWindow(QMainWindow):
     def _on_crop_changed(self, crop_data: dict):
         self._viewer.set_crop_preview(crop_data)
 
+    def _on_crops_changed(self, crops: dict):
+        self._viewer.set_page_crops(crops)
+
     def _on_crop_mode_toggled(self, active: bool):
         if self._current_tool == self._crop_tool_idx():
             self._viewer.set_crop_mode(active)
@@ -365,6 +371,21 @@ class MainWindow(QMainWindow):
         if self._current_tool == self._crop_tool_idx():
             crop_w = self.stack.widget(self._crop_tool_idx())
             crop_w.on_canvas_crop_selected(page_idx, rect)
+
+    def _on_viewer_crop_applied(self):
+        if self._current_tool == self._crop_tool_idx():
+            crop_w = self.stack.widget(self._crop_tool_idx())
+            crop_w.apply_crop_preview()
+
+    def _on_viewer_crop_undo(self):
+        if self._current_tool == self._crop_tool_idx():
+            crop_w = self.stack.widget(self._crop_tool_idx())
+            crop_w._undo()
+
+    def _on_viewer_crop_redo(self):
+        if self._current_tool == self._crop_tool_idx():
+            crop_w = self.stack.widget(self._crop_tool_idx())
+            crop_w._redo()
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         v = PdfViewerPanel()
@@ -376,6 +397,9 @@ class MainWindow(QMainWindow):
 
         v._canvas_scroll.verticalScrollBar().valueChanged.connect(lambda _: self._update_page_nav())
         v.crop_selected.connect(self._on_viewer_crop_selected)
+        v.crop_applied.connect(self._on_viewer_crop_applied)
+        v.crop_undo_requested.connect(self._on_viewer_crop_undo)
+        v.crop_redo_requested.connect(self._on_viewer_crop_redo)
 
         original_load = v.load
         def _make_wrapped(viewer, orig):
@@ -419,10 +443,12 @@ class MainWindow(QMainWindow):
             crop_w = self.stack.widget(self._crop_tool_idx())
             self._viewer.set_crop_mode(crop_w.btn_draw_crop.isChecked())
             crop_w._emit_preview()
+            self._viewer.set_page_crops(crop_w._applied_crops)
         else:
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
+            self._viewer.set_page_crops({})
         self._refresh_viewer_top_buttons()
 
     def _close_tab(self, idx: int):
@@ -581,6 +607,7 @@ class MainWindow(QMainWindow):
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
+            self._viewer.set_page_crops({})
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
@@ -607,12 +634,11 @@ class MainWindow(QMainWindow):
                 self._viewer.set_page_rotations({})
                 self._viewer.set_crop_mode(False)
                 self._viewer.set_crop_preview(None)
+                self._viewer.set_page_crops({})
             else:
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
                 self._tab_container.setVisible(True)
-                self._undo_top_btn.setVisible(False)
-                self._redo_top_btn.setVisible(False)
                 total = self._splitter.width()
                 tool_w = max(380, min(450, total // 3))
                 self._splitter.setSizes([total - tool_w, tool_w])
@@ -629,9 +655,24 @@ class MainWindow(QMainWindow):
                     active = crop_w.btn_draw_crop.isChecked()
                     self._viewer.set_crop_mode(active)
                     crop_w._emit_preview()
+                    self._viewer.set_page_crops(crop_w._applied_crops)
+                    self._undo_top_btn.setVisible(True)
+                    self._redo_top_btn.setVisible(True)
+                    prev = getattr(self, "_undo_redo_handlers", None)
+                    if prev is not None:
+                        try: self._undo_top_btn.clicked.disconnect(prev[0])
+                        except (RuntimeError, TypeError): pass
+                        try: self._redo_top_btn.clicked.disconnect(prev[1])
+                        except (RuntimeError, TypeError): pass
+                    self._undo_top_btn.clicked.connect(crop_w._undo)
+                    self._redo_top_btn.clicked.connect(crop_w._redo)
+                    self._undo_redo_handlers = (crop_w._undo, crop_w._redo)
                 else:
                     self._viewer.set_crop_mode(False)
                     self._viewer.set_crop_preview(None)
+                    self._viewer.set_page_crops({})
+                    self._undo_top_btn.setVisible(False)
+                    self._redo_top_btn.setVisible(False)
 
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)
@@ -1050,7 +1091,6 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         style = STYLE if self._dark_mode else STYLE_LIGHT
         nav_color = TEXT_SEC if self._dark_mode else _LQ
-        bar_color = TEXT_PRI if self._dark_mode else _LQ
         self._qapp.setPalette(_make_palette(self._dark_mode))
         self._qapp.setStyleSheet(style)
         self._workspace_bar.update_theme(self._dark_mode, self._sidebar_collapsed)
