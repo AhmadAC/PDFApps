@@ -30,7 +30,7 @@ _PALETTE_HOTKEYS = {
 
 class PresentationWidget(QWidget):
     """Fullscreen single-page PDF viewer with keyboard navigation and a
-    PowerPoint-style annotation HUD (pen / highlighter / eraser / laser).
+    PowerPoint/Edge-style annotation HUD (pen / highlighter / eraser / type / laser).
     Annotations are session-scoped — kept per page while the window lives,
     discarded on close."""
 
@@ -46,19 +46,11 @@ class PresentationWidget(QWidget):
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
 
-        # Hold the document open for the lifetime of the widget — the
-        # previous version reopened (+ optionally authenticated) the
-        # PDF on every Escape/arrow key, which stalled navigation for
-        # 100–500 ms on multi-MB or encrypted files. Failures here
-        # propagate to the caller (`_start_presentation`) so the user
-        # still sees a friendly error dialog.
         import fitz
         self._doc = fitz.open(self._path)
         if self._password:
             self._doc.authenticate(self._password)
 
-        # All child widgets and timers must exist before setWindowState
-        # because it triggers resizeEvent immediately.
         self._counter = QLabel(self)
         self._counter.setStyleSheet(
             "background: rgba(0,0,0,0.6); color: white; "
@@ -155,16 +147,13 @@ class PresentationWidget(QWidget):
             return
         self._hud_last_shown_ms = now
         self._hud_hide_timer.start(_HUD_AUTO_HIDE_MS)
-        # Show the system cursor while the HUD is up so the user can aim at
-        # buttons. Drawing tools install their own cursor through the
-        # overlay; pointer mode uses the default arrow.
-        if self._overlay.tool() == ToolMode.POINTER:
+        if self._overlay.tool() in (int(ToolMode.POINTER), int(ToolMode.TYPE)):
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _on_tool_selected(self, mode: int):
         self._overlay.set_tool(int(mode))
         self._hud.set_active_tool(int(mode))
-        if int(mode) == int(ToolMode.POINTER):
+        if int(mode) in (int(ToolMode.POINTER), int(ToolMode.TYPE)):
             self.setCursor(Qt.CursorShape.ArrowCursor
                            if self._hud.isVisible()
                            else Qt.CursorShape.BlankCursor)
@@ -196,13 +185,32 @@ class PresentationWidget(QWidget):
 
     def keyPressEvent(self, e):
         key = e.key()
+        modifiers = e.modifiers()
 
-        # Skip annotation hotkeys when any modifier is held so Ctrl+C /
-        # Ctrl+P / Ctrl+1 etc. don't accidentally trigger tool / colour
-        # changes during a presentation.
-        if e.modifiers() & (Qt.KeyboardModifier.ControlModifier
-                            | Qt.KeyboardModifier.AltModifier
-                            | Qt.KeyboardModifier.MetaModifier):
+        # If a text box is currently being edited, forward keyboard events to it
+        if self._overlay._active_box is not None:
+            self._overlay.keyPressEvent(e)
+            if e.isAccepted():
+                return
+
+        # Global Undo/Redo shortcuts (Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z)
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.Key.Key_Z:
+                if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    self._overlay.redo()
+                else:
+                    self._overlay.undo()
+                e.accept()
+                return
+            if key == Qt.Key.Key_Y:
+                self._overlay.redo()
+                e.accept()
+                return
+
+        # Skip annotation tool hotkeys when modifiers like Ctrl/Alt/Meta are held
+        if modifiers & (Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.AltModifier
+                        | Qt.KeyboardModifier.MetaModifier):
             super().keyPressEvent(e)
             return
 
@@ -215,6 +223,9 @@ class PresentationWidget(QWidget):
         if key == Qt.Key.Key_E:
             self._on_tool_selected(int(ToolMode.ERASER))
             return
+        if key == Qt.Key.Key_T:
+            self._on_tool_selected(int(ToolMode.TYPE))
+            return
         if key == Qt.Key.Key_L:
             self._on_tool_selected(int(ToolMode.LASER))
             return
@@ -223,7 +234,7 @@ class PresentationWidget(QWidget):
             return
         if key in _PALETTE_HOTKEYS:
             current = self._overlay.tool()
-            if current in (int(ToolMode.PEN), int(ToolMode.HIGHLIGHTER)):
+            if current in (int(ToolMode.PEN), int(ToolMode.HIGHLIGHTER), int(ToolMode.TYPE)):
                 color = QColor(_PALETTE_HOTKEYS[key])
                 self._overlay.set_pen_color(color)
                 self._hud.set_active_color(color)
@@ -266,17 +277,12 @@ class PresentationWidget(QWidget):
         QTimer.singleShot(0, self._render)
 
     def closeEvent(self, event):
-        # Drop annotation state first so paintEvent on the overlay does not
-        # touch stale stroke buffers during teardown.
         if isValid(self._overlay):
             self._overlay.clear_all()
         for tmr in (getattr(self, "_hide_timer", None),
                     getattr(self, "_hud_hide_timer", None)):
             if tmr is not None and isValid(tmr):
                 tmr.stop()
-        # Release the fitz document handle. Swallowing exceptions here
-        # because the alternative is a Qt-level crash during teardown
-        # if fitz is mid-finalize on the worker thread.
         if self._doc is not None:
             with contextlib.suppress(Exception):
                 self._doc.close()

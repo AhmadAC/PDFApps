@@ -1,7 +1,7 @@
 """PDFApps – Floating HUD toolbar for presentation-mode annotations."""
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QColor, QIcon, QTransform
+from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPointF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QFrame
 import qtawesome as qta
 
@@ -10,7 +10,7 @@ from app.constants import (
     _LC, _LO, _LP, _LQ,
 )
 from app.i18n import t
-from app.viewer.annotation_layer import ToolMode
+from app.viewer.annotation_layer import ToolMode, _draw_edge_type_icon
 
 
 def _rgba(hex_color: str, alpha: int) -> str:
@@ -38,19 +38,10 @@ _TOOLS = [
     (ToolMode.PEN,         "fa5s.pen",           "present.pen"),
     (ToolMode.HIGHLIGHTER, "fa5s.highlighter",   "present.highlighter"),
     (ToolMode.ERASER,      "fa5s.eraser",        "present.eraser"),
+    (ToolMode.TYPE,        "type",               "edit.mode.text"),
     (ToolMode.LASER,       "fa5s.dot-circle",    "present.laser"),
 ]
 
-# FontAwesome renders the pen and highlighter with their writing tips at the
-# bottom-right, which visually clashes with the mouse-pointer icon whose tip
-# points up-left (standard cursor arrow convention). We apply a +90° clockwise
-# rotation via QTransform (not qtawesome's ``rotated=`` kwarg) so the same
-# quarter-turn behaviour survives the icon → pixmap conversion path used by
-# the cursor helper in :mod:`app.viewer.annotation_layer`. That maps the
-# FontAwesome bottom-right tip to the top-left corner — matching the
-# mouse-pointer and making every "pointing" icon in the HUD row read as
-# pointing the same way. (Pixel analysis confirms 90° — not 180° — is the
-# quarter turn that maps bottom-right → top-left.)
 _ICON_ROTATION: dict[str, float] = {
     "fa5s.pen": 90.0,
     "fa5s.highlighter": 90.0,
@@ -58,18 +49,15 @@ _ICON_ROTATION: dict[str, float] = {
 
 
 def _tool_qta_icon(name: str, color: str) -> QIcon:
-    """Render a HUD toolbar icon with rotation but no outline.
+    """Render a HUD toolbar icon with rotation or custom vector glyphs."""
+    if name == "type":
+        pix = QPixmap(_ICON_PX, _ICON_PX)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        _draw_edge_type_icon(p, _ICON_PX, QColor(color))
+        p.end()
+        return QIcon(pix)
 
-    HUD buttons sit on the dark toolbar background, so the outline stroke
-    used by the cursor icons (see :func:`app.viewer.annotation_layer._icon_with_outline`)
-    is redundant here and would clutter the visual. Cursor icons still get
-    the outline because they float over arbitrary slide content.
-
-    Rotation is applied via :class:`QTransform` on the rendered pixmap so
-    the transform is guaranteed to survive the icon → pixmap conversion
-    (qtawesome's ``rotated=`` kwarg does not always round-trip through
-    that path).
-    """
     rotation = _ICON_ROTATION.get(name, 0.0)
     pix = qta.icon(name, color=color).pixmap(_ICON_PX, _ICON_PX)
     if rotation:
@@ -213,8 +201,6 @@ class AnnotationHUD(QFrame):
             f"  border-radius: {_BAND_RADIUS}px;"
             f"}}"
         )
-        # Per-button base styles (active styling applied in _refresh_active).
-        # Hover tint derived from secondary text colour so it adapts to theme.
         hover_bg = _rgba(sec, 40)
         btn_qss = (
             f"QPushButton {{"
@@ -230,8 +216,6 @@ class AnnotationHUD(QFrame):
         for b in list(self._tool_btns.values()) + [self._clear_btn]:
             b.setStyleSheet(btn_qss)
 
-        # VLine separators paint a frame line, not a background — using
-        # border-left + min-width on a plain frame paints reliably.
         sep_color = border
         for s in (self._sep, self._sep2):
             s.setStyleSheet(
