@@ -1,4 +1,4 @@
-"""PDFApps – reusable widgets: drop-zone, color picker."""
+"""PDFApps – reusable widgets: drop-zone, color picker, focus-protected inputs."""
 
 import os
 
@@ -6,7 +6,7 @@ from PySide6.QtCore import Signal, Qt, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QFileDialog, QColorDialog,
-    QMessageBox,
+    QMessageBox, QSpinBox, QComboBox,
 )
 import qtawesome as qta
 
@@ -38,6 +38,37 @@ def _drop_icon(icon_name: str, color: str) -> QPushButton:
     b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     b.setCursor(Qt.CursorShape.ArrowCursor)
     return b
+
+
+class FocusSpinBox(QSpinBox):
+    """QSpinBox that ignores mouse wheel events unless it explicitly has keyboard focus."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        if self.lineEdit():
+            self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        has_focus = self.hasFocus() or (self.lineEdit() and self.lineEdit().hasFocus())
+        if has_focus:
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class FocusComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel events unless it explicitly has keyboard focus."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 
 class DropFileEdit(QWidget):
@@ -126,8 +157,6 @@ class DropFileEdit(QWidget):
         which is already theme-aware.
         """
         if self._path_value:
-            # Loaded state: clear button keeps error_color, which already
-            # tracks the theme; nothing to update.
             self._clr.setIcon(qta.icon('fa5s.times', color=error_color()))
             return
         muted = _muted_icon_color(dark)
@@ -168,13 +197,6 @@ class DropFileEdit(QWidget):
         self.setProperty("drag_active", "false")
         self.style().unpolish(self); self.style().polish(self)
         urls = e.mimeData().urls()
-        # R11 N3: DropFileEdit is a single-file widget but used to
-        # silently accept only urls[0] when the user dragged multiple
-        # files in. The extra files vanished with no feedback. Count
-        # the urls that PASS the extension filter (so dragging one
-        # PDF plus an unrelated screenshot still counts as 'one PDF
-        # dropped' and skips the warning) and surface a friendly
-        # notice when more than one valid file was dropped.
         accepted = [u for u in urls if self._url_accepted(u)]
         if not accepted:
             return
@@ -264,7 +286,6 @@ class ColorPickerButton(QPushButton):
     def _update_swatch(self):
         r, g, b = self._color
         hex_c = f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
-        # Determine text color based on luminance
         lum = 0.299 * r + 0.587 * g + 0.114 * b
         txt = "#FFFFFF" if lum < 0.5 else "#000000"
         self.setStyleSheet(

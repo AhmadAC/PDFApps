@@ -199,13 +199,13 @@ QScrollBar::handle:horizontal:hover {{ background: #4A5568; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; border: none; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
-
 /* -- Mode buttons (checkable) -----------------------------------------------*/
 QPushButton:checkable {{ background: #18252E; border: 1px solid #2A3944;
     border-radius: 6px; padding: 6px 8px; text-align: left; font-size: 10pt; }}
 QPushButton:checkable:hover   {{ background: #223340; border-color: #3C5E6B; }}
 QPushButton:checkable:checked {{ background: #0D3D38; border: 1px solid #14B8A6; color: #14B8A6; }}
 QPushButton:checkable:pressed {{ background: #0A2E2A; }}
+
 /* ── Info label ──────────────────────────────────────────────────────── */
 #info_lbl {{ color: {TEXT_SEC}; font-size: 10pt; background: transparent;
             padding: 2px 4px; }}
@@ -231,7 +231,7 @@ QStatusBar {{ background: {BG_SIDE}; border-top: 1px solid {BORDER};
 #viewer_nav_btn  {{ background: #1E2235; border: 1px solid {BORDER};
                    border-radius: 6px; color: {TEXT_PRI};
                    min-width: 30px; min-height: 30px; padding: 0; }}
-#viewer_nav_btn:hover   {{ background: {ACCENT}; border-color: {ACCENT}; }}
+#viewer_nav_btn:hover   {{ background: {ACCENT}; border-color: {ACCENT}; color: #FFFFFF; }}
 #viewer_nav_btn:pressed {{ background: {ACCENT_P}; }}
 #viewer_nav_btn:disabled {{ background: #141827; border-color: #1E2235; }}
 #page_input {{ background: #1E2235; border: 1px solid {BORDER}; border-radius: 4px;
@@ -247,7 +247,6 @@ QSplitter::handle {{ background: {BORDER}; width: 1px; }}
     font-size: 13pt; padding: 0; min-width: 28px; max-width: 28px;
 }}
 #theme_btn:hover {{ background: #253945; border-color: #476573; }}
-
 
 #viewer_tabs {{
     background: {BG_CARD}; border: none; border-bottom: 1px solid {BORDER};
@@ -276,7 +275,6 @@ QDialog     {{ background: {_LC}; color: {_LP}; }}
 QMenu       {{ background: {_LC}; color: {_LP}; border: 1px solid {_LO}; }}
 QMenu::item:selected {{ background: #E7F0ED; }}
 QMessageBox {{ background: {_LC}; color: {_LP}; }}
-/* R11-M10: themed tooltip in light mode too. */
 QToolTip {{ background: {_LC}; color: {_LP};
             border: 1px solid {_LO}; padding: 4px 6px; }}
 QScrollArea {{ background: transparent; border: none; }}
@@ -301,19 +299,20 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #sidebar_footer {{ background: transparent; color: {_LQ};
                   font-size: 9pt; padding: 10px 16px; }}
 
-#workspace_bar {{ background: #F0F6F4; border-bottom: 1px solid {_LO}; }}
-#workspace_title {{ font-size: 11pt; font-weight: 700; color: {_LP}; background: transparent; }}
-#workspace_hint  {{ font-size: 9pt; color: {_LQ}; background: transparent; }}
+/* ── Light-mode Top Workspace Bar (clean light-grey tone) ───────────── */
+#workspace_bar {{ background: #E8EEF1; border-bottom: 1px solid #CBD5E1; }}
+#workspace_title {{ font-size: 11pt; font-weight: 700; color: #1E293B; background: transparent; }}
+#workspace_hint  {{ font-size: 9pt; color: #64748B; background: transparent; }}
 #workspace_badge {{
     background: #D6F2EC; border: 1px solid #83CABB; color: #0E5A51;
     border-radius: 10px; padding: 5px 10px; font-size: 9pt; font-weight: 600;
 }}
 #quick_btn {{
-    background: #FFFFFF; border: 1px solid {_LO}; border-radius: 8px;
+    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 8px;
     padding: 6px 14px; min-height: 30px; font-size: 10pt; font-weight: 600;
 }}
-#quick_btn:hover   {{ background: #E3EFEB; border-color: #8EBCB2; }}
-#quick_btn:pressed {{ background: #D2E3DE; }}
+#quick_btn:hover   {{ background: #E2E8F0; border-color: #94A3B8; }}
+#quick_btn:pressed {{ background: #CBD5E1; }}
 #workspace_shell {{ background: transparent; }}
 
 #tool_header  {{ background: {_LC}; border-bottom: 1px solid {_LO};
@@ -443,14 +442,17 @@ QStatusBar {{ background: {_LS}; border-top: 1px solid {_LO};
 #viewer_header {{ background: {_LC}; border-bottom: 1px solid {_LO}; }}
 #viewer_title  {{ font-size: 10pt; font-weight: 600; color: {_LP}; background: transparent; }}
 #viewer_page_lbl {{ font-size: 10pt; color: {_LQ}; background: transparent; min-width: 54px; }}
-#viewer_nav_btn  {{ background: {_LI}; border: 1px solid {_LO};
+
+/* ── Light-mode navigation buttons on top panel ─────────────────────── */
+#viewer_nav_btn  {{ background: #FFFFFF; border: 1px solid #CBD5E1;
                    border-radius: 6px; color: {_LP};
                    min-width: 30px; min-height: 30px; padding: 0; }}
-#viewer_nav_btn:hover   {{ background: {_LA}; border-color: {_LA}; color: white; }}
-#viewer_nav_btn:pressed {{ background: {_LAP}; }}
+#viewer_nav_btn:hover   {{ background: #E2E8F0; border-color: #94A3B8; color: {_LP}; }}
+#viewer_nav_btn:pressed {{ background: #CBD5E1; }}
 #viewer_nav_btn:disabled {{ background: {_LN}; border-color: {_LO}; color: {_LO}; }}
-#page_input {{ background: {_LI}; border: 1px solid {_LO}; border-radius: 4px;
+#page_input {{ background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
                color: {_LP}; font-size: 10pt; padding: 2px; }}
+
 #viewer_placeholder {{ font-size: 12pt; color: {_LQ}; background: {_LN}; }}
 #viewer_sel_status  {{ font-size: 9pt; color: {_LQ}; background: {_LC};
                        border-top: 1px solid {_LO}; padding: 4px 8px; }}
@@ -458,11 +460,10 @@ QPdfView {{ background: {_LN}; border: none; }}
 QSplitter::handle {{ background: {_LO}; width: 1px; }}
 
 #theme_btn {{
-    background: #E7F0ED; border: 1px solid #BFD4CD; border-radius: 14px; font-size: 13pt;
-    padding: 0; min-width: 28px; max-width: 28px;
+    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 14px; font-size: 13pt;
+    padding: 0; min-width: 28px; max-width: 28px; color: {_LP};
 }}
-#theme_btn:hover {{ background: #DBEAE5; border-color: #9FC2B8; }}
-
+#theme_btn:hover {{ background: #E2E8F0; border-color: #94A3B8; }}
 
 #viewer_tabs {{
     background: {_LC}; border: none; border-bottom: 1px solid {_LO};

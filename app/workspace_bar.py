@@ -7,6 +7,7 @@ import qtawesome as qta
 
 from app.constants import TEXT_PRI, ACCENT, _LQ, TEXT_SEC
 from app.i18n import t
+from app.utils import _paint_bg
 
 
 class WorkspaceBar(QWidget):
@@ -15,9 +16,10 @@ class WorkspaceBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("workspace_bar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(8)
 
         def _a11y(btn, tip):
@@ -216,6 +218,9 @@ class WorkspaceBar(QWidget):
         _a11y(self._right_pane_toggle_btn, t("sidebar.collapse_expand"))
         self._right_pane_toggle_btn.setVisible(False)
         layout.addWidget(self._right_pane_toggle_btn)
+
+    def paintEvent(self, event):
+        _paint_bg(self)
 
     def update_theme(self, dark: bool, sidebar_collapsed: bool = False):
         bar_color = TEXT_PRI if dark else _LQ

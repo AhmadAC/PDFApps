@@ -171,39 +171,12 @@ class PdfViewerPanel(QWidget):
         self._pages_tab_idx = self._sidebar_tabs.addTab(
             self._thumbnails, t("viewer.sidebar.pages"))
 
-        def _on_tab_title_change(idx):
-            if idx >= 0:
-                self._pages_title_lbl.setText(self._sidebar_tabs.tabText(idx))
-        self._sidebar_tabs.currentChanged.connect(_on_tab_title_change)
-
-        # Left Sidebar Panel hosting burger button & tabs
+        # Left Sidebar Panel hosting sidebar tabs
         self._sidebar_panel = QWidget()
         self._sidebar_panel.setObjectName("viewer_left_sidebar")
         sp_lay = QVBoxLayout(self._sidebar_panel)
         sp_lay.setContentsMargins(0, 0, 0, 0)
         sp_lay.setSpacing(0)
-
-        # Header bar with burger toggle for Pages sidebar
-        self._pages_header = QWidget()
-        self._pages_header.setObjectName("viewer_pages_header")
-        self._pages_header.setFixedHeight(34)
-        ph_bar = QHBoxLayout(self._pages_header)
-        ph_bar.setContentsMargins(4, 3, 4, 3)
-        ph_bar.setSpacing(6)
-
-        self._pages_toggle_btn = QPushButton()
-        self._pages_toggle_btn.setIcon(qta.icon("fa5s.bars", color=TEXT_SEC))
-        self._pages_toggle_btn.setObjectName("viewer_nav_btn")
-        self._pages_toggle_btn.setFixedSize(28, 28)
-        self._pages_toggle_btn.setToolTip(t("sidebar.collapse_expand"))
-        self._pages_toggle_btn.setAccessibleName(t("sidebar.collapse_expand"))
-        self._pages_toggle_btn.clicked.connect(self._toggle_pages_sidebar)
-        ph_bar.addWidget(self._pages_toggle_btn)
-
-        self._pages_title_lbl = QLabel(t("viewer.sidebar.pages"))
-        self._pages_title_lbl.setStyleSheet("font-weight: 600; font-size: 10pt;")
-        ph_bar.addWidget(self._pages_title_lbl, 1)
-        sp_lay.addWidget(self._pages_header)
         sp_lay.addWidget(self._sidebar_tabs, 1)
 
         self._pages_sidebar_collapsed = False
@@ -234,7 +207,7 @@ class PdfViewerPanel(QWidget):
         self._viewer_splitter.setStretchFactor(0, 0)
         self._viewer_splitter.setStretchFactor(1, 1)
         self._viewer_splitter.setSizes([220, 800])
-        self._viewer_splitter.setCollapsible(0, False)
+        self._viewer_splitter.setCollapsible(0, True)
         self._viewer_splitter.setCollapsible(1, False)
         self._viewer_splitter.setVisible(False)
         self._sidebar_panel.setVisible(False)
@@ -298,19 +271,13 @@ class PdfViewerPanel(QWidget):
         if not self._pages_sidebar_collapsed:
             self._saved_sidebar_width = max(180, self._sidebar_panel.width())
             self._pages_sidebar_collapsed = True
-            self._sidebar_tabs.setVisible(False)
-            self._pages_title_lbl.setVisible(False)
-            self._sidebar_panel.setMinimumWidth(36)
-            self._sidebar_panel.setMaximumWidth(36)
-            self._sidebar_panel.setFixedWidth(36)
+            self._sidebar_panel.setVisible(False)
             total = self._viewer_splitter.width()
-            self._viewer_splitter.setSizes([36, max(300, total - 36)])
+            self._viewer_splitter.setSizes([0, total])
         else:
             self._pages_sidebar_collapsed = False
+            self._sidebar_panel.setVisible(True)
             self._sidebar_tabs.setVisible(True)
-            self._pages_title_lbl.setVisible(True)
-            self._sidebar_panel.setMinimumWidth(180)
-            self._sidebar_panel.setMaximumWidth(400)
             w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
             total = self._viewer_splitter.width()
             self._viewer_splitter.setSizes([w, max(300, total - w)])
@@ -403,8 +370,6 @@ class PdfViewerPanel(QWidget):
         self._search_prev_btn.setIcon(qta.icon('fa5s.chevron-up',     color=c))
         self._search_next_btn.setIcon(qta.icon('fa5s.chevron-down',   color=c))
         self._search_close_btn.setIcon(qta.icon('fa5s.times',         color=c))
-        if hasattr(self, "_pages_toggle_btn"):
-            self._pages_toggle_btn.setIcon(qta.icon("fa5s.bars", color=c))
         link_style = self._recent_link_style(dark)
         for link in self._recent_links:
             link.setStyleSheet(link_style)
@@ -638,9 +603,6 @@ class PdfViewerPanel(QWidget):
         self._sidebar_panel.setVisible(True)
         self._pages_sidebar_collapsed = False
         self._sidebar_tabs.setVisible(True)
-        self._pages_title_lbl.setVisible(True)
-        self._sidebar_panel.setMinimumWidth(180)
-        self._sidebar_panel.setMaximumWidth(400)
         self._viewer_splitter.setSizes([220, 800])
         self._sel_status.setVisible(True)
         self._name_lbl.setText(os.path.basename(path))
