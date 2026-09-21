@@ -1,5 +1,6 @@
-"""PDFApps – MainWindow: application main window."""
 
+"""PDFApps – MainWindow: application main window."""
+# window..py
 import contextlib
 import os
 
@@ -111,7 +112,6 @@ class MainWindow(QMainWindow):
         wb_h.setSpacing(8)
 
         def _a11y(btn, tip):
-            """Set both tooltip and accessible name on a button."""
             btn.setToolTip(tip)
             btn.setAccessibleName(tip)
 
@@ -136,8 +136,6 @@ class MainWindow(QMainWindow):
         _a11y(self._open_pdf_btn, t("btn.open_pdf"))
         self._open_pdf_btn.clicked.connect(self._open_pdf)
         wb_h.addWidget(self._open_pdf_btn)
-
-        # Recent button removed — recents shown in viewer placeholder
 
         self._toc_top_btn = QPushButton()
         self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=TEXT_PRI))
@@ -181,7 +179,7 @@ class MainWindow(QMainWindow):
         self._search_top_btn.clicked.connect(lambda: self._viewer._toggle_search())
         wb_h.addWidget(self._search_top_btn)
 
-        # zoom widget
+        # Zoom widget
         self._zoom_widget = QWidget()
         zw_h = QHBoxLayout(self._zoom_widget); zw_h.setContentsMargins(0,0,0,0); zw_h.setSpacing(4)
         _zm = QPushButton(); _zm.setIcon(qta.icon("fa5s.search-minus", color=TEXT_PRI))
@@ -196,7 +194,7 @@ class MainWindow(QMainWindow):
         self._zm_btn = _zm; self._zp_btn = _zp; self._z0_btn = _z0
         wb_h.addWidget(self._zoom_widget)
 
-        # page navigation widget
+        # Page navigation widget
         self._page_nav_widget = QWidget()
         pn_h = QHBoxLayout(self._page_nav_widget); pn_h.setContentsMargins(0,0,0,0); pn_h.setSpacing(4)
         _prev_pg = QPushButton(); _prev_pg.setIcon(qta.icon("fa5s.chevron-left", color=TEXT_PRI))
@@ -215,9 +213,7 @@ class MainWindow(QMainWindow):
         self._page_input.returnPressed.connect(self._goto_input_page)
         wb_h.addWidget(self._page_nav_widget)
 
-        # (tool badge removed — breadcrumb replaces it)
-
-        # Undo/redo buttons for editor (hidden by default)
+        # Undo/redo buttons for editor
         self._undo_top_btn = QPushButton()
         self._undo_top_btn.setIcon(qta.icon("fa5s.undo", color=TEXT_PRI))
         self._undo_top_btn.setObjectName("viewer_nav_btn")
@@ -255,7 +251,6 @@ class MainWindow(QMainWindow):
         self._theme_btn.clicked.connect(self._toggle_theme)
         wb_h.addWidget(self._theme_btn)
 
-        # Update button — hidden by default, shown when update is available
         self._update_btn = QPushButton()
         self._update_btn.setIcon(qta.icon("fa5s.arrow-circle-up", color=ACCENT))
         self._update_btn.setObjectName("viewer_nav_btn")
@@ -266,16 +261,10 @@ class MainWindow(QMainWindow):
             f"QPushButton {{ border: 1.5px solid {ACCENT}; border-radius: 6px; }}"
             f"QPushButton:hover {{ background: rgba(20,184,166,0.15); }}"
         )
-        # Auto-update subsystem lives in a dedicated controller. The window
-        # keeps the toolbar button (part of this layout) and hands it over
-        # so the controller can reveal it and drive its click.
         self._update_controller = UpdateController(self, self._update_btn)
         self._update_btn.clicked.connect(self._update_controller.show_update_dialog)
         wb_h.addWidget(self._update_btn)
-        # R11-M7: defer the update check 2s past __init__ so the main
-        # window can finish painting + showMaximized before any network
-        # I/O races the UI. Previously fired before the window was even
-        # visible, occasionally stalling first paint on slow networks.
+
         QTimer.singleShot(
             2000,
             lambda: self._update_controller.check_async() if isValid(self) else None,
@@ -302,8 +291,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtSvg import QSvgRenderer
         from PySide6.QtGui import QPainter, QImage
         _svg_path = resource_path("pdfapps.svg")
-        _h = 36  # target height
-        # Honor actual display DPR rather than assuming HiDPI (PR-J #4 pattern).
+        _h = 36
         dpr = self.devicePixelRatioF() if hasattr(self, 'devicePixelRatioF') else 1.0
         if dpr <= 0:
             dpr = 1.0
@@ -352,7 +340,6 @@ class MainWindow(QMainWindow):
         self.nav.setSpacing(0)
         self.nav.setIconSize(QSize(18, 18))
 
-        # Load tool usage counts for "Frequent" section
         self._tool_usage = {}
         try:
             from app.i18n import _CONFIG_PATH
@@ -361,7 +348,7 @@ class MainWindow(QMainWindow):
                 self._tool_usage = json.load(_cf).get("tool_usage", {})
         except Exception:
             pass
-        # Add top 3 frequent tools (if any usage data)
+
         sorted_usage = sorted(self._tool_usage.items(), key=lambda x: x[1], reverse=True)
         freq_tools = [(k, v) for k, v in sorted_usage if v >= 2][:3]
         if freq_tools:
@@ -383,7 +370,6 @@ class MainWindow(QMainWindow):
 
         tool_idx = 0
         for group_key, tools in _NAV_GROUPS:
-            # Separator line between groups (skip before first group)
             if tool_idx > 0:
                 sep_item = QListWidgetItem()
                 sep_item.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -394,7 +380,7 @@ class MainWindow(QMainWindow):
                 sep_line.setFixedHeight(1)
                 sep_line.setStyleSheet(f"background:{BORDER}; margin: 0 8px 0 4px;")
                 self.nav.setItemWidget(sep_item, sep_line)
-            # Section header (non-selectable)
+
             hdr = QListWidgetItem(t(group_key).upper())
             hdr.setFlags(Qt.ItemFlag.NoItemFlags)
             hdr.setData(Qt.ItemDataRole.UserRole, -1)
@@ -407,7 +393,6 @@ class MainWindow(QMainWindow):
             for key, icon_name, _ in tools:
                 item = QListWidgetItem(qta.icon(icon_name, color=TEXT_SEC), t(key))
                 item.setData(Qt.ItemDataRole.UserRole, tool_idx)
-                # Tooltip with tool description
                 desc_key = key.replace("nav.", "tool.") + ".desc"
                 tip = t(desc_key)
                 if tip != desc_key:
@@ -424,7 +409,7 @@ class MainWindow(QMainWindow):
         footer_h.addWidget(footer_lbl, 1)
         sb_lay.addWidget(self._footer_w)
         self._sidebar_collapsed = False
-        # Load saved theme preference
+
         self._dark_mode = True
         try:
             from app.i18n import _CONFIG_PATH
@@ -433,9 +418,9 @@ class MainWindow(QMainWindow):
                 self._dark_mode = json.load(_cf).get("dark_mode", True)
         except Exception:
             pass
-        self._qapp: QApplication = QApplication.instance()  # type: ignore[assignment]
+        self._qapp: QApplication = QApplication.instance()
 
-        # ── Tool stack (hidden by default) ─────────────────────────
+        # ── Tool stack ─────────────────────────────────────────────
         self.stack = QStackedWidget(); self.stack.setObjectName("content_area")
         for _, __, cls in NAV_ITEMS:
             self.stack.addWidget(cls(self._set_status))
@@ -462,7 +447,6 @@ class MainWindow(QMainWindow):
 
         self._viewer_stack = QStackedWidget()
         self._viewers: list[PdfViewerPanel] = []
-        # Create first empty viewer
         self._add_viewer_tab()
         tc_lay.addWidget(self._viewer_stack, 1)
 
@@ -479,7 +463,6 @@ class MainWindow(QMainWindow):
         root_v.addWidget(body, 1)
         self.setCentralWidget(central)
 
-        # Restore saved layout
         try:
             from app.i18n import _CONFIG_PATH
             import json
@@ -491,8 +474,6 @@ class MainWindow(QMainWindow):
                     and all(isinstance(s, int) and s >= 0 for s in sizes)
                     and sum(sizes) > 0):
                 self._splitter.setSizes(sizes)
-            # Restore sidebar mode: full (default) | icons | hidden.
-            # _toggle_sidebar cycles full -> icons -> hidden -> full.
             mode = _saved.get("sidebar_mode")
             if mode == "icons":
                 self._toggle_sidebar()
@@ -504,41 +485,33 @@ class MainWindow(QMainWindow):
 
         self._current_tool = -1
         self.nav.itemClicked.connect(self._on_nav_clicked)
-        # Connect all DropFileEdit widgets to load in active viewer
         for i in range(self.stack.count()):
             for dfe in self.stack.widget(i).findChildren(DropFileEdit):
                 dfe.path_changed.connect(lambda p: self._viewer.load(p))
 
-        # Pipeline: connect tool signals to reload viewer with result
         from app.base import BasePage
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if isinstance(w, BasePage):
                 w.pipeline_done.connect(self._on_pipeline_done)
                 w.pipeline_save_requested.connect(self._save_pipeline)
-        # Per-viewer pipeline state: {viewer_id: {original_path, temp_path}}
+            if isinstance(w, TabRotar):
+                w.rotations_changed.connect(self._on_rotations_changed)
+
         self._pipeline_state: dict[int, dict] = {}
 
-        # Keyboard shortcuts
         from PySide6.QtGui import QShortcut, QKeySequence
         QShortcut(QKeySequence("F5"), self, self._start_presentation)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
         QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf())
-        # R11-M9: scope shortcuts that could otherwise be triggered while
-        # editing a QTextEdit / QLineEdit. PgUp/PgDown previously paged
-        # the viewer behind any open editor; Ctrl+S/Ctrl+W could fire
-        # mid-typing in a tool input. WidgetWithChildrenShortcut routes
-        # the key through the focused widget first.
         sc_close = QShortcut(QKeySequence("Ctrl+W"), self, self._close_current_tab)
         sc_save  = QShortcut(QKeySequence("Ctrl+S"), self, self._save_current_tool)
         sc_pgup  = QShortcut(QKeySequence("PgUp"), self, self._goto_prev_page)
         sc_pgdn  = QShortcut(QKeySequence("PgDown"), self, self._goto_next_page)
         for sc in (sc_close, sc_save, sc_pgup, sc_pgdn):
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        # Quick tool shortcuts: Ctrl+1..9 for tools 1-9,
-        # Ctrl+Shift+1..6 for tools 10-15. Tools beyond idx=14 have no
-        # dedicated shortcut — guard against silent overflow.
+
         assert len(NAV_ITEMS) <= 15, (
             f"Only 15 tool shortcuts are defined (Ctrl+1..9, "
             f"Ctrl+Shift+1..6) but NAV_ITEMS has {len(NAV_ITEMS)}.")
@@ -551,26 +524,24 @@ class MainWindow(QMainWindow):
                           lambda i=idx: self._activate_tool(i))
         self._fullscreen = False
 
-        # Apply saved theme (if light mode was saved)
         if not self._dark_mode:
             self._apply_theme()
 
-        # Single-instance IPC: when the user double-clicks another PDF
-        # in Explorer/Finder while PDFApps is running, that second
-        # process forwards the paths here via QLocalSocket instead of
-        # spawning a redundant second window. See app/single_instance.py
-        # for the wire format. Construction is no-op-safe if the
-        # socket fails to bind, so the running instance keeps working.
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
 
-    # ── Viewer property (always returns the active tab's viewer) ──────
     @property
     def _viewer(self) -> PdfViewerPanel:
         idx = self._viewer_stack.currentIndex()
         if 0 <= idx < len(self._viewers):
             return self._viewers[idx]
         return self._viewers[0]
+
+    def _rotate_tool_idx(self) -> int:
+        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabRotar)
+
+    def _on_rotations_changed(self, rotations: dict):
+        self._viewer.set_page_rotations(rotations)
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         v = PdfViewerPanel()
@@ -579,29 +550,23 @@ class MainWindow(QMainWindow):
         idx = self._tab_bar.addTab(t("viewer.title"))
         self._tab_bar.setCurrentIndex(idx)
         self._update_tab_visibility()
-        # Wire up scroll → page nav
+
         v._canvas_scroll.verticalScrollBar().valueChanged.connect(
             lambda _: self._update_page_nav())
-        # Wrap load to update tab title + recent files + page nav
+
         original_load = v.load
         def _make_wrapped(viewer, orig, tab_idx_ref):
             def _wrapped(*args, track=True, **kwargs):
-                # `track` is consumed here (not forwarded to the real load):
-                # pipeline results are TEMPORARY files and must not pollute
-                # the recent-files list. User-opened documents keep the
-                # default track=True so they still register as recents.
                 orig(*args, **kwargs)
                 if args:
                     if track:
                         add_recent_file(args[0])
                     name = os.path.basename(args[0])
-                    # Find this viewer's current tab index
                     for i in range(len(self._viewers)):
                         if self._viewers[i] is viewer:
                             self._tab_bar.setTabText(i, name)
                             self._tab_bar.setTabToolTip(i, args[0])
                             break
-                from PySide6.QtCore import QTimer
                 QTimer.singleShot(100, self._update_page_nav)
                 self._update_tab_visibility()
                 if self._current_tool == -1:
@@ -623,13 +588,17 @@ class MainWindow(QMainWindow):
         self._update_page_nav()
         if self._current_tool == -1:
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
+        elif self._current_tool == self._rotate_tool_idx():
+            rot_w = self.stack.widget(self._rotate_tool_idx())
+            rots = getattr(rot_w, "_rotations", {})
+            self._viewer.set_page_rotations(rots)
+        else:
+            self._viewer.set_page_rotations({})
         self._refresh_viewer_top_buttons()
 
     def _close_tab(self, idx: int):
         viewer = self._viewers[idx] if idx < len(self._viewers) else self._viewers[0]
         if self._viewer_has_unsaved(viewer):
-            # R11-M11: default to Cancel — Discard is destructive and
-            # an accidental Enter should not throw away pipeline work.
             ans = QMessageBox.question(
                 self, t("msg.warning"), t("pipeline.unsaved_prompt"),
                 QMessageBox.StandardButton.Save
@@ -640,17 +609,11 @@ class MainWindow(QMainWindow):
                 return
             if ans == QMessageBox.StandardButton.Save:
                 self._save_pipeline()
-                return  # save_pipeline reloads, don't close
+                return
         self._cleanup_pipeline(id(viewer))
         if self._tab_bar.count() <= 1:
-            # Last tab — close document and reset to placeholder
             viewer = self._viewers[0]
             viewer._canvas.close_doc()
-            # The panel survives as an empty placeholder, so nothing
-            # will ever deliver closeEvent to it; without this the
-            # password of the document just closed stays cached for the
-            # rest of the session, reachable by the next document loaded
-            # into the same tab.
             self._wipe_password_holder(viewer)
             viewer._fitz_doc = None
             viewer._current_path = ""
@@ -674,10 +637,6 @@ class MainWindow(QMainWindow):
         self._tab_bar.removeTab(idx)
         self._viewer_stack.removeWidget(viewer)
         viewer._canvas.close_doc()
-        # PdfViewerPanel.closeEvent would wipe this, but deleteLater()
-        # destroys the widget without ever delivering closeEvent, and the
-        # panel has already left self._viewers so _wipe_all_pdf_passwords
-        # can no longer reach it either. Wipe here, before both.
         self._wipe_password_holder(viewer)
         viewer.deleteLater()
         self._update_tab_visibility()
@@ -686,7 +645,6 @@ class MainWindow(QMainWindow):
     def _open_tool_by_name(self, tool_name: str):
         for i, (name, _, _) in enumerate(NAV_ITEMS):
             if name == tool_name:
-                # Find the nav row with matching tool index
                 for r in range(self.nav.count()):
                     if self.nav.item(r).data(Qt.ItemDataRole.UserRole) == i:
                         self.nav.setCurrentRow(r)
@@ -700,29 +658,22 @@ class MainWindow(QMainWindow):
                 return
 
     def _try_auto_load(self, index: int):
-        # Track tool usage for "Frequent" section
         nav_key = _NAV_KEYS[index][0]
         self._tool_usage[nav_key] = self._tool_usage.get(nav_key, 0) + 1
         with contextlib.suppress(Exception):
-            # Serialized via _update_config — tab switches happen often
-            # enough to collide with theme/recent writes mid-session.
             from app.i18n import _update_config
             usage = dict(self._tool_usage)
             _update_config(lambda cfg: cfg.__setitem__("tool_usage", usage))
         widget = self.stack.widget(index)
         path = self._viewer.current_path()
         if path:
-            # Propagate the viewer's PDF password so compact-mode tools
-            # don't re-prompt the user for the same encrypted file.
             viewer_pwd = getattr(self._viewer, "_pdf_password", "")
             if hasattr(widget, "_pdf_password"):
                 widget._pdf_password = viewer_pwd
             fn = getattr(widget, "auto_load", None)
             if callable(fn):
                 fn(path)
-        # Toggle "compact mode" for tools that support it: when a viewer PDF
-        # is loaded, hide the source/output pickers so the user can act with
-        # a single button.
+
         compact_fn = getattr(widget, "set_compact_mode", None)
         if callable(compact_fn):
             compact_fn(bool(path), path or "")
@@ -732,7 +683,6 @@ class MainWindow(QMainWindow):
 
     def _setup_zoom_bar(self, active: bool, canvas=None):
         self._zoom_widget.setVisible(active)
-        # Disconnect previous connections safely
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -753,7 +703,6 @@ class MainWindow(QMainWindow):
             self._lbl_zoom.setText(f"{round(canvas._zoom_factor * 100)}%")
 
     def _activate_tool(self, tool_idx: int):
-        """Activate a tool by its stack index (for keyboard shortcuts)."""
         for r in range(self.nav.count()):
             it = self.nav.item(r)
             if it.data(Qt.ItemDataRole.UserRole) == tool_idx:
@@ -762,7 +711,6 @@ class MainWindow(QMainWindow):
                 return
 
     def _filter_nav(self, text: str):
-        """Show/hide nav items based on search text."""
         q = text.lower().strip()
         visible_groups = set()
         for r in range(self.nav.count()):
@@ -773,11 +721,9 @@ class MainWindow(QMainWindow):
                 it.setHidden(not match)
                 if match:
                     visible_groups.add(r)
-        # Show/hide group headers: visible if any child below is visible
         for r in range(self.nav.count()):
             it = self.nav.item(r)
             if it.data(Qt.ItemDataRole.UserRole) == -1:
-                # Header — show if any tool below (until next header) is visible
                 has_visible = False
                 for r2 in range(r + 1, self.nav.count()):
                     it2 = self.nav.item(r2)
@@ -791,8 +737,10 @@ class MainWindow(QMainWindow):
         row = item.data(Qt.ItemDataRole.UserRole)
         if row is None or row < 0:
             self.nav.clearSelection()
-            return  # clicked a section header
+            return
         edit_idx = self._edit_tool_idx()
+        rotate_idx = self._rotate_tool_idx()
+
         if row == self._current_tool:
             self.nav.clearSelection()
             self._current_tool = -1
@@ -802,22 +750,18 @@ class MainWindow(QMainWindow):
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
             self._undo_top_btn.setVisible(False)
             self._redo_top_btn.setVisible(False)
+            self._viewer.set_page_rotations({})
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
             self.stack.setCurrentIndex(row)
             self.stack.setVisible(True)
-            # Editor takes the whole area (it has its own canvas);
-            # other tools open as a fixed-width side panel with the viewer
-            # still visible.
+
             if row == edit_idx:
                 self.stack.setMinimumWidth(0)
                 self.stack.setMaximumWidth(16777215)
                 self._tab_container.setVisible(False)
                 self._setup_zoom_bar(True)
-                # Show undo/redo in workspace bar. Disconnect the previous
-                # handler first (if any) so switching in/out of the editor
-                # doesn't accumulate connections and multi-fire on click.
                 edit_w = self.stack.widget(edit_idx)
                 self._undo_top_btn.setVisible(True)
                 self._redo_top_btn.setVisible(True)
@@ -830,35 +774,39 @@ class MainWindow(QMainWindow):
                 self._undo_top_btn.clicked.connect(edit_w._undo)
                 self._redo_top_btn.clicked.connect(edit_w._redo)
                 self._undo_redo_handlers = (edit_w._undo, edit_w._redo)
+                self._viewer.set_page_rotations({})
             else:
                 self.stack.setMinimumWidth(320)
                 self.stack.setMaximumWidth(600)
                 self._tab_container.setVisible(True)
                 self._undo_top_btn.setVisible(False)
                 self._redo_top_btn.setVisible(False)
-                # Ensure the splitter allocates space for the tool panel
                 total = self._splitter.width()
                 tool_w = max(380, min(450, total // 3))
                 self._splitter.setSizes([total - tool_w, tool_w])
+
+                if row == rotate_idx:
+                    rot_w = self.stack.widget(rotate_idx)
+                    rots = getattr(rot_w, "_rotations", {})
+                    self._viewer.set_page_rotations(rots)
+                else:
+                    self._viewer.set_page_rotations({})
+
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)
 
     def _open_pdf(self):
-        from PySide6.QtWidgets import QFileDialog
         paths, _ = QFileDialog.getOpenFileNames(
             self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
         for path in paths:
             self._load_and_track(path)
 
     def _load_and_track(self, path: str):
-        """Load PDF — opens in new tab if current tab already has a document."""
         if self._viewer.current_path():
             self._add_viewer_tab(path)
         else:
             self._viewer.load(path)
         add_recent_file(path)
-        # R10 #5: rebuild the recents list across every open viewer
-        # so the next return-to-placeholder shows the up-to-date list.
         for v in self._viewers:
             refresh = getattr(v, "_refresh_recents", None)
             if callable(refresh):
@@ -867,15 +815,6 @@ class MainWindow(QMainWindow):
         self._refresh_viewer_top_buttons()
 
     def _on_second_instance(self, paths: list):
-        """Handle PDFs forwarded from a second invocation.
-
-        Each path is loaded as a new tab (mirroring drag-and-drop
-        semantics) and the main window is brought to the foreground so
-        the user sees the result immediately instead of wondering why
-        the click "did nothing". ``raise_`` + ``activateWindow`` is the
-        cross-platform incantation; ``showNormal`` is the only one of
-        the three that un-minimises on every supported OS.
-        """
         import logging as _logging
         _wlog = _logging.getLogger(__name__)
         for path in paths:
@@ -894,19 +833,11 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def _clear_recent(self):
-        # Route through _update_config so the read-modify-write cycle is
-        # serialized with other config writes (theme toggle, recent
-        # files, tool_usage) — otherwise a concurrent writer can race
-        # and resurrect the cleared list.
         from app.i18n import _update_config
         try:
             _update_config(lambda cfg: cfg.__setitem__("recent_files", []))
         except Exception:
             pass
-        # R11 M5: mirror the _load_and_track refresh pattern so every
-        # open viewer's recents list updates immediately. Without this
-        # the user clears recents but the placeholder pane still shows
-        # the old entries until the next reload.
         for v in self._viewers:
             refresh = getattr(v, "_refresh_recents", None)
             if callable(refresh):
@@ -919,7 +850,6 @@ class MainWindow(QMainWindow):
     # ── Page navigation (workspace bar) ───────────────────────────────────
 
     def _update_page_nav(self):
-        """Update the page nav widget from the viewer's scroll position."""
         canvas = self._viewer._canvas
         entries = canvas._entries
         if not entries:
@@ -953,7 +883,6 @@ class MainWindow(QMainWindow):
             sb.setValue(canvas.scroll_to_page(idx + 1))
 
     def _goto_input_page(self):
-        """Navigate to the page number typed by the user."""
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -978,10 +907,6 @@ class MainWindow(QMainWindow):
     def _set_language(self, code: str, name: str):
         if code == get_language():
             return
-        # Prompt before persisting. Tooltips, menus and many labels are
-        # cached at widget construction, so a full restart is required to
-        # apply the new language consistently. If the user declines, keep
-        # everything as it was instead of leaving a mixed state.
         ans = QMessageBox.question(
             self, t("lang.selector"), t("lang.restart", lang=name),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
@@ -993,18 +918,7 @@ class MainWindow(QMainWindow):
         self._restart_app()
 
     def _restart_app(self):
-        """Restart the application as a fully detached process.
-        Frozen PyInstaller builds relaunch the exe directly; source runs
-        relaunch the original .py via the current Python interpreter."""
-        # This path leaves through QApplication.exit(0), which unwinds
-        # the event loop directly: Qt never delivers closeEvent here, so
-        # neither the worker drain nor the sweep that run there cover the
-        # language-change restart. Do both explicitly, in the same order
-        # closeEvent uses, rather than letting the outgoing process
-        # linger with every cached password still in its heap.
         self._wait_for_workers_on_all_pages()
-        # Runs AFTER the worker wait above so no background thread is
-        # still reading a password while we wipe it.
         self._wipe_all_pdf_passwords()
         import sys
         from PySide6.QtCore import QProcess, QProcessEnvironment
@@ -1018,16 +932,6 @@ class MainWindow(QMainWindow):
             program = sys.executable
             args = [script] + pdf_args
             cwd = os.path.dirname(script) or os.getcwd()
-        # PyInstaller --onefile uses several env vars to coordinate the
-        # two-phase bootloader handoff: _PYI_APPLICATION_HOME_DIR (the
-        # extracted temp path), _PYI_PARENT_PROCESS_LEVEL (phase marker)
-        # and _PYI_ARCHIVE_FILE, plus the legacy _MEIPASS2. The parent
-        # deletes its temp folder on exit, so the child must perform its
-        # own extraction instead of reusing ours. We must clear ALL of
-        # these — leaving any one set makes the child's bootloader think
-        # it's a child-phase launch and either reuse the about-to-be-
-        # deleted folder or, if some vars are missing, abort with
-        # "_PYI_APPLICATION_HOME_DIR environment variable is not defined!".
         proc = QProcess()
         proc.setProgram(program)
         proc.setArguments(args)
@@ -1040,15 +944,10 @@ class MainWindow(QMainWindow):
         proc.startDetached()
         QApplication.instance().exit(0)
 
-    # ── Drag & drop PDF on window ──────────────────────────────────────────
     def dragEnterEvent(self, e):
         if not e.mimeData().hasUrls():
             return
         for url in e.mimeData().urls():
-            # R10 #12: accept folders + .pdf files. Drop iterates the
-            # folder for PDFs at dropEvent time so we can't validate
-            # contents here, but a folder drop should not be silently
-            # ignored either.
             local = url.toLocalFile()
             if not local:
                 continue
@@ -1058,14 +957,9 @@ class MainWindow(QMainWindow):
                 return
 
     def dropEvent(self, e):
-        # R10 #12: accept folders (open every .pdf inside) and warn
-        # the user when a web URL is dropped instead of silently
-        # ignoring it.
         for url in e.mimeData().urls():
             path = url.toLocalFile()
             if not path:
-                # Non-file URL (http/https/ftp...). Surface a friendly
-                # one-shot warning rather than swallowing the drop.
                 scheme = url.scheme().lower() if url.isValid() else ""
                 if scheme in ("http", "https", "ftp"):
                     QMessageBox.warning(
@@ -1074,10 +968,6 @@ class MainWindow(QMainWindow):
                     return
                 continue
             if os.path.isdir(path):
-                # Case-insensitive walk avoids double-loading on Windows /
-                # macOS HFS+ where glob("*.pdf") and glob("*.PDF") return
-                # the same files. Single os.listdir pass + extension filter
-                # works correctly on both case-sensitive and -insensitive FSes.
                 try:
                     entries = os.listdir(path)
                 except OSError:
@@ -1087,11 +977,6 @@ class MainWindow(QMainWindow):
                     if f.lower().endswith(".pdf")
                     and os.path.isfile(os.path.join(path, f))
                 )
-                # R10 review nit: dropping a folder used to silently open
-                # every PDF inside it. A folder with 200 PDFs would
-                # flood the tab bar and lock the UI for several seconds
-                # with no escape. Confirm above a reasonable threshold
-                # before we start spawning tabs.
                 if len(pdfs) > 20:
                     reply = QMessageBox.question(
                         self, t("msg.confirm"),
@@ -1107,13 +992,11 @@ class MainWindow(QMainWindow):
             if path.lower().endswith(".pdf"):
                 self._load_and_track(path)
 
-
     def _toggle_night_mode_top(self):
         active = self._night_top_btn.isChecked()
         self._viewer._canvas.set_night_mode(active)
 
     def _refresh_viewer_top_buttons(self):
-        """Show/hide TOC button and sync night btn for the active viewer."""
         try:
             v = self._viewer
             self._toc_top_btn.setVisible(v._toc_tree.topLevelItemCount() > 0)
@@ -1122,14 +1005,12 @@ class MainWindow(QMainWindow):
             self._toc_top_btn.setVisible(False)
             self._night_top_btn.setChecked(False)
 
-    # ── Keyboard shortcut helpers ────────────────────────────────────────
     def _close_current_tab(self):
         idx = self._tab_bar.currentIndex()
         if idx >= 0:
             self._close_tab(idx)
 
     def _save_current_tool(self):
-        """Ctrl+S: save pipeline result, or run current tool."""
         vid = id(self._viewer)
         ps = self._pipeline_state.get(vid)
         if ps and ps.get("temp_path"):
@@ -1141,7 +1022,6 @@ class MainWindow(QMainWindow):
 
     # ── Pipeline ─────────────────────────────────────────────────────────
     def _on_pipeline_done(self, temp_path: str):
-        """A tool finished in pipeline mode — reload result in viewer."""
         viewer = self._viewer
         vid = id(viewer)
         ps = self._pipeline_state.get(vid)
@@ -1149,22 +1029,15 @@ class MainWindow(QMainWindow):
             ps = {"original_path": viewer.current_path(), "temp_path": None}
             self._pipeline_state[vid] = ps
         ps["temp_path"] = temp_path
-        # Reload the viewer with the pipeline result. track=False keeps the
-        # temporary pipeline file out of the recent-files list (it would
-        # otherwise show up until the lexists filter self-heals it).
         viewer.load(temp_path, track=False)
-        # Mark tab as dirty
         idx = self._viewer_stack.currentIndex()
         orig_name = os.path.basename(ps["original_path"])
         self._tab_bar.setTabText(idx, f"● {orig_name}")
         self._sb.showMessage(t("pipeline.applied"))
-        # Re-auto-load the current tool so it picks up the new file
         if self._current_tool >= 0:
             w = self.stack.widget(self._current_tool)
             fn = getattr(w, "auto_load", None)
             if callable(fn):
-                # Reset drop_in/drop_out so auto_load can set the new path
-                # and the next run generates a fresh temp output
                 for attr in ("drop_in", "drop_out"):
                     drop = getattr(w, attr, None)
                     if drop:
@@ -1172,7 +1045,6 @@ class MainWindow(QMainWindow):
                 fn(temp_path)
 
     def _save_pipeline(self):
-        """Save the current pipeline result to a user-chosen file."""
         import shutil
         import tempfile
         vid = id(self._viewer)
@@ -1186,10 +1058,6 @@ class MainWindow(QMainWindow):
             self, t("btn.choose"), suggested, t("file_filter.pdf"))
         if not path:
             return
-        # R11-M6: warn if destination is a symlink. A pre-placed symlink
-        # could redirect the write to an unintended location; we still
-        # honour the user's chosen path (os.replace follows symlinks),
-        # but logging gives an audit trail.
         try:
             if os.path.lexists(path) and os.path.realpath(path) != os.path.abspath(path):
                 import logging as _logging
@@ -1198,10 +1066,6 @@ class MainWindow(QMainWindow):
                     path, os.path.realpath(path))
         except Exception:
             pass
-        # R11-M5: replace shutil.copy2 (non-atomic — a crash or power
-        # loss mid-copy would truncate the destination). Copy to a sibling
-        # temp file then os.replace it into place. Falls back to direct
-        # copy when the dst dir is unwritable (best effort).
         try:
             dst_dir = os.path.dirname(path) or "."
             fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=dst_dir)
@@ -1214,23 +1078,18 @@ class MainWindow(QMainWindow):
                     os.unlink(tmp)
                 raise
         except OSError:
-            # Last-resort fallback if mkstemp can't write next to dst.
             shutil.copy2(ps["temp_path"], path)
-        # Load the saved file in the viewer (replaces temp)
         self._viewer.load(path)
         idx = self._viewer_stack.currentIndex()
         self._tab_bar.setTabText(idx, os.path.basename(path))
         self._tab_bar.setTabToolTip(idx, path)
-        # Cleanup pipeline state
         self._cleanup_pipeline(vid)
         self._sb.showMessage(t("pipeline.saved"))
 
     def _cleanup_pipeline(self, viewer_id: int):
-        """Remove pipeline temp files and state for a viewer."""
         ps = self._pipeline_state.pop(viewer_id, None)
         if not ps:
             return
-        # Cleanup temp dirs from all tools
         from app.base import BasePage
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -1238,7 +1097,6 @@ class MainWindow(QMainWindow):
                 w.cleanup_pipeline()
 
     def _viewer_has_unsaved(self, viewer=None) -> bool:
-        """Check if a viewer has unsaved pipeline changes."""
         v = viewer or self._viewer
         ps = self._pipeline_state.get(id(v))
         return bool(ps and ps.get("temp_path"))
@@ -1278,9 +1136,6 @@ class MainWindow(QMainWindow):
             from app.utils import show_error
             show_error(self, e)
             return
-        # Capture identity at connect time so the destroyed signal of an
-        # earlier instance (queued after F5 → Esc → F5) does NOT clobber a
-        # freshly-assigned new instance.
         pres.destroyed.connect(
             lambda _=None, w=pres: setattr(self, "_presentation", None)
             if getattr(self, "_presentation", None) is w else None)
@@ -1289,89 +1144,28 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _wipe_password_holder(holder) -> None:
-        """Drop the PDF password cached on one holder (tool page or viewer).
-
-        The single-holder primitive behind :meth:`_wipe_all_pdf_passwords`,
-        also called directly by ``_close_tab`` for a panel the sweep can
-        no longer reach. Two deliberate choices, both bought with bugs:
-        the attribute lookup lives *inside* the ``suppress`` because
-        ``getattr(..., None)`` only swallows ``AttributeError``, so a
-        holder raising anything else used to abort the whole sweep and
-        take ``release_worker()`` and the layout persistence with it; and
-        there is deliberately **no** ``shiboken6.isValid`` guard, because
-        the secret lives in the Python ``__dict__`` that outlives the C++
-        widget, so skipping a dead wrapper would leave behind exactly the
-        secret this exists to drop.
-        """
         with contextlib.suppress(Exception):
             clear_fn = getattr(holder, "_clear_pdf_password", None)
             if callable(clear_fn):
                 clear_fn()
 
     def _wait_for_workers_on_all_pages(self) -> None:
-        """Cancel and drain the background workers of every tool page.
-
-        Extracted from ``closeEvent`` because ``_restart_app`` needs the
-        exact same guarantee and did not have it: it leaves through
-        ``QApplication.exit(0)`` without ever reaching ``closeEvent``, so
-        a compress / OCR / convert QThread was still running while
-        :meth:`_wipe_all_pdf_passwords` emptied the password it was
-        reading, and was then destroyed mid-flight.
-
-        Every call must stay *before* the password sweep, never after.
-        """
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
-            # See _wipe_all_pdf_passwords: the lookup is inside the
-            # suppress because ``getattr(..., None)`` only swallows
-            # AttributeError, and one hostile page must not abort the
-            # remaining pages or the caller's teardown.
             with contextlib.suppress(Exception):
                 wait_fn = getattr(page, "wait_for_workers", None)
                 if callable(wait_fn):
                     wait_fn()
 
     def _wipe_all_pdf_passwords(self) -> None:
-        """Drop the PDF passwords cached by the tool pages and the viewers.
-
-        ``_clear_pdf_password`` existed on BasePage, PdfViewerPanel and
-        TabEditar, but nothing in production ever reached the tool pages:
-        Qt does not deliver ``closeEvent`` to child widgets, so the
-        viewer's own handler never fired either. The encrypt tool's
-        ``_written_pwd`` map, merge's ``_pwd_map`` and both
-        ``_pdf_password`` attributes survived intact until the process
-        died.
-
-        Scope: every widget in ``self.stack`` plus every entry of
-        ``self._viewers``, and nothing else. Copies deeper in the tree
-        are **not** reached and still live until the process exits. An
-        AST enumeration of ``self._password = ...`` under ``app/`` finds
-        **11 write sites in 7 classes**, none of them in either list:
-        ``_SelectCanvas`` and ``_PageJob`` (app/viewer/canvas.py),
-        ``ThumbnailPanel`` and ``ThumbnailWorker``
-        (app/viewer/thumbnails.py), ``PdfEditCanvas`` and
-        ``_EditPageJob`` (app/editor/canvas.py), and
-        ``PresentationWidget`` (app/viewer/presentation.py), whose window
-        hangs off ``self._presentation``. ``ThumbnailWorker._password``
-        has been observed alive *after* this sweep in a real scenario
-        (encrypted PDF, thumbnails rendered). They all use a differently
-        named attribute, so handing them to ``wipe_pdf_password`` would
-        create an unrelated ``_pdf_password`` on them and clear nothing;
-        closing the gap is a rename plus reaching the render jobs, not
-        just an extra call site here.
-        """
         holders = [self.stack.widget(i) for i in range(self.stack.count())]
         holders += list(self._viewers)
         for holder in holders:
             self._wipe_password_holder(holder)
 
     def closeEvent(self, event):
-        """Save layout state on close, prompt for unsaved pipeline changes."""
-        # Check for unsaved pipeline changes
         for v in self._viewers:
             if self._viewer_has_unsaved(v):
-                # R11-M11: default Cancel — Enter on close shouldn't
-                # silently discard unsaved pipeline output.
                 ans = QMessageBox.question(
                     self, t("msg.warning"), t("pipeline.unsaved_prompt"),
                     QMessageBox.StandardButton.Save
@@ -1382,16 +1176,9 @@ class MainWindow(QMainWindow):
                     event.ignore(); return
                 if ans == QMessageBox.StandardButton.Save:
                     self._save_pipeline()
-                break  # only prompt once
-        # Check for unsaved edits in the editor tool (drawings, redactions,
-        # text edits, signatures, notes added but not yet applied/saved)
+                break
         edit_w = self.stack.widget(self._edit_tool_idx())
-        # Use _user_pending so we don't prompt about pre-existing
-        # annotations that the editor mirrored into _pending only for
-        # canvas rendering (loading a PDF with notes should not look
-        # like "unsaved edits").
         if edit_w and getattr(edit_w, "_user_pending", None):
-            # R11-M11: default Cancel for the editor unsaved-edits prompt.
             ans = QMessageBox.question(
                 self, t("msg.warning"), t("pipeline.unsaved_prompt"),
                 QMessageBox.StandardButton.Discard
@@ -1399,19 +1186,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Cancel)
             if ans == QMessageBox.StandardButton.Cancel:
                 event.ignore(); return
-        # Cleanup all pipeline temp files
         for v in list(self._viewers):
             self._cleanup_pipeline(id(v))
         self._wait_for_workers_on_all_pages()
-        # Runs AFTER the worker wait above so no background thread is
-        # still reading a password while we wipe it.
         self._wipe_all_pdf_passwords()
-        # Same for the update-check thread (usually a short HTTP
-        # request, but the user can close the app immediately on
-        # launch and Qt will warn if it's still running). Also drops
-        # the QObject worker to release its closure / release dict
-        # if the user closes the window before the check completes
-        # (R8-H2 defensive path).
         self._update_controller.release_worker()
         try:
             from app.i18n import _update_config
@@ -1433,27 +1211,22 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _toggle_sidebar(self):
-        # Cycle: full → icons-only → hidden → full
         if not self._sidebar_collapsed and self._sidebar.width() > 60:
-            # Full → icons-only
             self._sidebar_collapsed = False
             self._sidebar.setFixedWidth(52)
             self._nav_search.setVisible(False)
             self._footer_w.setVisible(False)
-            # Hide text from nav items, keep icons
             for r in range(self.nav.count()):
                 it = self.nav.item(r)
                 idx = it.data(Qt.ItemDataRole.UserRole)
                 if idx is not None and idx < 0:
-                    it.setHidden(True)  # hide headers & separators
+                    it.setHidden(True)
             self._sidebar_toggle_btn.setIcon(self._ico_bars)
         elif not self._sidebar_collapsed:
-            # Icons-only → hidden
             self._sidebar_collapsed = True
             self._sidebar.setVisible(False)
             self._sidebar_toggle_btn.setIcon(self._ico_bars)
         else:
-            # Hidden → full
             self._sidebar_collapsed = False
             self._sidebar.setVisible(True)
             self._sidebar.setFixedWidth(228)
@@ -1465,8 +1238,6 @@ class MainWindow(QMainWindow):
                 if idx is not None and idx < 0:
                     it.setHidden(False)
             self._sidebar_toggle_btn.setIcon(self._ico_times)
-        # Re-layout viewer pages after sidebar width change
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(50, self._relayout_viewer)
 
     def _relayout_viewer(self):
@@ -1477,9 +1248,6 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode
         self._apply_theme()
-        # Save preference — routed through _update_config so a theme
-        # toggle racing a recent-file write or tab-switch tool_usage
-        # update can't lose either mutation.
         from app.i18n import _update_config
         dark = self._dark_mode
         try:
@@ -1494,7 +1262,6 @@ class MainWindow(QMainWindow):
         self._qapp.setPalette(_make_palette(self._dark_mode))
         self._qapp.setStyleSheet(style)
         self._theme_btn.setText("☀" if self._dark_mode else "🌙")
-        # Update sidebar nav icons (skip section headers)
         for r in range(self.nav.count()):
             it = self.nav.item(r)
             tool_idx = it.data(Qt.ItemDataRole.UserRole)
@@ -1503,13 +1270,11 @@ class MainWindow(QMainWindow):
                 it.setIcon(qta.icon(icon_name, color=nav_color))
             else:
                 it.setForeground(QColor(nav_color))
-        # Update workspace bar icons
         self._ico_bars = qta.icon("fa5s.bars", color=bar_color)
         self._ico_times = qta.icon("fa5s.times", color=bar_color)
         self._sidebar_toggle_btn.setIcon(
             self._ico_bars if self._sidebar_collapsed else self._ico_times)
         self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=bar_color))
-        # (recent button removed)
         self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=bar_color))
         self._night_top_btn.setIcon(qta.icon("fa5s.moon", color=bar_color))
         self._print_top_btn.setIcon(qta.icon("fa5s.print", color=bar_color))
@@ -1523,17 +1288,10 @@ class MainWindow(QMainWindow):
         self._next_pg_btn.setIcon(qta.icon("fa5s.chevron-right", color=bar_color))
         for v in self._viewers:
             v.update_theme(self._dark_mode)
-        # Update all tools that support theme switching
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if hasattr(w, 'update_theme'):
                 w.update_theme(self._dark_mode)
-        # Drop-file widgets and other leaf components carry hardcoded
-        # icon colours that don't track palette changes. Walk every
-        # tool page once and call update_theme on any descendant that
-        # implements it — tools that don't override update_theme
-        # themselves still get their DropFileEdit / MultiDropWidget
-        # children refreshed.
         from app.widgets import DropFileEdit, MultiDropWidget
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -1542,11 +1300,9 @@ class MainWindow(QMainWindow):
                     fn = getattr(child, "update_theme", None)
                     if callable(fn):
                         try: fn(self._dark_mode)
-                        except RuntimeError: pass  # widget destroyed
-        # Propagate theme change to the live presentation window (if any).
+                        except RuntimeError: pass
         pres = getattr(self, "_presentation", None)
         if pres is not None:
             from shiboken6 import isValid as _is_valid
             if _is_valid(pres):
                 pres.update_theme(self._dark_mode)
-

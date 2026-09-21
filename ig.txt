@@ -1,0 +1,7 @@
+*.desktop
+*.txt
+*.md
+tests
+run_tests.py
+failed.txt
+create_shortcut.py

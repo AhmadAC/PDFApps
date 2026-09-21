@@ -5,12 +5,13 @@ import logging
 import logging.handlers
 import os
 import sys
+import traceback
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPalette, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QFileDialog,
+    QScrollArea, QFrame, QFileDialog, QApplication,
 )
 import qtawesome as qta
 
@@ -86,12 +87,6 @@ def parse_pages(text: str, total: int) -> list:
         part = part.strip()
         if not part:
             continue
-        # R7 E5 follow-up: accept open-ended ranges so '3-' means
-        # 'from page 3 to the end' and '-5' means 'from page 1 to
-        # page 5'. Without this, '3-' raised ValueError because
-        # int('') failed. Reject '-' alone (no bounds at all);
-        # otherwise default the missing side to the document's
-        # extreme. Matches the pdftk-style 1- range syntax.
         if "-" in part:
             a, b = part.split("-", 1)
             a = a.strip(); b = b.strip()
@@ -108,10 +103,6 @@ def parse_pages(text: str, total: int) -> list:
             try:
                 a_int = b_int = int(part)
             except ValueError as exc:
-                # int() raised "invalid literal for int() with base 10" —
-                # re-raise with a translated, user-actionable message so
-                # show_error() surfaces something useful instead of the
-                # raw Python error.
                 raise ValueError(
                     t("tool.err.bad_page_input", text=part)) from exc
         if "-" in part:
@@ -125,40 +116,17 @@ def parse_pages(text: str, total: int) -> list:
             raise ValueError(f"Too many pages selected (max {_MAX_PAGES})")
     invalid = [p for p in pages if p < 0 or p >= total]
     if invalid:
-        # p is the 0-based internal index. Convert to the 1-based number the
-        # user actually typed, and be explicit about the valid range so
-        # entering 0 doesn't produce a confusing "[0]" message.
         bad = sorted({(p + 1) if p >= 0 else 0 for p in invalid})
         raise ValueError(
             f"Pages out of range: {bad}  (valid: 1-{total})")
-    # Dedupe + sort: callers like rotate.py would otherwise rotate the
-    # same page twice (compounding angles), extract.py would emit
-    # duplicate pages, and watermark.py / page_numbers.py would do
-    # double work. Input like "3,1,2,3" now returns [0, 1, 2] instead
-    # of [2, 0, 1, 2].
     return sorted(set(pages))
 
 
-#: Megapixel hard limit applied to user-supplied raster images before
-#: they reach QPixmap / PyMuPDF. A 100MP cap rejects gigapixel scans
-#: (e.g. a malicious or accidentally-saved 50000x50000 TIFF) that would
-#: otherwise allocate multi-GB pixmaps and crash the process, while
-#: still admitting every realistic phone-camera / scanner output (the
-#: largest current consumer cameras top out around 200MP — at that
-#: point the warning is intentional and the user knows to downscale).
 _IMAGE_PIXEL_LIMIT = 100_000_000
 
 
 def check_image_size(path: str) -> tuple[bool, int, int]:
-    """Return ``(ok, width, height)`` for the image at ``path``.
-
-    ``ok`` is ``False`` when the image exceeds :data:`_IMAGE_PIXEL_LIMIT`
-    (width * height > 100 megapixels). Used by the editor signature
-    picker and the PDF import-images path to short-circuit before
-    allocating a giant pixmap. On any read error returns ``(True, 0, 0)``
-    so callers fall back to their existing failure path (a missing /
-    corrupted image is the existing tool's responsibility to surface).
-    """
+    """Return ``(ok, width, height)`` for the image at ``path``."""
     try:
         from PIL import Image
         with Image.open(path) as img:
@@ -178,46 +146,11 @@ def pick_folder(parent: QWidget) -> str:
     return QFileDialog.getExistingDirectory(parent, t("btn.select_folder"))
 
 
-# Per-object password dictionaries that must die with ``_pdf_password``:
-# TabJuntar._pwd_map (one password per merge input) and
-# TabEncriptar._written_pwd (output path -> on-disk spelling).
 _SECONDARY_PWD_ATTRS = ("_pwd_map", "_written_pwd")
 
 
 def wipe_pdf_password(obj) -> None:
-    """Best-effort wipe of the cached PDF password attribute on ``obj``.
-
-    Python ``str`` is immutable, so we cannot scrub the original bytes —
-    the interpreter may keep the original buffer alive via interning or
-    constant tables. What we *can* do is drop the only reachable
-    reference so the password no longer surfaces in the live object
-    graph. That is the whole guarantee, for the scalar attribute and for
-    the dictionaries below alike.
-
-    There used to be a ctypes step here that allocated a *separate*
-    zeroed buffer the size of the password and memset it. It never
-    touched the PyUnicode storage (its own docstring said so), so it
-    zeroed an unrelated allocation and returned; and it ran only for
-    ``_pdf_password``, which made the dictionary values look less
-    protected than the scalar when in fact both get exactly the same
-    treatment. Removed rather than duplicated onto the dict values: a
-    no-op applied consistently is still a no-op, and it advertised a
-    protection this code cannot provide.
-
-    Centralised here so BasePage, EditorTab and PdfViewerPanel share a
-    single implementation (used to be three near-identical copies — the
-    review for PR-B flagged the duplication as DRY rot).
-
-    Always assigns ``obj._pdf_password = ""``, so callers can rely on
-    the attribute being defined for the rest of the object's lifecycle
-    even if it was never set.
-
-    Also empties the secondary password dictionaries listed in
-    :data:`_SECONDARY_PWD_ATTRS` when the object has them. ``_pdf_password``
-    is not the only live reference any more: merge keeps one password per
-    input file and the encrypt tool remembers the on-disk spelling of the
-    files it writes, and both used to survive every close/reload path.
-    """
+    """Best-effort wipe of the cached PDF password attribute on ``obj``."""
     obj._pdf_password = ""
     for name in _SECONDARY_PWD_ATTRS:
         cache = getattr(obj, name, None)
@@ -226,30 +159,9 @@ def wipe_pdf_password(obj) -> None:
 
 
 def prompt_pdf_password(path: str, parent=None) -> tuple[bool, str]:
-    """Open the PDF and, if encrypted, prompt the user for a password.
-
-    Returns:
-        (True, "")          → PDF is not encrypted, just open normally
-        (True, "<pwd>")     → PDF is encrypted and the password authenticated
-        (False, "")         → user cancelled the dialog (silent abort)
-
-    The returned string is the *candidate spelling that actually
-    authenticated*, not necessarily the one the user typed and never a
-    canonicalised form — see :mod:`app.pdf_password`. Callers must cache
-    it verbatim: normalising it afterwards is exactly the bug this
-    returns a winner to avoid.
-
-    Detects encryption with PyMuPDF (handles all PDF flavours). The caller
-    opens the file with whatever library (pypdf, fitz) using the returned
-    password.
-
-    On any unexpected error during detection the function returns
-    `(True, "")` so the caller can still try to open and surface its own
-    library-specific error message — i.e. password prompting is best-effort,
-    never a hard gate.
-    """
+    """Open the PDF and, if encrypted, prompt the user for a password."""
     try:
-        import fitz  # PyMuPDF
+        import fitz
         doc = fitz.open(path)
     except Exception:
         return True, ""
@@ -285,11 +197,11 @@ def ToolHeader(icon_name: str, title: str, desc: str) -> QWidget:
     ico.setObjectName("th_icon")
     ico.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     col = QVBoxLayout(); col.setSpacing(3)
-    t = QLabel(title); t.setObjectName("th_title")
-    t.setWordWrap(True)
+    t_lbl = QLabel(title); t_lbl.setObjectName("th_title")
+    t_lbl.setWordWrap(True)
     d = QLabel(desc);  d.setObjectName("th_desc")
     d.setWordWrap(True)
-    col.addWidget(t); col.addWidget(d)
+    col.addWidget(t_lbl); col.addWidget(d)
     h.addWidget(ico, 0); h.addLayout(col, 1)
     w.setMinimumWidth(0)
     return w
@@ -298,12 +210,10 @@ def ToolHeader(icon_name: str, title: str, desc: str) -> QWidget:
 def _action_progress_stylesheet(dark: bool) -> str:
     """Theme-aware stylesheet for the ActionBar's thin progress strip."""
     if dark:
-        # Track = BG_INPUT (matches surrounding cards); chunk = accent teal.
         return (
             f"QProgressBar {{ background: {BG_INPUT}; border-radius: 3px; }}"
             f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
         )
-    # Light theme: track = subtle off-white card, chunk = light-mode accent.
     return (
         f"QProgressBar {{ background: {_LO}; border-radius: 3px; }}"
         f"QProgressBar::chunk {{ background: {_LA}; border-radius: 3px; }}"
@@ -311,14 +221,7 @@ def _action_progress_stylesheet(dark: bool) -> str:
 
 
 def ActionBar(btn_text: str, slot) -> tuple:
-    """Bottom bar with primary action button and optional progress bar.
-
-    Returns ``(bar_widget, button)`` for backwards compatibility. The
-    returned ``bar_widget`` carries an ``update_theme(dark)`` method so
-    MainWindow's theme-walker can re-skin the progress strip on dark /
-    light toggle (the old version hardcoded slate + emerald, which made
-    the strip look out of place in light mode).
-    """
+    """Bottom bar with primary action button and optional progress bar."""
     from PySide6.QtWidgets import QProgressBar
     bar = QWidget(); bar.setObjectName("action_bar")
     v = QVBoxLayout(bar); v.setContentsMargins(20, 8, 20, 8); v.setSpacing(6)
@@ -334,17 +237,14 @@ def ActionBar(btn_text: str, slot) -> tuple:
     btn.clicked.connect(slot)
     h.addWidget(btn)
     v.addLayout(h)
-    bar.progress = progress  # accessible by tools
+    bar.progress = progress
 
     def _update_theme(dark: bool) -> None:
         try:
             progress.setStyleSheet(_action_progress_stylesheet(dark))
         except RuntimeError:
-            pass  # widget destroyed
-    # Attach as a bound attribute so MainWindow.findChildren-style theme
-    # walking (or BasePage subclasses that explicitly forward) can call
-    # it without a class change.
-    bar.update_theme = _update_theme  # type: ignore[attr-defined]
+            pass
+    bar.update_theme = _update_theme
     return bar, btn
 
 
@@ -380,33 +280,20 @@ class CancelledError(Exception):
 
 
 class WrongPasswordError(Exception):
-    """Raised when an encrypted PDF cannot be unlocked with the supplied
-    password (missing or wrong).
+    """Raised when an encrypted PDF cannot be unlocked with the supplied password."""
 
-    Deliberately NOT a subclass of ``ValueError``: the compress tool
-    treats ``ValueError`` from ``_compress_pdf`` as the friendly
-    "no size gain" outcome, so a password failure must be a distinct
-    type to reach the real error path instead of being reported as
-    "no gain". Carries the translated ``tool.err.wrong_password``
-    message so callers can surface it directly.
-    """
 
-# Compression presets — DPI + JPEG quality + grayscale flag
 _COMPRESS_LEVELS = {
     "extreme":     {"dpi": 72,  "quality": 40, "grayscale": True},
     "recommended": {"dpi": 150, "quality": 65, "grayscale": False},
     "low":         {"dpi": 300, "quality": 80, "grayscale": False},
 }
 
-
-_GS_CACHE: tuple[bool, str | None] = (False, None)  # (resolved, path)
+_GS_CACHE: tuple[bool, str | None] = (False, None)
 
 
 def _find_gs():
-    """Find Ghostscript executable. Cached at module level — the lookup
-    runs `glob.glob` over `C:\\Program Files\\gs\\...` on Windows, which
-    stutters on slow disks and was being repeated on every compress run
-    plus once per `_on_done` callback."""
+    """Find Ghostscript executable."""
     global _GS_CACHE
     if _GS_CACHE[0]:
         return _GS_CACHE[1]
@@ -418,7 +305,6 @@ def _find_gs():
         if p and os.path.isfile(p):
             _GS_CACHE = (True, os.path.abspath(p))
             return _GS_CACHE[1]
-    # Windows: check common install paths
     if _pl.system() == "Windows":
         import glob
         for pattern in [r"C:\Program Files\gs\gs*\bin\gswin64c.exe",
@@ -434,23 +320,11 @@ def _find_gs():
 
 
 def _win_short_path(path: str) -> str:
-    """On Windows, try to map ``path`` to its 8.3 short form.
-
-    The 1.5 GB Ghostscript binary still uses the legacy ANSI process
-    locale on Windows when reading the command line, so paths under
-    user profiles with non-ASCII characters (e.g. ``C:\\Users\\José``)
-    get mangled by the time ``-sOutputFile=...`` reaches the engine —
-    causing a misleading "could not open output file" error. Convert
-    to the 8.3 short alias which is always ASCII when the volume has
-    short names enabled (default on NTFS).
-
-    On non-Windows, or if the conversion fails (short names disabled,
-    path does not exist yet), returns ``path`` unchanged.
-    """
+    """On Windows, try to map ``path`` to its 8.3 short form."""
     if sys.platform != "win32" or not path:
         return path
     if not os.path.exists(path):
-        return path  # GetShortPathNameW requires the file to exist
+        return path
     try:
         import ctypes
         buf = ctypes.create_unicode_buffer(512)
@@ -463,13 +337,7 @@ def _win_short_path(path: str) -> str:
 
 
 def _is_valid_pdf(path: str) -> bool:
-    """Return True if ``path`` is a readable, non-empty PDF with pages.
-
-    Guards against a compression pass silently emitting a zero-page or
-    otherwise corrupt file (e.g. saving a still-locked encrypted doc)
-    and having it accepted as a successful result. Any parse error or
-    a page count of zero is treated as invalid.
-    """
+    """Return True if ``path`` is a readable, non-empty PDF with pages."""
     try:
         if not path or not os.path.isfile(path) or os.path.getsize(path) <= 0:
             return False
@@ -479,16 +347,13 @@ def _is_valid_pdf(path: str) -> bool:
         import fitz
         doc = fitz.open(path)
         try:
-            # A still-encrypted doc reports needs_pass and 0 readable
-            # pages; treat that as invalid so it is never accepted.
             if doc.needs_pass:
                 return False
             return doc.page_count > 0
         finally:
             doc.close()
     except Exception:
-        pass  # fitz probe failed/unavailable — fall through to the pypdf fallback below.
-    # fitz unavailable — fall back to pypdf (a guaranteed dependency).
+        pass
     try:
         from pypdf import PdfReader
         r = PdfReader(path)
@@ -501,28 +366,6 @@ def _is_valid_pdf(path: str) -> bool:
 
 def _compress_pdf(src: str, dst: str, level: str = "recommended",
                   progress_fn=None, password: str | None = None) -> tuple:
-    """
-    3-pass compression pipeline (keeps the smallest result):
-
-      Pass A — Ghostscript (if installed)
-        · Full PDF re-render with image downsampling + JPEG recompression
-        · Grayscale conversion on extreme level
-        · Best overall compression — same engine used by iLovePDF / SmallPDF
-
-      Pass B — PyMuPDF (fitz)
-        · scrub()  →  remove metadata, thumbnails, attached files
-        · subset_fonts()  →  keep only used glyphs
-        · rewrite_images()  →  DPI downsampling + JPEG re-encode
-        · save() with garbage=4 + deflate + use_objstms
-
-      Pass C — pikepdf (if installed)
-        · recompress_flate  →  re-encode all Flate streams at optimal level
-        · object_stream_mode=generate  →  group small objects for compression
-        · Best structural optimization
-
-    Falls back gracefully if Ghostscript or pikepdf are not available.
-    Raises ValueError if no pass reduced the file.
-    """
     import tempfile, shutil, subprocess, time
 
     cfg     = _COMPRESS_LEVELS.get(level, _COMPRESS_LEVELS["recommended"])
@@ -532,26 +375,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
     before  = os.path.getsize(src)
     temps: list = []
 
-    # ── Encryption gate ──────────────────────────────────────────────────
-    # A previous bug let an encrypted source fall through every pass:
-    # Ghostscript exits non-zero (output discarded), fitz.open leaves the
-    # doc locked (operations swallowed by `except Exception: pass`), and
-    # pikepdf.open raises PasswordError (also swallowed) — leaving
-    # `temps` empty so the function raised the MISLEADING
-    # "deps_missing" error even with every dependency installed. Detect
-    # encryption up front and abort with a clear password error when the
-    # supplied password is missing or wrong, so downstream passes can
-    # authenticate deterministically.
-    #
-    # Probe with fitz first: it is a guaranteed dependency and unlocks
-    # AES-256 natively, whereas pypdf.decrypt() needs an optional crypto
-    # backend and would spuriously report a correct AES password as
-    # wrong. pypdf is only the fallback if fitz is somehow unavailable.
-    #
-    # The probe resolves the *candidate spelling* that authenticates
-    # (see app.pdf_password) and rebinds ``password`` to it, so the
-    # Ghostscript / PyMuPDF / pikepdf passes below all hash the same
-    # byte sequence the gate just validated.
     encrypted = False
     authed = False
     try:
@@ -574,8 +397,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
             pr = PdfReader(src)
             encrypted = pr.is_encrypted
             if encrypted and password:
-                # decrypt() returns PasswordType.NOT_DECRYPTED (0) on a
-                # wrong password; anything else means success.
                 winner = decrypt_pypdf(pr, password)
                 authed = winner is not None
                 if winner is not None:
@@ -584,28 +405,17 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
             encrypted = False
     if encrypted and not authed:
         raise WrongPasswordError(t("tool.err.wrong_password"))
-    # Password is only meaningful for an encrypted source. Normalise to
-    # None otherwise so each pass can pass it through unconditionally
-    # without confusing the decrypted intermediate temps in Pass C.
     if not encrypted:
         password = None
 
     def _prog(stage, cur=0, tot=0):
         if progress_fn and progress_fn(stage, cur, tot) is False:
-            # Loop var is `_p`, not `t` — the module-level `t` from
-            # app.i18n is shadowed inside this function otherwise, and
-            # any future translated string here would silently call a
-            # str path. Best-effort cleanup; the outer try/except at
-            # the bottom retries any survivors after each pass's
-            # finally has had a chance to release file handles
-            # (Windows can't unlink a tempfile while pikepdf/fitz
-            # still has it open).
             for _p in temps:
                 try: os.unlink(_p)
                 except Exception: pass
             raise CancelledError()
 
-    # ── Pass A : Ghostscript — full re-render ────────────────────────────
+    # ── Pass A : Ghostscript ─────────────────────────────────────────────
     _prog("passA")
     gs = _find_gs()
     p = None
@@ -638,20 +448,10 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
                         "-dProcessColorModel=/DeviceGray",
                         "-dOverrideICC"]
             if password:
-                # Let Ghostscript open the encrypted source. Without this
-                # gs exits non-zero and the pass silently produced nothing.
                 cmd += [f"-sPDFPassword={password}"]
-            # Short-name conversion (Windows non-ASCII user profile
-            # safety). gs reads the command line through the legacy ANSI
-            # encoding; the short alias is always ASCII on NTFS volumes
-            # with 8.3 names enabled (default). No-op on POSIX.
             _src_for_gs = _win_short_path(src)
             _out_for_gs = _win_short_path(p)
             cmd += [f"-sOutputFile={_out_for_gs}", _src_for_gs]
-            # Spawn gs as a polled subprocess so the cancel button works
-            # mid-render. subprocess.run(timeout=120) blocks the worker
-            # thread for the whole timeout window, leaving Cancel dead
-            # for up to two minutes on big PDFs.
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE)
             deadline = time.monotonic() + 120
@@ -691,7 +491,7 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
                 try: os.unlink(p)
                 except Exception: pass
 
-    # ── Pass B : PyMuPDF — scrub + rewrite_images ────────────────────────
+    # ── Pass B : PyMuPDF ─────────────────────────────────────────────────
     _prog("passB_setup")
     doc = None
     p = None
@@ -699,31 +499,22 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
         import fitz
         doc = fitz.open(src)
         if doc.needs_pass:
-            # The encryption gate above already validated the password,
-            # so a failure here means the file changed underneath us —
-            # abort loudly instead of scrubbing a locked doc into an
-            # empty output that would be reported as success.
             if not (password and doc.authenticate(password)):
                 raise WrongPasswordError(t("tool.err.wrong_password"))
 
-        # 1. Remove dead weight
         try:
             doc.scrub(metadata=True, xml_metadata=True,
                       thumbnails=True, attached_files=True)
         except Exception:
             pass
 
-        # Cancel checkpoint between scrub (slow on heavy XMP /
-        # attachments) and subset_fonts (also slow on font-heavy PDFs).
         _prog("passB_setup")
 
-        # 2. Font subsetting
         try:
             doc.subset_fonts()
         except Exception:
             pass
 
-        # 3. Rewrite all images (replaces the old manual loop)
         _prog("passB_images", 0, 1)
         try:
             doc.rewrite_images(
@@ -741,7 +532,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
             pass
         _prog("passB_images", 1, 1)
 
-        # 4. Save with all compression flags
         _prog("passB_save")
         fd, p = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
         save_kw = dict(garbage=4, deflate=True, deflate_fonts=True, clean=True)
@@ -751,16 +541,10 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
             doc.save(p, **save_kw)
         if _is_valid_pdf(p):
             temps.append(p)
-            p = None  # ownership transferred to temps
+            p = None
     except CancelledError:
-        # Re-raise so do_work cancels cleanly. The bare `except
-        # Exception:` below would otherwise swallow it and the pipeline
-        # would silently continue into Pass C.
         raise
     except WrongPasswordError:
-        # A locked doc must never be scrubbed into an (empty) output and
-        # reported as success — surface the password error instead of
-        # being swallowed by `except Exception` below.
         raise
     except Exception:
         pass
@@ -772,26 +556,16 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
             try: os.unlink(p)
             except Exception: pass
 
-    # ── Pass C : pikepdf — structural optimization ───────────────────────
+    # ── Pass C : pikepdf ─────────────────────────────────────────────────
     _prog("passC")
     pdf = None
     p = None
     try:
         import pikepdf
-        # Optimize the best result so far (or the original)
         best_so_far = min(temps, key=lambda f: os.path.getsize(f)) if temps else src
-        # Pass A/B temps are always decrypted; only the original source
-        # (used when no prior pass produced a temp) may still need the
-        # password. Passing it there lets pikepdf unlock the source
-        # instead of raising PasswordError that the old `except
-        # Exception: pass` swallowed.
         open_kw = {"password": password} if (best_so_far == src and password) else {}
         pdf = pikepdf.open(best_so_far, **open_kw)
         fd, p = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
-        # Cancel checkpoint between open and save — pdf.save is the
-        # slow part (linearize + recompress_flate). Without this, a
-        # cancel during the parse window would still pay the full save
-        # cost before honouring the request.
         _prog("passC")
         pdf.save(p,
                  object_stream_mode=pikepdf.ObjectStreamMode.generate,
@@ -800,12 +574,8 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
                  linearize=True)
         if _is_valid_pdf(p):
             temps.append(p)
-            p = None  # ownership transferred to temps
+            p = None
     except CancelledError:
-        # Close pdf eagerly so any tempfile pikepdf was holding open
-        # (Pass A/B's output passed in as `best_so_far`) can be
-        # unlinked. Then retry the temps cleanup that _prog attempted
-        # but Windows refused while the handle was live.
         if pdf is not None:
             try: pdf.close()
             except Exception: pass
@@ -827,7 +597,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
     if not temps:
         raise RuntimeError(t("tool.compress.deps_missing"))
 
-    # ── Choose the best result ──────────────────────────────────────────
     best      = min(temps, key=lambda p: os.path.getsize(p))
     best_size = os.path.getsize(best)
 
@@ -843,11 +612,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
                            before=f"{before/1024:.0f}",
                            after=f"{best_size/1024:.0f}"))
 
-    # Atomic write: rename within the same volume, else copy to a temp
-    # file next to dst and atomic-rename. shutil.move falls back to a
-    # plain copy + unlink across volumes (best lives in %TEMP%, dst
-    # usually on the user's disk) — a crash mid-copy would leave dst
-    # truncated and overwrite a previous good output.
     dst_dir = os.path.dirname(dst) or "."
     try:
         os.replace(best, dst)
@@ -866,16 +630,8 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
     return before, best_size
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Theme helpers — for places that need to pick a color without dependency
-# injection from MainWindow._dark_mode. Reads the user's `dark_mode`
-# preference from the config file (always fresh, ~1ms cost).
-# ─────────────────────────────────────────────────────────────────────────────
-
 def is_dark() -> bool:
-    """Return the user's current dark-mode preference.
-    Defaults to True (the original ship default) when config is missing
-    or corrupted."""
+    """Return the user's current dark-mode preference."""
     try:
         import json
         from app.i18n import _CONFIG_PATH
@@ -886,25 +642,16 @@ def is_dark() -> bool:
 
 
 def error_color() -> str:
-    """Return the right error/red shade for the current theme. Brighter
-    on dark backgrounds, darker on light — so the text stays readable."""
     return "#F87171" if is_dark() else "#DC2626"
 
 
 def success_color(dark: bool | None = None) -> str:
-    """Return the right emerald shade for the current theme: brighter on
-    dark backgrounds, deeper on light."""
     if dark is None:
         dark = is_dark()
     return SUCCESS_DARK if dark else SUCCESS_LIGHT
 
 
 def result_label_style(dark: bool | None = None) -> str:
-    """Stylesheet for the green 'result' summary label that compress /
-    convert / import tools display after a successful run. Theme-aware
-    so the label stays legible after a runtime theme toggle (the old
-    hardcoded ``#059669`` was emerald-600, fine on light backgrounds
-    but visually loud and slightly off on the dark teal theme)."""
     return (f"font-weight:600; font-size:11pt; color:{success_color(dark)}; "
             "background:transparent; padding:10px 4px;")
 
@@ -923,79 +670,85 @@ def _log_path() -> str:
 
 
 def setup_logging() -> None:
-    """Configure a rotating file logger at the user-config dir.
+    """Configure a rotating file logger and a console logger (stderr).
     Idempotent — safe to call multiple times."""
     global _logging_initialised
     if _logging_initialised:
         return
     _logging_initialised = True
     try:
-        log_path = _log_path()
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=1_000_000, backupCount=2, encoding="utf-8",
-        )
-        handler.setFormatter(logging.Formatter(
+        formatter = logging.Formatter(
             "%(asctime)s %(levelname)s [%(name)s] %(message)s"
-        ))
+        )
         root = logging.getLogger()
         root.setLevel(logging.INFO)
-        root.addHandler(handler)
+
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
+
+        log_path = _log_path()
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=1_000_000, backupCount=2, encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
     except Exception:
-        # Never let logging setup crash the app
         pass
 
 
 def show_error(parent, exc: BaseException) -> None:
     """Show a translated, friendly error dialog with collapsible technical
-    details. Logs the full exception (with traceback) to the log file.
-
-    Replaces the historical pattern:
-        QMessageBox.critical(self, t("msg.error"), str(e))
-    which dumped raw Python traceback / paths onto the user. The new dialog
-    shows a localized "something went wrong" message; the technical detail
-    is in the collapsed "Show Details" pane, and the full traceback is in
-    the log file at `pdfapps.log` next to the config.
-
-    :class:`WrongPasswordError` is the one exception routed differently.
-    It is not a crash: it is a recoverable, self-inflicted and fully
-    understood condition whose message is already translated and already
-    addressed to the user. Sending it down the generic path showed
-    "something went wrong ... the full traceback has been written to the
-    log file" as the primary text and hid the real sentence behind
-    "Show Details", prefixed with the Python class name. So it gets a
-    warning icon, its own message as the primary text, and no details
-    pane -- the same shape as the hand-rolled QMessageBox.warning the
-    encrypt tool already uses for the identical situation.
-    """
+    details, log the full error with traceback to stderr and log file,
+    and automatically copy the complete error details to the PySide6 clipboard."""
     from PySide6.QtWidgets import QMessageBox
 
     if isinstance(exc, WrongPasswordError):
-        # A wrong password is expected user input, not a fault: log at
-        # warning level and without the traceback, which would otherwise
-        # fill the log with stack dumps of a typo.
         logging.warning("Wrong PDF password: %s", exc)
+        with contextlib.suppress(Exception):
+            sys.stderr.write(f"\n[PDFApps WARNING] Wrong PDF password: {exc}\n")
+            sys.stderr.flush()
+        
+        err_msg = str(exc) or t("tool.err.wrong_password")
+        
+        with contextlib.suppress(Exception):
+            cb = QApplication.clipboard()
+            if cb is not None:
+                cb.setText(err_msg)
+
         box = QMessageBox(parent)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle(t("msg.warning"))
-        # str(exc) only: no `type(exc).__name__` prefix, so the dialog
-        # never leaks "WrongPasswordError:" to an end user in 8 locales.
-        box.setText(str(exc) or t("tool.err.wrong_password"))
+        box.setText(err_msg)
         box.exec()
         return
 
-    # logging.exception() relies on sys.exc_info() being active, but this
-    # helper is typically called from a queued slot on the main thread —
-    # by then the originating `except` block has already exited and
-    # sys.exc_info() is (None, None, None). Pass the exception instance
-    # explicitly via exc_info= so the traceback still lands in the log.
     logging.error(
         "UI error surfaced: %s: %s",
         type(exc).__name__, exc, exc_info=exc,
     )
+    
+    try:
+        tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        err_text = "".join(tb_lines)
+    except Exception:
+        err_text = f"{type(exc).__name__}: {exc}"
+
+    with contextlib.suppress(Exception):
+        sys.stderr.write(f"\n[PDFApps ERROR]\n{err_text}\n")
+        sys.stderr.flush()
+
+    with contextlib.suppress(Exception):
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(err_text)
+            sys.stderr.write("Error successfully copied to clipboard.\n")
+            sys.stderr.flush()
+
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Critical)
     box.setWindowTitle(t("msg.error"))
-    box.setText(t("msg.unexpected"))
-    box.setDetailedText(f"{type(exc).__name__}: {exc}")
+    box.setText(t("msg.unexpected") + "\n\n(Error details have been copied to your clipboard)")
+    box.setDetailedText(err_text)
     box.exec()

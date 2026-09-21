@@ -137,8 +137,6 @@ class PdfViewerPanel(QWidget):
         self._recents_layout = QVBoxLayout(self._recents_container)
         self._recents_layout.setContentsMargins(0, 16, 0, 0)
         self._recents_layout.setSpacing(4)
-        # R10 #5: populate via the refresh helper so the same code
-        # path drives both initial draw and post-load updates.
         self._refresh_recents()
         ph_lay.addWidget(self._recents_container, 0, Qt.AlignmentFlag.AlignCenter)
 
@@ -156,9 +154,7 @@ class PdfViewerPanel(QWidget):
         self._thumbnails = ThumbnailPanel(self)
         self._thumbnails.page_requested.connect(self._on_thumbnail_clicked)
 
-        # Sidebar tab widget: [Contents | Pages]. Individual tabs are
-        # shown/hidden dynamically: Contents only when the PDF has a
-        # non-empty TOC, Pages always once a doc is loaded.
+        # Sidebar tab widget: [Contents | Pages]
         self._sidebar_tabs = QTabWidget()
         self._sidebar_tabs.setObjectName("viewer_sidebar_tabs")
         self._sidebar_tabs.setDocumentMode(True)
@@ -171,9 +167,6 @@ class PdfViewerPanel(QWidget):
         # ── Canvas with continuous scroll of all pages ──────────────────
         self._canvas = _SelectCanvas()
         self._canvas.zoom_changed.connect(self._on_zoom_changed)
-        # M2: the canvas may close+reopen the shared fitz.Document (failed
-        # saveIncr in the delete-comment path). When it does, it hands us
-        # the new handle so _fitz_doc never points at a closed Document.
         self._canvas.doc_replaced.connect(self._on_doc_replaced)
         self._canvas_scroll = QScrollArea()
         self._canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -194,7 +187,7 @@ class PdfViewerPanel(QWidget):
         self._viewer_splitter.setCollapsible(0, True)
         self._viewer_splitter.setCollapsible(1, False)
         self._viewer_splitter.setVisible(False)
-        self._sidebar_tabs.setVisible(False)  # hidden until a PDF is loaded
+        self._sidebar_tabs.setVisible(False)
         layout.addWidget(self._viewer_splitter, 1)
 
         # ── Search bar (Ctrl+F) ───────────────────────────────────────────
@@ -231,13 +224,8 @@ class PdfViewerPanel(QWidget):
         sb_lay.addWidget(self._search_prev_btn); sb_lay.addWidget(self._search_next_btn); sb_lay.addWidget(self._search_close_btn)
         self._search_bar.setVisible(False)
         layout.addWidget(self._search_bar)
-        self._search_results: list[tuple[int, list]] = []  # [(page_idx, [fitz_rects]), ...]
+        self._search_results: list[tuple[int, list]] = []
         self._search_current = -1
-        # Debounce keystrokes: _do_search scans every page synchronously on
-        # the UI thread, which froze the viewer for seconds per keystroke on
-        # large PDFs. Coalesce rapid edits into a single search a short
-        # moment after the user stops typing (same pattern as the thumbnail
-        # scroll timer).
         self._search_debounce = QTimer(self)
         self._search_debounce.setSingleShot(True)
         self._search_debounce.setInterval(250)
@@ -256,6 +244,13 @@ class PdfViewerPanel(QWidget):
         layout.addWidget(self._sel_status)
         self._canvas.text_copied.connect(self._on_text_copied)
 
+    def set_page_rotations(self, rotations: dict[int, int]):
+        """Update live preview rotations across continuous scroll and thumbnail sidebar."""
+        if hasattr(self, "_canvas"):
+            self._canvas.set_page_rotations(rotations)
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.set_page_rotations(rotations)
+
     def _on_zoom_changed(self, pct: int):
         self._zoom_lbl.setText(f"{pct}%")
         self._update_page_label()
@@ -265,17 +260,13 @@ class PdfViewerPanel(QWidget):
         self._update_page_label()
 
     def _on_text_copied(self, text: str):
-        from PySide6.QtCore import QTimer
         if text:
             self._sel_status.setText(t("viewer.copied", n=len(text)))
             self._sel_status.setStyleSheet("color: #0D9488; padding: 4px;")
         else:
             self._sel_status.setText(t("viewer.no_text"))
             self._sel_status.setStyleSheet("color: #D97706; padding: 4px;")
-        # Guard against tab-close within the 4 s window: if the user
-        # closes the viewer tab after copying, the C++ widget is gone
-        # and the lambda would crash. PySide6 has no QPointer, so use
-        # shiboken6.isValid() to check liveness.
+
         def _reset():
             if not isValid(self._sel_status):
                 return
@@ -326,33 +317,16 @@ class PdfViewerPanel(QWidget):
         self._search_prev_btn.setIcon(qta.icon('fa5s.chevron-up',     color=c))
         self._search_next_btn.setIcon(qta.icon('fa5s.chevron-down',   color=c))
         self._search_close_btn.setIcon(qta.icon('fa5s.times',         color=c))
-        # Update recent files section
         link_style = self._recent_link_style(dark)
         for link in self._recent_links:
             link.setStyleSheet(link_style)
         for btn in self._recent_del_btns:
             btn.setIcon(qta.icon("fa5s.trash-alt", color=c))
-        # Thumbnail delegate re-reads dark flag to pick hover colour.
         self._thumbnails.update_theme(dark)
 
-    # Drag & drop is handled at the MainWindow level (see window.py).
-
-    # ── Recents ────────────────────────────────────────────────────────────
     def _refresh_recents(self):
-        """Rebuild the recents section under the placeholder (R10 #5).
-
-        ``add_recent_file()`` is called from ``window._load_and_track``
-        AFTER a file is opened, but the recents UI was built once in
-        ``__init__`` and never re-read the config. Users opening a new
-        file saw the stale list until the next launch. Rebuild from
-        scratch so the next time the placeholder is shown (i.e. after
-        the user closes the open file) the list is up to date.
-        """
         from app.i18n import get_recent_files
         lay = self._recents_layout
-        # Wipe existing rows. takeAt(0) detaches and deleteLater
-        # the widget — including nested layouts via the recursive
-        # _drop_layout_item helper below.
         while lay.count():
             item = lay.takeAt(0)
             w = item.widget()
@@ -369,8 +343,6 @@ class PdfViewerPanel(QWidget):
             "font-size: 10pt; font-weight: 600; opacity: 0.7;")
         lay.addWidget(rec_title)
         for rp in recents[:5]:
-            # Use os.path.lexists to avoid hydrating OneDrive Files-On-Demand
-            # placeholders at viewer startup (matches i18n.py:290 fix).
             if not os.path.lexists(rp):
                 continue
             fname = os.path.basename(rp)
@@ -407,9 +379,7 @@ class PdfViewerPanel(QWidget):
             row_h.addWidget(del_btn)
             lay.addWidget(row)
 
-    # ── Open dialog ────────────────────────────────────────────────────────
     def _remove_recent(self, path: str, row_widget):
-        """Remove a file from recents and hide its row."""
         from app.i18n import _update_config
         normed = os.path.normpath(path)
 
@@ -434,43 +404,25 @@ class PdfViewerPanel(QWidget):
         if path:
             self.load(path)
 
-    # ── API ──────────────────────────────────────────────────────────────────
     def current_path(self) -> str:
         return self._current_path
 
     # ── TOC / Bookmarks ─────────────────────────────────────────────────
     def _set_toc_tab_visible(self, visible: bool) -> None:
-        """Show/hide the Contents tab without removing it from the tab
-        widget. Qt has no first-class ``setTabVisible`` on older
-        PySide6 releases, but 6.11 does — guard with hasattr so we
-        keep working on legacy bindings by inserting/removing instead.
-        """
         if hasattr(self._sidebar_tabs, "setTabVisible"):
             self._sidebar_tabs.setTabVisible(self._toc_tab_idx, visible)
             return
-        # Legacy path: remove/insert. Best-effort; safe if already gone.
         present = self._sidebar_tabs.indexOf(self._toc_tree) != -1
         if visible and not present:
             self._sidebar_tabs.insertTab(
                 0, self._toc_tree, t("viewer.sidebar.contents"))
             self._toc_tab_idx = 0
-            # Pages moved to index 1 after re-insert.
             self._pages_tab_idx = self._sidebar_tabs.indexOf(self._thumbnails)
         elif not visible and present:
             self._sidebar_tabs.removeTab(self._toc_tab_idx)
             self._pages_tab_idx = self._sidebar_tabs.indexOf(self._thumbnails)
 
     def _populate_toc(self, doc):
-        """Read the PDF outline and build the tree. Hides the Contents
-        tab (but keeps Pages) if the outline is empty.
-
-        Wrapped in try/except: a malformed outline (cyclic refs, bad
-        page indexes, unexpected entry shape) used to leave the TOC
-        panel half-populated and could raise mid-build, surfacing as a
-        cryptic stack trace. Now the failure is logged and the panel
-        hides gracefully so the rest of the viewer stays usable
-        (R8 bonus #7).
-        """
         self._toc_tree.clear()
         try:
             toc = doc.get_toc()
@@ -481,14 +433,11 @@ class PdfViewerPanel(QWidget):
             toc = []
         if not toc:
             self._set_toc_tab_visible(False)
-            # Pages tab is still there → activate it so the user sees
-            # something useful when they open the sidebar.
             pages_idx = self._sidebar_tabs.indexOf(self._thumbnails)
             if pages_idx >= 0:
                 self._sidebar_tabs.setCurrentIndex(pages_idx)
             return
         try:
-            # toc is a list of [level, title, page] (page is 1-indexed)
             stack = [(0, self._toc_tree.invisibleRootItem())]
             for level, title, page in toc:
                 while stack and stack[-1][0] >= level:
@@ -500,21 +449,12 @@ class PdfViewerPanel(QWidget):
                 stack.append((level, item))
             self._toc_tree.expandToDepth(1)
             self._set_toc_tab_visible(True)
-            # Make Contents the active tab by default when the PDF has a
-            # TOC — the original (pre-sidebar-tabs) behaviour showed the
-            # outline as the sidebar itself. Without this, a prior no-TOC
-            # document that switched the active tab to "Pages" (see the
-            # empty-TOC branch above) leaves the sidebar parked on Pages,
-            # so re-showing the Contents tab button here never actually
-            # surfaces the outline: the tab appears absent to the user.
             self._sidebar_tabs.setCurrentIndex(self._toc_tab_idx)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning(
                 "Failed to build TOC tree for %s: %s",
                 self._current_path, exc)
-            # Reset to a known-empty state so a partial build does not
-            # leave dangling QTreeWidgetItems pointing at invalid pages.
             self._toc_tree.clear()
             self._set_toc_tab_visible(False)
 
@@ -526,64 +466,32 @@ class PdfViewerPanel(QWidget):
         self._canvas_scroll.verticalScrollBar().setValue(y)
 
     def _on_thumbnail_clicked(self, page_idx: int) -> None:
-        """User clicked a page thumbnail — scroll the canvas there."""
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
 
     def _toggle_toc(self):
-        """Toggle the whole sidebar (Contents + Pages tab widget).
-
-        The button still lives on the header with the bookmark icon —
-        the semantics widened when thumbnails joined the sidebar, but
-        renaming the attribute would break existing accessibility hooks
-        and translation strings on this release.
-        """
         visible = self._sidebar_tabs.isVisible()
         self._sidebar_tabs.setVisible(not visible)
         if not visible:
             self._viewer_splitter.setSizes(
                 [220, max(800, self._viewer_splitter.width() - 220)])
-        # Re-layout pages after splitter change
         if self._canvas._doc and self._canvas._zoom_factor == 1.0:
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(50, self._canvas._layout_and_schedule)
 
     def _toggle_night_mode(self):
         self._canvas.set_night_mode(self._night_btn.isChecked())
 
     def _on_doc_replaced(self, new_doc):
-        """The canvas closed+reopened the shared fitz.Document (e.g. after a
-        failed saveIncr in the delete-comment path). Repoint _fitz_doc at the
-        fresh handle so search/print never touch the closed one (M2)."""
         self._fitz_doc = new_doc
 
     def _reset_search_state(self):
-        """Cancel any pending debounced search and clear its results.
-
-        Shared by ``load`` (opening a new document) and
-        ``_reset_to_placeholder`` (teardown). A search scheduled against
-        the previous document must never fire against the new one: the
-        _do_search guard keeps a stale fire from crashing, but leaving the
-        timer armed is incoherent — the highlights/label would flash the
-        old query's hits on the freshly loaded file.
-        """
         self._search_debounce.stop()
         self._pending_search_query = ""
         self._close_search()
 
     def _reset_to_placeholder(self):
-        """Return the viewer to its initial empty state.
-
-        Used when the user cancels the password prompt for a new encrypted
-        PDF after the previously open document was already closed: without
-        this the splitter stays visible with a stale title and active
-        navigation buttons, leaving the viewer in an inconsistent empty
-        state.
-        """
         self._current_path = ""
         self._fitz_doc = None
-        # Cancel any pending debounced search, drop stale highlights and
-        # close the search bar.
         self._reset_search_state()
         self._placeholder.setVisible(True)
         self._viewer_splitter.setVisible(False)
@@ -594,12 +502,11 @@ class PdfViewerPanel(QWidget):
         self._zoom_lbl.setText(t("zoom.fit"))
         self._toc_btn.setVisible(False)
         self._night_btn.setChecked(False)
+        self.set_page_rotations({})
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,
                     self._print_btn, self._night_btn, self._prev_btn,
                     self._next_btn, self._toc_btn):
             btn.setEnabled(False)
-        # Recents may have changed since the panel was built; rebuild so the
-        # placeholder shows the current list.
         self._refresh_recents()
 
     def load(self, path: str):
@@ -610,28 +517,11 @@ class PdfViewerPanel(QWidget):
                                 t("viewer.invalid_msg"))
             return
         import fitz
-        # Close the previous document through the canvas helper so the
-        # canvas drops its _doc reference + bumps _gen BEFORE the
-        # fitz.Document is actually closed. Without this ordering, a
-        # paintEvent or _on_page_ready queued between the panel's
-        # _fitz_doc.close() and the next _canvas.load() touches a
-        # freed Document and raises ``RuntimeError: document closed``
-        # (B1). _canvas.close_doc() also handles closing the underlying
-        # doc, so don't double-close from this side.
         if self._fitz_doc:
             self._canvas.close_doc()
             self._fitz_doc = None
-            # A search scheduled (debounced) against the outgoing document
-            # must not fire against the new one — stop the timer, drop the
-            # pending query and close the search bar before the swap.
             self._reset_search_state()
-            # Stop the thumbnail worker and drop cached pixmaps of the
-            # previous doc before we point the panel at a new file.
             self._thumbnails.clear()
-            # Forget the previous file's password before we start the
-            # new one's prompt flow (R5/D2). _clear_pdf_password is a
-            # best-effort wipe — Python str immutability blocks a true
-            # zero-scrub.
             self._clear_pdf_password()
         try:
             doc = fitz.open(path)
@@ -646,33 +536,21 @@ class PdfViewerPanel(QWidget):
             while True:
                 dlg = _PdfPasswordDialog(os.path.basename(path), wrong=wrong, parent=self)
                 if dlg.exec() != QDialog.DialogCode.Accepted:
-                    # The previously open document (if any) was already torn
-                    # down above, so simply returning would leave the viewer
-                    # showing an empty splitter with the old title and live
-                    # nav buttons. Restore the placeholder state instead.
                     doc.close()
                     self._reset_to_placeholder()
                     return
                 winner = authenticate_fitz(doc, dlg.password())
                 if winner is not None:
-                    # Cache the exact spelling that authenticated, never
-                    # a canonicalised one: this value is propagated
-                    # verbatim to the canvas, the thumbnail worker and
-                    # (via MainWindow._try_auto_load) to every tool, and
-                    # normalising it here is what used to leave the
-                    # thumbnail strip blank and make the tools claim the
-                    # password was wrong. See app.pdf_password.
                     self._pdf_password = winner
                     break
                 wrong = True
         self._current_path = path
         self._fitz_doc     = doc
+        self.set_page_rotations({})
         self._canvas.load(doc, 0, path=path, password=getattr(self, "_pdf_password", ""))
         self._canvas_scroll.verticalScrollBar().setValue(0)
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
-        # Sidebar is always available once a PDF loads — thumbnails
-        # don't depend on the PDF having a TOC.
         self._sidebar_tabs.setVisible(True)
         self._sel_status.setVisible(True)
         self._name_lbl.setText(os.path.basename(path))
@@ -680,14 +558,8 @@ class PdfViewerPanel(QWidget):
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,
                     self._print_btn, self._night_btn):
             btn.setEnabled(True)
-        # The sidebar toggle used to live behind a "PDF has TOC" gate;
-        # now that Pages is a first-class tab the button is always
-        # meaningful. Keep the icon/tooltip — see _toggle_toc note.
         self._toc_btn.setVisible(True)
         self._toc_btn.setEnabled(True)
-        # Populate thumbnails BEFORE the TOC so the worker starts
-        # rendering while _populate_toc walks the outline on the UI
-        # thread.
         self._thumbnails.set_document(
             path, doc.page_count,
             password=getattr(self, "_pdf_password", ""))
@@ -714,8 +586,6 @@ class PdfViewerPanel(QWidget):
     def _on_search_text_changed(self, text: str):
         query = text.strip()
         if not query:
-            # Empty query resets immediately (no scan needed) and cancels
-            # any pending debounced search.
             self._search_debounce.stop()
             self._pending_search_query = ""
             self._search_results.clear()
@@ -724,7 +594,6 @@ class PdfViewerPanel(QWidget):
             self._canvas.set_search_highlights([])
             self._canvas.update()
             return
-        # Defer the expensive full-document scan until typing settles.
         self._pending_search_query = query
         self._search_debounce.start()
 
@@ -734,10 +603,6 @@ class PdfViewerPanel(QWidget):
             self._do_search(query)
 
     def _do_search(self, query: str):
-        # Running the debounce timer can outlive the document, and a failed
-        # saveIncr in the canvas may have closed+reopened the handle. Guard
-        # against a None or already-closed Document so a keystroke can never
-        # crash with "document closed".
         doc = self._fitz_doc
         if doc is None or getattr(doc, "is_closed", False):
             return
@@ -749,8 +614,6 @@ class PdfViewerPanel(QWidget):
                 if rects:
                     results.append((page_idx, rects))
         except (RuntimeError, ValueError):
-            # Document was closed underneath us mid-scan — abort gracefully
-            # rather than propagate to the Qt event loop.
             return
         self._search_results = results
         total = sum(len(rects) for _, rects in results)
@@ -787,7 +650,6 @@ class PdfViewerPanel(QWidget):
     def _update_search_highlight(self):
         total = sum(len(rects) for _, rects in self._search_results)
         self._search_lbl.setText(f"{self._search_current + 1} / {total}")
-        # Build highlight list for canvas: [(page_idx, fitz_rect), ...]
         all_highlights = []
         flat_idx = 0
         current_page = 0
@@ -798,10 +660,8 @@ class PdfViewerPanel(QWidget):
                     current_page = page_idx
                 flat_idx += 1
         self._canvas.set_search_highlights(all_highlights, self._search_current)
-        # Scroll to current match
         if current_page < len(self._canvas._entries):
             entry = self._canvas._entries[current_page]
-            # Get the rect of current match
             _, cur_rect = all_highlights[self._search_current]
             z = self._canvas._zoom
             y_target = entry.y_off + int(cur_rect.y0 * z) - 100
@@ -822,8 +682,6 @@ class PdfViewerPanel(QWidget):
         self._page_lbl.setText(f"{idx + 1} / {total}")
         self._prev_btn.setEnabled(idx > 0)
         self._next_btn.setEnabled(idx < total - 1)
-        # Keep the thumbnail sidebar highlight in sync with whichever
-        # page the user is currently reading in the canvas.
         self._thumbnails.set_current_page(idx)
 
     def _prev_page(self):
@@ -849,10 +707,6 @@ class PdfViewerPanel(QWidget):
 
     # ── Print ────────────────────────────────────────────────────────────────
     def _print_pdf(self):
-        # Guard the shared handle: a failed saveIncr in the canvas may have
-        # closed+reopened it (the panel is repointed via _on_doc_replaced),
-        # but defend against a None or already-closed Document either way so
-        # printing can never raise "document closed".
         doc = self._fitz_doc
         if doc is None or getattr(doc, "is_closed", False):
             return
@@ -874,21 +728,11 @@ class PdfViewerPanel(QWidget):
 
         import fitz
         page_count = len(self._fitz_doc)
-        # Honour QPrintDialog settings — pre-fix the loop always printed
-        # every page once in forward order, ignoring the user's choice
-        # of range / copies / reverse (R7/N7-H1).
-        #   - fromPage()/toPage() return 0 when "all pages" is selected
-        #   - copyCount() reports how many copies the user asked for
-        #   - pageOrder() == LastPageFirst means print in reverse
         from_page = printer.fromPage()
         to_page = printer.toPage()
         if from_page == 0 and to_page == 0:
             pages = list(range(page_count))
         else:
-            # Qt's fromPage/toPage are 1-based and inclusive. Clamp to
-            # [0, page_count) before iterating so an out-of-range value
-            # (PDFs with fewer pages than the dialog suggested) cannot
-            # crash the render loop.
             start = max(0, from_page - 1)
             end = min(page_count, to_page)
             pages = list(range(start, end))
@@ -896,41 +740,28 @@ class PdfViewerPanel(QWidget):
             reverse = (printer.pageOrder()
                        == QPrinter.PageOrder.LastPageFirst)
         except AttributeError:
-            # PySide6 < 6.4 exposed the enum at module scope; the guard
-            # keeps the loop running on legacy bindings (worst case:
-            # forward order, same as before this fix).
             reverse = False
         if reverse:
             pages = list(reversed(pages))
         copies = max(1, printer.copyCount())
 
-        first_page_printed = True  # avoids a leading newPage()
+        first_page_printed = True
         for copy in range(copies):
             for i in pages:
                 if not first_page_printed:
                     printer.newPage()
                 first_page_printed = False
                 page = self._fitz_doc[i]
-                # Render at high DPI for print quality
                 dpi = printer.resolution()
                 zoom = dpi / 72.0
                 mat = fitz.Matrix(zoom, zoom)
-                # alpha=False avoids RGBA pixmaps (n=4) being misread as
-                # Format_RGB888 (3 bytes/pixel); n != 3 catches the residual
-                # cases (CMYK n=4, greyscale n=1) — convert them to RGB.
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 if pix.n != 3:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
-                # QImage(pix.samples, ...) views the native pixmap buffer;
-                # on the next loop iteration the old pix is freed and the
-                # painter would be drawing from freed memory. .copy() forces
-                # an eager copy so the QImage no longer depends on pix
-                # lifetime (same fix that landed in OCR Round 3).
                 img = QImage(pix.samples, pix.width, pix.height,
                              pix.stride, QImage.Format.Format_RGB888).copy()
                 target = QRectF(painter.viewport())
                 source = QRectF(0, 0, img.width(), img.height())
-                # Scale to fit page while maintaining aspect ratio
                 scale = min(target.width() / source.width(),
                             target.height() / source.height())
                 w = source.width() * scale
@@ -943,21 +774,11 @@ class PdfViewerPanel(QWidget):
 
     # ── Password lifecycle ──────────────────────────────────────────────
     def _clear_pdf_password(self) -> None:
-        """Best-effort wipe of the cached PDF password (R5/D2).
-
-        Thin wrapper around :func:`app.utils.wipe_pdf_password` so the
-        ``load`` (new file) and ``closeEvent`` (panel teardown) paths
-        share a single implementation with BasePage and EditorTab.
-        """
         from app.utils import wipe_pdf_password
         wipe_pdf_password(self)
 
     def closeEvent(self, event):
-        # Wipe cached password before the C++ widget is destroyed so a
-        # heap dump after teardown no longer surfaces it.
         self._clear_pdf_password()
-        # Cancel + join the thumbnail render thread so tearing the
-        # panel down doesn't leak a QThread past the C++ deletion.
         try:
             self._thumbnails.clear()
         except Exception:

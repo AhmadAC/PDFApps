@@ -1,0 +1,463 @@
+Found 41 test suites in tests/:
+  • test_annotation_hud.py
+  • test_apply_edits.py
+  • test_atomic_pdf_write.py
+  • test_audit_mediums_lows.py
+  • test_audit_pr_j.py
+  • test_audit_r10.py
+  • test_audit_r11.py
+  • test_editor_atomic_write.py
+  • test_editor_audit_r9.py
+  • test_editor_inline_ux.py
+  • test_editor_text_fidelity.py
+  • test_editor_undo.py
+  • test_encrypted_pdf_tools.py
+  • test_flatpak_dependency_pins.py
+  • test_help_url_domain.py
+  • test_i18n.py
+  • test_import_encoding_and_editor_doc.py
+  • test_ocr_tessdata.py
+  • test_password_lifecycle.py
+  • test_pdf_extract.py
+  • test_pdfapps.py
+  • test_polish_close_audit.py
+  • test_polish_lows.py
+  • test_release_bump_script.py
+  • test_release_notes_generator.py
+  • test_round8_fixes.py
+  • test_screen_changed_binding.py
+  • test_security_deps_workflow.py
+  • test_signature_perms.py
+  • test_single_instance.py
+  • test_thumbnails.py
+  • test_unicode_passwords.py
+  • test_update_controller.py
+  • test_update_dialog.py
+  • test_updater.py
+  • test_updater_msix.py
+  • test_viewer_safety.py
+  • test_viewer_shared_doc.py
+  • test_widgets.py
+  • test_window_update_lifecycle.py
+  • test_wrong_password_dialog.py
+======================================================================
+[1/41] Running test_annotation_hud.py ... PASSED (3.99s)
+[2/41] Running test_apply_edits.py ... PASSED (3.53s)
+[3/41] Running test_atomic_pdf_write.py ... FAILED (2.41s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 10 items
+
+tests\test_atomic_pdf_write.py .F........                                [100%]
+
+================================== FAILURES ===================================
+_______________________ test_check_rejects_via_realpath _______________________
+
+tmp_path = WindowsPath('C:/Users/STEAM/AppData/Local/Temp/pytest-of-STEAM/pytest-1/test_check_rejects_via_realpat0')
+
+    def test_check_rejects_via_realpath(tmp_path: Path):
+        """A relative path and an absolute path to the same file must
+        both flag as colliding (realpath equality)."""
+        src = _make_pdf(tmp_path / "in.pdf")
+>       rel = os.path.relpath(str(src))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_atomic_pdf_write.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = 'C:\\Users\\STEAM\\AppData\\Local\\Temp\\pytest-of-STEAM\\pytest-1\\test_check_rejects_via_realpat0\\in.pdf'
+start = '.'
+
+>   ???
+E   ValueError: path is on mount 'C:', start on mount 'E:'
+
+<frozen ntpath>:765: ValueError
+=========================== short test summary info ===========================
+FAILED tests/test_atomic_pdf_write.py::test_check_rejects_via_realpath - Valu...
+========================= 1 failed, 9 passed in 1.23s =========================
+----------------------------------------------------------------------
+[4/41] Running test_audit_mediums_lows.py ... PASSED (1.09s)
+[5/41] Running test_audit_pr_j.py ... FAILED (2.58s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 21 items
+
+tests\test_audit_pr_j.py F........s.....F.....                           [100%]
+
+================================== FAILURES ===================================
+_________________ test_installer_exc_lambda_captures_message __________________
+
+    def test_installer_exc_lambda_captures_message():
+        """The installer error path must capture str(exc) into the lambda's
+        default argument so the after-callback does not blow up with
+        NameError when the worker frame unwinds.
+        """
+        src = (_REPO_ROOT / "installer.py").read_text(encoding="utf-8")
+        # Find the install_app worker except block. Match the multi-line
+        # pattern that PR-J introduced: err_msg = str(exc) followed by a
+        # lambda with a default arg that binds it.
+        idx = src.find("err_msg = str(exc)")
+>       assert idx > 0, "installer except path must capture str(exc) into a local"
+E       AssertionError: installer except path must capture str(exc) into a local
+E       assert -1 > 0
+
+tests\test_audit_pr_j.py:32: AssertionError
+____________________ test_no_f401_f541_e741_lint_residual _____________________
+
+    def test_no_f401_f541_e741_lint_residual():
+        """ruff --select F401,F541,E741 must report a clean tree."""
+        import subprocess
+        py = sys.executable
+        res = subprocess.run(
+            [py, "-m", "ruff", "check", "--select", "F401,F541,E741",
+             "app/", "pdfapps.py", "installer.py"],
+            cwd=str(_REPO_ROOT), capture_output=True, text=True, timeout=60)
+        if res.returncode != 0:
+>           pytest.fail(f"ruff still reports lint:\n{res.stdout}\n{res.stderr}")
+E           Failed: ruff still reports lint:
+E           
+E           C:\Users\STEAM\AppData\Local\Python\pythoncore-3.14-64\python.exe: No module named ruff
+
+tests\test_audit_pr_j.py:239: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_audit_pr_j.py::test_installer_exc_lambda_captures_message
+FAILED tests/test_audit_pr_j.py::test_no_f401_f541_e741_lint_residual - Faile...
+=================== 2 failed, 18 passed, 1 skipped in 1.55s ===================
+----------------------------------------------------------------------
+[6/41] Running test_audit_r10.py ... FAILED (6.55s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 19 items
+
+tests\test_audit_r10.py .................F.                              [100%]
+
+================================== FAILURES ===================================
+__________________ test_drop_event_handles_folders_and_urls ___________________
+
+    def test_drop_event_handles_folders_and_urls():
+        src = _read("app/window.py")
+        drop_body = src[src.find("def dropEvent"):
+                        src.find("def dropEvent") + 2000]
+        # Folder drop iterates glob, URL drop surfaces a warning.
+        assert "os.path.isdir(path)" in drop_body
+        assert "viewer.drop_url_not_supported" in drop_body
+>       assert "*.pdf" in drop_body
+E       AssertionError: assert '*.pdf' in 'def dropEvent(self, e):\n        for url in e.mimeData().urls():\n            path = url.toLocalFile()\n            i... except Exception:\n            self._toc_top_btn.setVisible(False)\n            self._night_top_btn.setChecked(False)'
+
+tests\test_audit_r10.py:325: AssertionError
+=========================== short test summary info ===========================
+PASSED (4.83s)                                                                                                            
+[14/41] Running test_flatpak_dependency_pins.py ... PASSED (1.11s)                                                        
+[15/41] Running test_help_url_domain.py ... PASSED (1.04s)                                                                
+[16/41] Running test_i18n.py ... PASSED (1.25s)                                                                           
+[17/41] Running test_import_encoding_and_editor_doc.py ... PASSED (3.07s)                                                 
+[18/41] Running test_ocr_tessdata.py ... PASSED (1.74s)                                                                   
+[19/41] Running test_password_lifecycle.py ... PASSED (1.29s)                                                             
+[20/41] Running test_pdf_extract.py ... PASSED (1.74s)                                                                    
+[21/41] Running test_pdfapps.py ... PASSED (3.33s)                                                                        
+[22/41] Running test_polish_close_audit.py ... PASSED (1.39s)                                                             
+[23/41] Running test_polish_lows.py ... PASSED (2.01s)
+[24/41] Running test_release_bump_script.py ... PASSED (2.03s)
+[25/41] Running test_release_notes_generator.py ... PASSED (2.01s)
+[26/41] Running test_round8_fixes.py ... PASSED (3.40s)
+[27/41] Running test_screen_changed_binding.py ... PASSED (0.98s)
+[28/41] Running test_security_deps_workflow.py ... PASSED (1.21s)
+[29/41] Running test_signature_perms.py ... PASSED (1.22s)
+[30/41] Running test_single_instance.py ... PASSED (1.30s)
+[31/41] Running test_thumbnails.py ... PASSED (4.18s)
+[32/41] Running test_unicode_passwords.py ... FAILED (13.85s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 66 items
+
+tests\test_unicode_passwords.py ........................................ [ 60%]
+................F.........                                               [100%]
+
+================================== FAILURES ===================================
+______________ test_mupdf_sealed_fixture_actually_discriminates _______________
+
+tmp_path = WindowsPath('C:/Users/STEAM/AppData/Local/Temp/pytest-of-STEAM/pytest-15/test_mupdf_sealed_fixture_actu0')
+
+    def test_mupdf_sealed_fixture_actually_discriminates(tmp_path):
+        """Guard the guard: if this stops holding, every test below is vacuous.
+    
+        pypdf must reject the ``str`` spelling (returning 0, not raising) and
+        accept the raw UTF-8 ``bytes`` spelling of the same password.
+        """
+        path = _mupdf_sealed(tmp_path, NFD, "discriminates.pdf")
+    
+        from pypdf.errors import FileNotDecryptedError
+    
+        as_str = PdfReader(path)
+>       assert as_str.decrypt(NFD) == 0, (
+            "pypdf accepted the str spelling -- the fixture no longer "
+            "reproduces the MuPDF/pypdf divergence"
+        )
+E       AssertionError: pypdf accepted the str spelling -- the fixture no longer reproduces the MuPDF/pypdf divergence
+E       assert <PasswordType.OWNER_PASSWORD: 2> == 0
+E        +  where <PasswordType.OWNER_PASSWORD: 2> = decrypt('cafe\u0301')
+E        +    where decrypt = <pypdf._reader.PdfReader object at 0x00000252A60EDFD0>.decrypt
+
+tests\test_unicode_passwords.py:1671: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_unicode_passwords.py::test_mupdf_sealed_fixture_actually_discriminates
+======================== 1 failed, 65 passed in 12.68s ========================
+----------------------------------------------------------------------
+[33/41] Running test_update_controller.py ... PASSED (2.12s)
+[34/41] Running test_update_dialog.py ... FAILED (1.24s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 0 items
+
+============================ no tests ran in 0.30s ============================
+----------------------------------------------------------------------
+[35/41] Running test_updater.py ... PASSED (1.70s)
+[36/41] Running test_updater_msix.py ... PASSED (1.59s)
+[37/41] Running test_viewer_safety.py ... PASSED (1.01s)
+[38/41] Running test_viewer_shared_doc.py ... PASSED (2.82s)
+[39/41] Running test_widgets.py ... PASSED (1.37s)
+[40/41] Running test_window_update_lifecycle.py ... PASSED (1.49s)
+[41/41] Running test_wrong_password_dialog.py ... FAILED (2.32s)
+----------------------------------------------------------------------
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.0.2, pluggy-1.6.0
+PySide6 6.10.1 -- Qt runtime 6.10.1 -- Qt compiled 6.10.1
+rootdir: E:\2027\PDFApps
+plugins: mock-3.15.1, qt-4.5.0
+collected 17 items
+
+tests\test_wrong_password_dialog.py ....FFFF.........                    [100%]
+
+================================== FAILURES ===================================
+________ test_other_exceptions_still_take_the_generic_crash_path[exc0] ________
+
+exc = RuntimeError('boom')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000029C3BF317B0>
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom"),
+        ValueError("a plain ValueError is NOT a password failure"),
+        OSError("disk went away"),
+        Exception("generic"),
+    ])
+    def test_other_exceptions_still_take_the_generic_crash_path(exc, monkeypatch):
+        """This is the test that stops the fix becoming "everything is a
+        warning". A real fault must keep its critical icon, its generic
+        primary text and its details pane.
+    
+        ``ValueError`` is in the list on purpose: ``WrongPasswordError`` is
+        deliberately not a subclass of it, and an ``isinstance`` check that
+        accidentally widened to ``ValueError`` would silently reclassify
+        every "no size gain" and page-range error as a password warning.
+        """
+        seen = _capture_message_box(monkeypatch)
+    
+        show_error(None, exc)
+    
+        assert seen.shown
+>       assert seen.text == t("msg.unexpected"), (
+            "a real fault lost its generic explanation: %r" % (seen.text,)
+        )
+E       AssertionError: a real fault lost its generic explanation: "Something went wrong. Click 'Show Details' below for the technical error, and the full traceback has been written to the log file.\n\n(Error details have been copied to your clipboard)"
+E       assert 'Something we...ur clipboard)' == 'Something we...the log file.'
+E         
+E         Skipping 119 identical leading characters in diff, use -v to show
+E         - e log file.
+E         + e log file.
+E         ?            +
+E         + 
+E         + (Error details have been copied to your clipboard)
+
+tests\test_wrong_password_dialog.py:238: AssertionError
+---------------------------- Captured stderr call -----------------------------
+
+[PDFApps ERROR]
+RuntimeError: boom
+
+Error successfully copied to clipboard.
+------------------------------ Captured log call ------------------------------
+ERROR    root:utils.py:727 UI error surfaced: RuntimeError: boom
+RuntimeError: boom
+________ test_other_exceptions_still_take_the_generic_crash_path[exc1] ________
+
+exc = ValueError('a plain ValueError is NOT a password failure')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000029C3BEAE250>
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom"),
+        ValueError("a plain ValueError is NOT a password failure"),
+        OSError("disk went away"),
+        Exception("generic"),
+    ])
+    def test_other_exceptions_still_take_the_generic_crash_path(exc, monkeypatch):
+        """This is the test that stops the fix becoming "everything is a
+        warning". A real fault must keep its critical icon, its generic
+        primary text and its details pane.
+    
+        ``ValueError`` is in the list on purpose: ``WrongPasswordError`` is
+        deliberately not a subclass of it, and an ``isinstance`` check that
+        accidentally widened to ``ValueError`` would silently reclassify
+        every "no size gain" and page-range error as a password warning.
+        """
+        seen = _capture_message_box(monkeypatch)
+    
+        show_error(None, exc)
+    
+        assert seen.shown
+>       assert seen.text == t("msg.unexpected"), (
+            "a real fault lost its generic explanation: %r" % (seen.text,)
+        )
+E       AssertionError: a real fault lost its generic explanation: "Something went wrong. Click 'Show Details' below for the technical error, and the full traceback has been written to the log file.\n\n(Error details have been copied to your clipboard)"
+E       assert 'Something we...ur clipboard)' == 'Something we...the log file.'
+E         
+E         Skipping 119 identical leading characters in diff, use -v to show
+E         - e log file.
+E         + e log file.
+E         ?            +
+E         + 
+E         + (Error details have been copied to your clipboard)
+
+tests\test_wrong_password_dialog.py:238: AssertionError
+---------------------------- Captured stderr call -----------------------------
+
+[PDFApps ERROR]
+ValueError: a plain ValueError is NOT a password failure
+
+Error successfully copied to clipboard.
+------------------------------ Captured log call ------------------------------
+ERROR    root:utils.py:727 UI error surfaced: ValueError: a plain ValueError is NOT a password failure
+ValueError: a plain ValueError is NOT a password failure
+________ test_other_exceptions_still_take_the_generic_crash_path[exc2] ________
+
+exc = OSError('disk went away')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000029C3BEAEA50>
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom"),
+        ValueError("a plain ValueError is NOT a password failure"),
+        OSError("disk went away"),
+        Exception("generic"),
+    ])
+    def test_other_exceptions_still_take_the_generic_crash_path(exc, monkeypatch):
+        """This is the test that stops the fix becoming "everything is a
+        warning". A real fault must keep its critical icon, its generic
+        primary text and its details pane.
+    
+        ``ValueError`` is in the list on purpose: ``WrongPasswordError`` is
+        deliberately not a subclass of it, and an ``isinstance`` check that
+        accidentally widened to ``ValueError`` would silently reclassify
+        every "no size gain" and page-range error as a password warning.
+        """
+        seen = _capture_message_box(monkeypatch)
+    
+        show_error(None, exc)
+    
+        assert seen.shown
+>       assert seen.text == t("msg.unexpected"), (
+            "a real fault lost its generic explanation: %r" % (seen.text,)
+        )
+E       AssertionError: a real fault lost its generic explanation: "Something went wrong. Click 'Show Details' below for the technical error, and the full traceback has been written to the log file.\n\n(Error details have been copied to your clipboard)"
+E       assert 'Something we...ur clipboard)' == 'Something we...the log file.'
+E         
+E         Skipping 119 identical leading characters in diff, use -v to show
+E         - e log file.
+E         + e log file.
+E         ?            +
+E         + 
+E         + (Error details have been copied to your clipboard)
+
+tests\test_wrong_password_dialog.py:238: AssertionError
+---------------------------- Captured stderr call -----------------------------
+
+[PDFApps ERROR]
+OSError: disk went away
+
+Error successfully copied to clipboard.
+------------------------------ Captured log call ------------------------------
+ERROR    root:utils.py:727 UI error surfaced: OSError: disk went away
+OSError: disk went away
+________ test_other_exceptions_still_take_the_generic_crash_path[exc3] ________
+
+exc = Exception('generic')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000029C3BF36030>
+
+    @pytest.mark.parametrize("exc", [
+        RuntimeError("boom"),
+        ValueError("a plain ValueError is NOT a password failure"),
+        OSError("disk went away"),
+        Exception("generic"),
+    ])
+    def test_other_exceptions_still_take_the_generic_crash_path(exc, monkeypatch):
+        """This is the test that stops the fix becoming "everything is a
+        warning". A real fault must keep its critical icon, its generic
+        primary text and its details pane.
+    
+        ``ValueError`` is in the list on purpose: ``WrongPasswordError`` is
+        deliberately not a subclass of it, and an ``isinstance`` check that
+        accidentally widened to ``ValueError`` would silently reclassify
+        every "no size gain" and page-range error as a password warning.
+        """
+        seen = _capture_message_box(monkeypatch)
+    
+        show_error(None, exc)
+    
+        assert seen.shown
+>       assert seen.text == t("msg.unexpected"), (
+            "a real fault lost its generic explanation: %r" % (seen.text,)
+        )
+E       AssertionError: a real fault lost its generic explanation: "Something went wrong. Click 'Show Details' below for the technical error, and the full traceback has been written to the log file.\n\n(Error details have been copied to your clipboard)"
+E       assert 'Something we...ur clipboard)' == 'Something we...the log file.'
+E         
+E         Skipping 119 identical leading characters in diff, use -v to show
+E         - e log file.
+E         + e log file.
+E         ?            +
+E         + 
+E         + (Error details have been copied to your clipboard)
+
+tests\test_wrong_password_dialog.py:238: AssertionError
+---------------------------- Captured stderr call -----------------------------
+
+[PDFApps ERROR]
+Exception: generic
+
+Error successfully copied to clipboard.
+------------------------------ Captured log call ------------------------------
+ERROR    root:utils.py:727 UI error surfaced: Exception: generic
+Exception: generic
+=========================== short test summary info ===========================
+FAILED tests/test_wrong_password_dialog.py::test_other_exceptions_still_take_the_generic_crash_path[exc0]
+FAILED tests/test_wrong_password_dialog.py::test_other_exceptions_still_take_the_generic_crash_path[exc1]
+FAILED tests/test_wrong_password_dialog.py::test_other_exceptions_still_take_the_generic_crash_path[exc2]
+FAILED tests/test_wrong_password_dialog.py::test_other_exceptions_still_take_the_generic_crash_path[exc3]
+======================== 4 failed, 13 passed in 1.22s =========================
+----------------------------------------------------------------------
+======================================================================
+Summary: 35/41 suites passed in 99.39s
+Failed suites:
+  ✗ test_atomic_pdf_write.py
+  ✗ test_audit_pr_j.py
+  ✗ test_audit_r10.py
+  ✗ test_unicode_passwords.py
+  ✗ test_update_dialog.py
+  ✗ test_wrong_password_dialog.py

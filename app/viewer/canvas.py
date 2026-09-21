@@ -1,5 +1,5 @@
 """PDFApps – _SelectCanvas: continuous scroll with lazy rendering via threads."""
-
+# canvas.py
 from __future__ import annotations
 
 import contextlib
@@ -28,11 +28,11 @@ class _RenderSignals(QObject):
 
 
 class _PageJob(QRunnable):
-    """Renders a fitz page in a background thread."""
+    """Renders a fitz page in a background thread with optional rotation."""
 
     def __init__(self, path: str, password: str, idx: int,
                  zoom: float, dpr: float, gen: int, signals: _RenderSignals,
-                 night_mode: bool = False):
+                 night_mode: bool = False, rotation: int = 0):
         super().__init__()
         self._path       = path
         self._password   = password
@@ -41,6 +41,7 @@ class _PageJob(QRunnable):
         self._dpr        = dpr
         self._gen        = gen
         self._night_mode = night_mode
+        self._rotation   = rotation
         self.signals     = signals
         self.setAutoDelete(True)
 
@@ -52,22 +53,19 @@ class _PageJob(QRunnable):
             doc = fitz.open(self._path)
             if self._password:
                 doc.authenticate(self._password)
-            page  = doc[self._idx]
-            rz    = self._zoom * self._dpr
-            pix   = page.get_pixmap(matrix=fitz.Matrix(rz, rz), annots=False)
+            page = doc[self._idx]
+            rot = self._rotation % 360
+            rz = self._zoom * self._dpr
+            mat = fitz.Matrix(rz, rz)
+            if rot:
+                mat = mat.prerotate(rot)
+            pix = page.get_pixmap(matrix=mat, annots=False)
             if self._night_mode:
                 pix.invert_irect()
             words = page.get_text("words")
-            img   = pix.tobytes("png")
+            img = pix.tobytes("png")
             qp = QP()
             if not qp.loadFromData(img):
-                # samples_mv is a memoryview backed by the fitz Pixmap,
-                # which in turn is backed by the open Document. Closing
-                # the doc before QImage finishes copying the buffer
-                # frees the underlying allocation under PySide's feet
-                # (rare, but observed on Windows under tight memory).
-                # QImage.copy() forces an eager copy, after which the
-                # pixmap/document can be safely released.
                 qi = QImage(pix.samples_mv, pix.width, pix.height,
                             pix.stride, QImage.Format.Format_RGB888)
                 qp = QP.fromImage(qi.copy())
@@ -116,13 +114,9 @@ class _SelectCanvas(QWidget):
         self._entries: list[_PageEntry] = []
         self._gen         = 0       # generation — invalidates old renders
         self._pending: set[int] = set()
+        self._page_rotations: dict[int, int] = {}  # page_idx -> rotation angle preview
         self._signals     = _RenderSignals()
         self._signals.page_ready.connect(self._on_page_ready)
-        # Dedicated render pool so the pre-saveIncr waitForDone() joins
-        # ONLY our own _PageJob workers, never unrelated jobs on the
-        # global pool (e.g. an editor tab rendering), which could
-        # otherwise pin the UI thread indefinitely. See
-        # _prepare_for_save / _schedule_visible.
         self._pool        = QThreadPool()
         self._pool.setMaxThreadCount(_MAX_THREADS)
         self._night_mode  = False
@@ -131,13 +125,8 @@ class _SelectCanvas(QWidget):
         self._sel_rects: list[QRect] = []
         self._sel_text    = ""
         self._open_note   = None   # (page_idx, annot_idx) of open balloon
-        self._search_highlights: list[tuple[int, object]] = []  # [(page_idx, fitz_rect), ...]
-        self._search_current = -1   # index of current match in _search_highlights
-        # Tracks the QWindow whose screenChanged signal we're currently
-        # connected to (see showEvent). Avoids calling disconnect() on
-        # a signal that was never connected — which raises a PySide6
-        # RuntimeWarning under 6.11 instead of an exception, so it
-        # can't be caught with contextlib.suppress.
+        self._search_highlights: list[tuple[int, object]] = []
+        self._search_current = -1
         self._screen_signal_window = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
@@ -152,11 +141,17 @@ class _SelectCanvas(QWidget):
         self._path     = path or (doc.name if doc else "")
         self._password = password
         self._zoom_factor = 1.0
+        self._page_rotations = {}
         self._gen     += 1
         self._pending.clear()
         self._clear_selection()
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._layout_and_schedule)
+
+    def set_page_rotations(self, rotations: dict[int, int]):
+        """Update in-memory preview rotations for pages without saving."""
+        self._page_rotations = {int(k): int(v) % 360 for k, v in rotations.items()}
+        self._invalidate_and_relayout()
 
     def on_scroll(self):
         """Called when scroll changes — schedules newly visible pages."""
@@ -193,7 +188,6 @@ class _SelectCanvas(QWidget):
         self._invalidate_and_relayout()
 
     def set_dark_mode(self, dark: bool):
-        # Force dark bg in night mode regardless of app theme
         if self._night_mode:
             self._bg_color = "#000000"
         else:
@@ -205,12 +199,12 @@ class _SelectCanvas(QWidget):
             return
         self._night_mode = active
         self._bg_color = "#000000" if active else BG_INNER
-        # Invalidate cached pixmaps and re-render with new flag
         self._invalidate_and_relayout()
 
     def close_doc(self):
         self._gen += 1
         self._pending.clear()
+        self._page_rotations = {}
         if self._doc is not None:
             try:
                 self._doc.close()
@@ -222,24 +216,10 @@ class _SelectCanvas(QWidget):
         self.setFixedSize(300, 400)
         self.update()
 
-    # ── DPR change handling (D1) ─────────────────────────────────────────
     def showEvent(self, event):
-        """Hook into the top-level QWindow.screenChanged signal so a
-        screen migration (drag to another monitor) or DPR mutation
-        (Windows Display Settings change) invalidates the cached
-        pixmaps and re-renders at the new device pixel ratio.
-
-        Without this handler ``_schedule_visible`` only sampled the DPR
-        on zoom changes, leaving pages blurry until the user interacted
-        (R8/D1)."""
         super().showEvent(event)
         win = self.window().windowHandle() if self.window() else None
         prev_win = self._screen_signal_window
-        # Same top-level QWindow as last showEvent → still connected,
-        # nothing to do. Prevents both double-connect and the PySide6
-        # 6.11 RuntimeWarning that fires when disconnect() runs on a
-        # never-connected signal (RuntimeWarning bypasses
-        # contextlib.suppress, which only catches exceptions).
         if win is prev_win:
             return
         if prev_win is not None:
@@ -250,9 +230,6 @@ class _SelectCanvas(QWidget):
         self._screen_signal_window = win
 
     def _on_screen_changed(self, _screen):
-        """Invalidate cached pixmaps and re-render at the new DPR."""
-        # Bump generation so any in-flight render jobs are discarded
-        # by _on_page_ready when they finally land on the main thread.
         self._gen += 1
         self._pending.clear()
         for entry in self._entries:
@@ -270,8 +247,6 @@ class _SelectCanvas(QWidget):
         self._layout_and_schedule()
 
     def _layout_and_schedule(self):
-        """Calculate dimensions of all pages (fast — no pixel rendering)
-        and schedule rendering of visible pages in background."""
         if not self._doc or self._doc.page_count == 0:
             return
 
@@ -282,16 +257,23 @@ class _SelectCanvas(QWidget):
             avail = sa.viewport().width() - 4 if isinstance(sa, _SA) else self.width()
             self._base_avail = max(avail, 300)
 
-        ref_w = self._doc[0].rect.width
-        self._zoom = (self._base_avail / ref_w) * self._zoom_factor
+        rot0 = getattr(self, "_page_rotations", {}).get(0, 0) % 360
+        r0 = self._doc[0].rect
+        ref_w = r0.height if rot0 in (90, 270) else r0.width
+        self._zoom = (self._base_avail / max(ref_w, 1.0)) * self._zoom_factor
 
         entries: list[_PageEntry] = []
         total_h = 0
         max_w   = 0
         for i in range(self._doc.page_count):
-            r  = self._doc[i].rect
-            pw = round(r.width  * self._zoom)
-            ph = round(r.height * self._zoom)
+            r = self._doc[i].rect
+            rot = getattr(self, "_page_rotations", {}).get(i, 0) % 360
+            if rot in (90, 270):
+                pw = round(r.height * self._zoom)
+                ph = round(r.width  * self._zoom)
+            else:
+                pw = round(r.width  * self._zoom)
+                ph = round(r.height * self._zoom)
             entries.append(_PageEntry(total_h, pw, ph))
             total_h += ph + _PAGE_GAP
             max_w    = max(max_w, pw)
@@ -301,11 +283,10 @@ class _SelectCanvas(QWidget):
         self.zoom_changed.emit(round(self._zoom_factor * 100))
         self._load_annotations()
         self._open_note = None
-        self.update()          # show placeholders immediately
+        self.update()
         self._schedule_visible()
 
     def _load_annotations(self):
-        """Load text annotations for all pages."""
         if not self._doc:
             return
         import fitz
@@ -356,13 +337,15 @@ class _SelectCanvas(QWidget):
             e = self._entries[i]
             if e.pixmap is None and i not in self._pending:
                 self._pending.add(i)
+                rot = getattr(self, "_page_rotations", {}).get(i, 0)
                 pool.start(_PageJob(self._path, self._password, i,
                                     self._zoom, dpr, gen, self._signals,
-                                    night_mode=self._night_mode))
+                                    night_mode=self._night_mode,
+                                    rotation=rot))
 
     def _on_page_ready(self, gen: int, idx: int, pixmap, words):
         if gen != self._gen:
-            return  # outdated render after zoom change — discard
+            return
         self._pending.discard(idx)
         if 0 <= idx < len(self._entries):
             self._entries[idx].pixmap = pixmap
@@ -370,47 +353,11 @@ class _SelectCanvas(QWidget):
             self.update()
 
     def _prepare_for_save(self, timeout_ms: int = 5000) -> bool:
-        """Cancel/join in-flight render workers before an on-disk write.
-
-        saveIncr() appends an incremental update to the SAME file the
-        background _PageJob workers open via ``fitz.open(self._path)``. A
-        worker mid-open would read a half-written trailer (parse failure)
-        or hit a Windows sharing violation. So we:
-
-        * bump ``_gen`` — any result that lands after this point is
-          discarded by the epoch guard in ``_on_page_ready``;
-        * clear ``_pending`` so those pages are re-scheduled afterwards;
-        * join the render pool so no worker is reading the file while we
-          append.
-
-        The join is bounded (default 5 s) so a pathological render can
-        never pin the UI thread indefinitely. Returns ``True`` if the
-        pool drained, ``False`` if the wait timed out. A ``False`` is
-        SAFE to proceed past: the ``_gen`` bump already invalidated every
-        outstanding result, so any late render is dropped on arrival.
-        """
         self._gen += 1
         self._pending.clear()
         return self._pool.waitForDone(timeout_ms)
 
     def _reopen_document(self):
-        """Reopen ``self._path`` into a fresh fitz.Document after an
-        in-place write (saveIncr) failed, discarding the in-memory
-        mutation so the canvas reflects the on-disk state.
-
-        Ordering is deliberate (MINOR 3): publish ``self._doc = None``
-        BEFORE closing the old handle and only swap in the fresh Document
-        AFTER ``fitz.open`` succeeds. So if the reopen itself fails (a
-        double failure: write AND reopen), ``self._doc`` stays ``None`` —
-        which every accessor already guards for — rather than a closed
-        Document that would fault on the next paint/search (latent
-        use-after-close).
-
-        Emits ``doc_replaced`` with the new handle so the panel (shared
-        owner of the same reference) follows — or with ``None`` on a
-        double failure so it drops the shared reference too. Returns the
-        new Document, or ``None``.
-        """
         import fitz
         saved_path = self._path
         saved_password = self._password
@@ -448,13 +395,11 @@ class _SelectCanvas(QWidget):
                      max(1, int((y1 - y0) * z)))
 
     def _find_closest_word(self, pos) -> tuple[int, int]:
-        """Return (page_idx, word_idx) for the word closest to screen pos."""
         z = self._zoom
         best_page, best_idx, best_dist = -1, -1, float("inf")
         for pi, e in enumerate(self._entries):
             if not e.words:
                 continue
-            # Skip pages far from the click
             if pos.y() < e.y_off - 50 or pos.y() > e.y_off + e.h + 50:
                 continue
             px = pos.x() / z
@@ -476,7 +421,6 @@ class _SelectCanvas(QWidget):
         p2_page, p2_word = self._find_closest_word(self._drag_end)
         if p1_page < 0 or p2_page < 0:
             return
-        # Ensure start <= end in reading order
         if (p1_page, p1_word) > (p2_page, p2_word):
             p1_page, p1_word, p2_page, p2_word = p2_page, p2_word, p1_page, p1_word
         rects, words = [], []
@@ -488,15 +432,13 @@ class _SelectCanvas(QWidget):
             w_end   = p2_word if pi == p2_page else len(e.words) - 1
             for wi in range(w_start, w_end + 1):
                 w = e.words[wi]
-                # Extend rect to fill gap to next word on same line
                 x0, y0, x1, y1 = w[0], w[1], w[2], w[3]
                 if wi < w_end:
                     nw = e.words[wi + 1]
-                    # Same line if vertical overlap > 50%
                     line_h = y1 - y0
                     overlap = min(y1, nw[3]) - max(y0, nw[1])
                     if overlap > line_h * 0.5:
-                        x1 = nw[0]  # extend to start of next word
+                        x1 = nw[0]
                 rects.append(self._page_word_to_screen(e.y_off, x0, y0, x1, y1))
                 words.append(w[4])
         self._sel_rects = rects
@@ -518,19 +460,20 @@ class _SelectCanvas(QWidget):
         first, last = self._visible_range()
         for i in range(first, last + 1):
             e = self._entries[i]
+            x = (max(self.width(), e.w) - e.w) // 2 if self.width() > e.w else 0
             if e.pixmap:
-                p.drawPixmap(0, e.y_off, e.pixmap)
+                p.drawPixmap(x, e.y_off, e.pixmap)
             else:
-                p.fillRect(0, e.y_off, e.w, e.h, QColor("#252F45"))
+                p.fillRect(x, e.y_off, e.w, e.h, QColor("#252F45"))
                 p.setPen(QColor(TEXT_SEC))
                 f = QFont(); f.setPointSize(9); p.setFont(f)
-                p.drawText(QRect(0, e.y_off, e.w, e.h),
+                p.drawText(QRect(x, e.y_off, e.w, e.h),
                            Qt.AlignmentFlag.AlignCenter, t("viewer.loading"))
             p.setPen(QPen(QColor("#0d0d1a"), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRect(0, e.y_off, e.w - 1, e.h - 1)
+            p.drawRect(x, e.y_off, e.w - 1, e.h - 1)
 
-        # ── Note icons ──
+        # Note icons
         z = self._zoom
         for page_idx in range(first, last + 1):
             entry = self._entries[page_idx]
@@ -539,7 +482,6 @@ class _SelectCanvas(QWidget):
             for annot_idx, (rect, txt) in enumerate(entry.annots):
                 px = int(rect.x0 * z)
                 py = entry.y_off + int(rect.y0 * z)
-                # Draw pencil icon
                 icon_r = QRect(px, py, _NOTE_ICON_SIZE, _NOTE_ICON_SIZE)
                 p.setBrush(QColor("#FBBF24"))
                 p.setPen(QPen(QColor("#D97706"), 1))
@@ -547,7 +489,6 @@ class _SelectCanvas(QWidget):
                 fi = QFont(); fi.setPointSize(10); fi.setBold(True); p.setFont(fi)
                 p.setPen(QColor("#1C1917"))
                 p.drawText(icon_r, Qt.AlignmentFlag.AlignCenter, "✎")
-                # Draw balloon if this note is open
                 if self._open_note == (page_idx, annot_idx):
                     balloon_x = px + _NOTE_ICON_SIZE + 6
                     balloon_y = py
@@ -559,14 +500,11 @@ class _SelectCanvas(QWidget):
                     balloon_w = max(140, min(text_w, 300))
                     balloon_h = max(36, text_h)
                     balloon_r = QRect(balloon_x, balloon_y, balloon_w, balloon_h)
-                    # Shadow
                     shadow_r = QRect(balloon_x + 2, balloon_y + 2, balloon_w, balloon_h)
                     p.setBrush(QColor(0, 0, 0, 30)); p.setPen(Qt.PenStyle.NoPen)
                     p.drawRoundedRect(shadow_r, 6, 6)
-                    # Balloon background
                     p.setBrush(QColor("#FFFDF5")); p.setPen(QPen(QColor("#D97706"), 1))
                     p.drawRoundedRect(balloon_r, 6, 6)
-                    # Text in black
                     p.setPen(QColor("#000000"))
                     text_rect = QRect(balloon_x + 10, balloon_y + 8,
                                       balloon_w - 20, balloon_h - 16)
@@ -574,7 +512,7 @@ class _SelectCanvas(QWidget):
                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
                                txt)
 
-        # ── Search highlights ──
+        # Search highlights
         z = self._zoom
         for hi_idx, (pg_idx, fr) in enumerate(self._search_highlights):
             if pg_idx < first or pg_idx > last:
@@ -585,14 +523,14 @@ class _SelectCanvas(QWidget):
             rw = int((fr.x1 - fr.x0) * z)
             rh = int((fr.y1 - fr.y0) * z)
             if hi_idx == self._search_current:
-                p.fillRect(rx, ry, rw, rh, QColor(249, 115, 22, 140))  # orange for current
+                p.fillRect(rx, ry, rw, rh, QColor(249, 115, 22, 140))
                 p.setPen(QPen(QColor("#F97316"), 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(rx, ry, rw, rh)
             else:
-                p.fillRect(rx, ry, rw, rh, QColor(250, 204, 21, 100))  # yellow for others
+                p.fillRect(rx, ry, rw, rh, QColor(250, 204, 21, 100))
 
-        # ── Selection (Acrobat-style word-flow highlight) ──
+        # Selection
         for r in self._sel_rects:
             p.fillRect(r, QColor(59, 130, 246, 90))
 
@@ -619,7 +557,6 @@ class _SelectCanvas(QWidget):
         if e.button() != Qt.MouseButton.LeftButton or not self._drag_start:
             return
         self._drag_end = e.position().toPoint()
-        # Check for click (no drag) on a note icon
         is_click = (abs(self._drag_start.x() - self._drag_end.x()) < 4
                      and abs(self._drag_start.y() - self._drag_end.y()) < 4)
         if is_click:
@@ -631,7 +568,6 @@ class _SelectCanvas(QWidget):
                 self.update()
                 e.accept()
                 return
-            # Close any open balloon when clicking elsewhere
             if self._open_note is not None:
                 self._open_note = None
                 self.update()
@@ -645,7 +581,6 @@ class _SelectCanvas(QWidget):
         e.accept()
 
     def _note_icon_at(self, pos):
-        """Return (page_idx, annot_idx) if pos hits a note icon, else None."""
         z = self._zoom
         margin = 8
         for page_idx, entry in enumerate(self._entries):
@@ -677,7 +612,6 @@ class _SelectCanvas(QWidget):
     def contextMenuEvent(self, e):
         from PySide6.QtWidgets import QMenu, QMessageBox
         pos = e.pos()
-        # Check if right-click is on a note icon
         hit = self._note_icon_at(pos)
         if hit is not None:
             menu = QMenu(self)
@@ -688,9 +622,6 @@ class _SelectCanvas(QWidget):
                 entry = self._entries[page_idx]
                 if entry.annots and annot_idx < len(entry.annots):
                     rect, txt = entry.annots[annot_idx]
-                    # saveIncr() writes directly to the user's file with no
-                    # undo. Confirm first (default=No) so a stray right-click
-                    # can't silently destroy a comment.
                     reply = QMessageBox.question(
                         self, t("msg.confirm"),
                         t("viewer.confirm_delete_comment"),
@@ -700,14 +631,9 @@ class _SelectCanvas(QWidget):
                     )
                     if reply != QMessageBox.StandardButton.Yes:
                         return
-                    # Remove annotation from fitz doc
                     if self._doc:
                         import fitz
                         from app.utils import show_error
-                        # CRIT-1: backup the file before saveIncr so a
-                        # power loss / write failure leaves the original
-                        # intact. Same-directory tempfile keeps the
-                        # shutil.move(restore) atomic on POSIX/Windows.
                         backup_path = None
                         if self._path and os.path.isfile(self._path):
                             try:
@@ -726,9 +652,6 @@ class _SelectCanvas(QWidget):
                                     backup_path = None
                                 show_error(self, exc)
                                 return
-                        # Step 1 (HIGH A2): mutate the in-memory doc.
-                        # If this raises, no disk state changes and we
-                        # bail before touching saveIncr().
                         target_annot = None
                         try:
                             page = self._doc[page_idx]
@@ -738,39 +661,25 @@ class _SelectCanvas(QWidget):
                                 content = annot.info.get("content", "") or ""
                                 if content.strip() != txt.strip():
                                     continue
-                                # HIGH A3: 2 notes with identical content
-                                # would silently delete the wrong one.
-                                # Tiebreak with bbox match (1pt tol).
                                 ar = annot.rect
                                 if (abs(ar.x0 - rect.x0) < 1
                                         and abs(ar.y0 - rect.y0) < 1):
                                     target_annot = annot
                                     break
                             if target_annot is None:
-                                # Content-only fallback for legacy callers
-                                # that don't have a usable bbox (e.g.
-                                # rect was synthesised). Preserves the
-                                # old behaviour rather than no-op'ing.
                                 for annot in page.annots() or []:
                                     if annot.type[0] != fitz.PDF_ANNOT_TEXT:
                                         continue
-                                    content = annot.info.get(
-                                        "content", "") or ""
+                                    content = annot.info.get("content", "") or ""
                                     if content.strip() == txt.strip():
                                         target_annot = annot
                                         break
                             if target_annot is not None:
                                 page.delete_annot(target_annot)
                             else:
-                                # R11-L8: no annotation matched — there's
-                                # nothing to persist. Skip saveIncr() so
-                                # we don't bump the PDF's incremental
-                                # update offset (and hash) for a no-op,
-                                # and tell the user the comment is gone.
                                 if backup_path:
                                     with contextlib.suppress(Exception):
                                         os.unlink(backup_path)
-                                from PySide6.QtWidgets import QMessageBox
                                 QMessageBox.warning(
                                     self, t("msg.warning"),
                                     t("viewer.delete_no_match"))
@@ -781,63 +690,24 @@ class _SelectCanvas(QWidget):
                                     os.unlink(backup_path)
                             show_error(self, exc)
                             return
-                        # Step 2 (HIGH A2): persist to disk. If this
-                        # fails (read-only file, ENOSPC, power loss
-                        # mid-write), restore from the backup so the
-                        # user does not lose the original AND reload
-                        # the in-memory doc so the next paint event
-                        # reflects the on-disk state.
                         if self._path:
-                            # Race guard: saveIncr() appends an incremental
-                            # update to the SAME file the background
-                            # _PageJob workers open via fitz.open(self._path).
-                            # A worker mid-open would read a half-written
-                            # trailer (parse failure) or hit a Windows
-                            # sharing violation. _prepare_for_save bumps
-                            # _gen (invalidating late results), clears
-                            # _pending, and joins in-flight workers with a
-                            # bounded wait so a pathological render can't
-                            # pin the UI thread. A timeout return is safe —
-                            # the _gen bump already discards stale renders.
                             self._prepare_for_save()
                             try:
                                 self._doc.saveIncr()
                             except Exception as exc:
-                                # CRIT-1: restore backup. shutil.move
-                                # is best-effort — if it fails we still
-                                # have the .bak on disk for the user.
                                 if backup_path:
                                     with contextlib.suppress(Exception):
                                         shutil.move(backup_path, self._path)
                                     backup_path = None
-                                # HIGH A2 + MINOR 3: discard the in-memory
-                                # delete by reopening the file. _reopen_document
-                                # publishes self._doc = None first and only
-                                # swaps in the fresh handle after fitz.open
-                                # succeeds, so a failed reopen can never leave
-                                # a closed Document behind. It also emits
-                                # doc_replaced so the panel (shared owner) is
-                                # repointed off the closed one.
                                 new_doc = self._reopen_document()
-                                # In-flight renders were cancelled above by
-                                # the _gen bump; re-schedule the visible
-                                # pages against the restored file — but only
-                                # if we still have a live document to render.
                                 if new_doc is not None:
                                     self._schedule_visible()
                                 show_error(self, exc)
                                 return
-                        # Both steps succeeded — drop the backup.
                         if backup_path:
                             with contextlib.suppress(Exception):
                                 os.unlink(backup_path)
-                    # Remove from entry annots list
                     entry.annots.pop(annot_idx)
-                    # The _open_note tuple stores (page_idx, annot_idx).
-                    # After the pop, indices on the same page that were
-                    # greater than annot_idx shift down by one — fix the
-                    # stored reference so reopening the popup doesn't
-                    # show the wrong note (B-extra).
                     if self._open_note is not None:
                         open_page, open_idx = self._open_note
                         if open_page == page_idx:
@@ -845,9 +715,6 @@ class _SelectCanvas(QWidget):
                                 self._open_note = None
                             elif open_idx > annot_idx:
                                 self._open_note = (open_page, open_idx - 1)
-                    # Renders in flight were cancelled by the pre-saveIncr
-                    # _gen bump; re-schedule so any page that was mid-render
-                    # is repainted from the updated file.
                     self._schedule_visible()
                     self.update()
             return
