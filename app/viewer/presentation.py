@@ -108,7 +108,7 @@ class PresentationWidget(QWidget):
         if isValid(self._hud):
             self._hud.update_theme(self._dark_mode)
 
-    # ── Zoom & Pan Controls ───────────────────────────────────────────────
+    # ── Zoom & Pan & Scroll Controls ──────────────────────────────────────
 
     def _zoom_in(self):
         self._zoom_factor = min(5.0, round(self._zoom_factor * 1.25, 3))
@@ -127,6 +127,24 @@ class PresentationWidget(QWidget):
         self._pan_y = 0
         self._render()
 
+    def _scroll_page(self, up: bool, amount: float = 80.0):
+        """Scroll the current presented page up or down without changing pages."""
+        if not self._pixmap:
+            return
+        dpr = self._pixmap.devicePixelRatio() or 1.0
+        ph = self._pixmap.height() / dpr
+        sh = float(self.height())
+
+        # Allow generous scrolling range based on page dimensions
+        max_pan = max(0.0, (ph - sh) / 2.0) + (sh * 0.35 if ph > sh else sh * 0.45)
+
+        if up:
+            self._pan_y = min(max_pan, self._pan_y + amount)
+        else:
+            self._pan_y = max(-max_pan, self._pan_y - amount)
+
+        self.update()
+
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if e.angleDelta().y() > 0:
@@ -135,7 +153,15 @@ class PresentationWidget(QWidget):
                 self._zoom_out()
             e.accept()
             return
-        super().wheelEvent(e)
+        else:
+            # Mouse wheel without Ctrl scrolls the current page up and down
+            delta = e.angleDelta().y()
+            if delta > 0:
+                self._scroll_page(up=True, amount=abs(delta) * 0.6)
+            elif delta < 0:
+                self._scroll_page(up=False, amount=abs(delta) * 0.6)
+            e.accept()
+            return
 
     def _render(self):
         import fitz
@@ -290,6 +316,7 @@ class PresentationWidget(QWidget):
             super().keyPressEvent(e)
             return
 
+        # Tool hotkeys
         if key == Qt.Key.Key_P:
             self._on_tool_selected(int(ToolMode.PEN))
             return
@@ -317,17 +344,27 @@ class PresentationWidget(QWidget):
                 self._show_hud()
                 return
 
+        # Up and Down arrows scroll the current presented page without changing pages
+        if key == Qt.Key.Key_Up:
+            self._scroll_page(up=True)
+            e.accept()
+            return
+        if key == Qt.Key.Key_Down:
+            self._scroll_page(up=False)
+            e.accept()
+            return
+
         if key == Qt.Key.Key_Escape:
             self.close()
-        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down,
-                     Qt.Key.Key_Space, Qt.Key.Key_PageDown):
+        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Space, Qt.Key.Key_PageDown):
+            # Advance to next page (maintains current zoom factor)
             if self._current < self._total - 1:
                 self._current += 1
                 self._pan_x = 0
                 self._pan_y = 0
                 self._render()
-        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up,
-                     Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
+        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
+            # Return to previous page (maintains current zoom factor)
             if self._current > 0:
                 self._current -= 1
                 self._pan_x = 0

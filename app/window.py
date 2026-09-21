@@ -1,9 +1,9 @@
-
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
 import contextlib
 import os
+import sys
 
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QIcon, QColor, QShortcut, QKeySequence
@@ -307,6 +307,9 @@ class MainWindow(QMainWindow):
                 self._toggle_sidebar()
             elif mode == "hidden":
                 self._toggle_sidebar(); self._toggle_sidebar()
+            pages_pref = _saved.get("pages_sidebar_open")
+            if pages_pref is not None:
+                PdfViewerPanel._pages_sidebar_visible_pref = bool(pages_pref)
         except Exception:
             pass
 
@@ -461,18 +464,20 @@ class MainWindow(QMainWindow):
         def _make_wrapped(viewer, orig):
             def _wrapped(*args, track=True, **kwargs):
                 orig(*args, **kwargs)
-                if args:
+                if viewer.current_path():
+                    curr = viewer.current_path()
                     if track:
-                        add_recent_file(args[0])
-                    name = os.path.basename(args[0])
+                        add_recent_file(curr)
+                    name = os.path.basename(curr)
                     for i in range(len(self._viewers)):
                         if self._viewers[i] is viewer:
                             self._tab_bar.setTabText(i, name)
-                            self._tab_bar.setTabToolTip(i, args[0])
+                            self._tab_bar.setTabToolTip(i, curr)
                             break
+                    self._refresh_viewer_top_buttons()
                 QTimer.singleShot(100, self._update_page_nav)
                 self._update_tab_visibility()
-                if self._current_tool == -1:
+                if self._current_tool == -1 and viewer.current_path():
                     self._setup_zoom_bar(True, canvas=viewer._canvas)
             return _wrapped
         v.load = _make_wrapped(v, original_load)
@@ -489,6 +494,21 @@ class MainWindow(QMainWindow):
             return
         self._viewer_stack.setCurrentIndex(idx)
         self._update_page_nav()
+
+        v = self._viewer
+        if v.current_path():
+            show_pages = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
+            if show_pages is not None and v._pages_sidebar_collapsed == show_pages:
+                v._pages_sidebar_collapsed = not show_pages
+                v._sidebar_panel.setVisible(show_pages)
+                v._sidebar_tabs.setVisible(show_pages)
+                total = v._viewer_splitter.width() or 1020
+                if show_pages:
+                    w = min(400, max(180, getattr(v, "_saved_sidebar_width", 220)))
+                    v._viewer_splitter.setSizes([w, max(300, total - w)])
+                else:
+                    v._viewer_splitter.setSizes([0, total])
+
         if self._current_tool == -1:
             self._setup_zoom_bar(True, canvas=self._viewer._canvas)
         elif self._current_tool == self._rotate_tool_idx():
@@ -754,11 +774,13 @@ class MainWindow(QMainWindow):
             self._load_and_track(path)
 
     def _load_and_track(self, path: str):
+        path = os.path.abspath(os.path.normpath(path))
         if self._viewer.current_path():
             self._add_viewer_tab(path)
         else:
             self._viewer.load(path)
-        add_recent_file(path)
+        if self._viewer.current_path():
+            add_recent_file(path)
         for v in self._viewers:
             refresh = getattr(v, "_refresh_recents", None)
             if callable(refresh):
@@ -1117,9 +1139,11 @@ class MainWindow(QMainWindow):
             from app.i18n import _update_config
             sizes = self._splitter.sizes()
             mode = "hidden" if self._sidebar_collapsed else ("icons" if self._sidebar.width() <= 60 else "full")
+            pages_open = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
             def _mutate(cfg: dict) -> None:
                 cfg["splitter_sizes"] = sizes
                 cfg["sidebar_mode"] = mode
+                cfg["pages_sidebar_open"] = bool(pages_open)
             _update_config(_mutate)
         except Exception:
             pass

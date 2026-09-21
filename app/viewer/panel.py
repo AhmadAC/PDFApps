@@ -2,6 +2,8 @@
 """PDFApps – PdfViewerPanel: PDF viewer with drag & drop and text selection."""
 
 import os
+import sys
+import logging
 import contextlib
 
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal
@@ -21,6 +23,8 @@ from app.i18n import t
 from app.viewer.canvas import _SelectCanvas
 from app.viewer.thumbnails import ThumbnailPanel
 
+_log = logging.getLogger(__name__)
+
 
 class PdfViewerPanel(QWidget):
     """PDF viewer with drag & drop, native text selection and navigation."""
@@ -30,12 +34,29 @@ class PdfViewerPanel(QWidget):
     crop_undo_requested = Signal()
     crop_redo_requested = Signal()
 
+    _pages_sidebar_visible_pref: bool | None = None
+
     def __init__(self):
         super().__init__()
         self.setObjectName("viewer_panel")
         self.setMinimumWidth(260)
         self._current_path = ""
         self._fitz_doc     = None
+
+        if PdfViewerPanel._pages_sidebar_visible_pref is None:
+            try:
+                from app.i18n import _CONFIG_PATH
+                import json
+                if os.path.isfile(_CONFIG_PATH):
+                    with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
+                        cfg = json.load(_f)
+                        PdfViewerPanel._pages_sidebar_visible_pref = bool(
+                            cfg.get("pages_sidebar_open", True)
+                        )
+                else:
+                    PdfViewerPanel._pages_sidebar_visible_pref = True
+            except Exception:
+                PdfViewerPanel._pages_sidebar_visible_pref = True
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -179,7 +200,8 @@ class PdfViewerPanel(QWidget):
         sp_lay.setSpacing(0)
         sp_lay.addWidget(self._sidebar_tabs, 1)
 
-        self._pages_sidebar_collapsed = False
+        initial_open = bool(PdfViewerPanel._pages_sidebar_visible_pref)
+        self._pages_sidebar_collapsed = not initial_open
         self._saved_sidebar_width = 220
 
         # ── Canvas with continuous scroll of all pages ──────────────────
@@ -272,15 +294,24 @@ class PdfViewerPanel(QWidget):
             self._saved_sidebar_width = max(180, self._sidebar_panel.width())
             self._pages_sidebar_collapsed = True
             self._sidebar_panel.setVisible(False)
-            total = self._viewer_splitter.width()
+            total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([0, total])
+            PdfViewerPanel._pages_sidebar_visible_pref = False
         else:
             self._pages_sidebar_collapsed = False
             self._sidebar_panel.setVisible(True)
             self._sidebar_tabs.setVisible(True)
             w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
-            total = self._viewer_splitter.width()
+            total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([w, max(300, total - w)])
+            PdfViewerPanel._pages_sidebar_visible_pref = True
+
+        try:
+            from app.i18n import _update_config
+            pref = not self._pages_sidebar_collapsed
+            _update_config(lambda cfg: cfg.__setitem__("pages_sidebar_open", pref))
+        except Exception:
+            pass
 
     def set_crop_mode(self, active: bool):
         if hasattr(self, "_canvas"):
@@ -398,6 +429,8 @@ class PdfViewerPanel(QWidget):
         for rp in recents[:5]:
             if not os.path.lexists(rp):
                 continue
+            if os.path.isdir(rp):
+                continue
             fname = os.path.basename(rp)
             row = QWidget()
             row_h = QHBoxLayout(row)
@@ -409,7 +442,7 @@ class PdfViewerPanel(QWidget):
             link.setCursor(Qt.CursorShape.PointingHandCursor)
             link.setFlat(True)
             link.setStyleSheet(self._recent_link_style(dark=True))
-            link.clicked.connect(lambda checked, p=rp: self.load(p))
+            link.clicked.connect(lambda checked=False, p=rp, r=row: self._on_recent_clicked(p, r))
             self._recent_links.append(link)
             del_btn = QPushButton()
             del_btn.setIcon(qta.icon("fa5s.trash-alt", color=TEXT_SEC))
@@ -431,6 +464,28 @@ class PdfViewerPanel(QWidget):
             row_h.addWidget(link, 1)
             row_h.addWidget(del_btn)
             lay.addWidget(row)
+
+    def _on_recent_clicked(self, path: str, row_widget=None):
+        """Handle clicks on recent files with path resolution, validation and debug output."""
+        print(f"[PDFApps] Recent file clicked: {path}")
+        _log.info("Recent file clicked: %s", path)
+        resolved = path
+        if not os.path.isfile(resolved):
+            if os.path.isfile(resolved + ".pdf"):
+                resolved = resolved + ".pdf"
+                print(f"[PDFApps] Resolved extension to: {resolved}")
+        if not os.path.isfile(resolved):
+            print(f"[PDFApps ERROR] File does not exist: {path}", file=sys.stderr)
+            _log.warning("Recent file does not exist: %s", path)
+            QMessageBox.warning(
+                self, t("msg.warning"),
+                f"{t('viewer.error_open')}:\n{path}\n\nFile not found on disk."
+            )
+            if row_widget is not None:
+                self._remove_recent(path, row_widget)
+            return
+
+        self.load(resolved)
 
     def _remove_recent(self, path: str, row_widget):
         from app.i18n import _update_config
@@ -480,9 +535,7 @@ class PdfViewerPanel(QWidget):
         try:
             toc = doc.get_toc()
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to read TOC for %s: %s", self._current_path, exc)
+            _log.warning("Failed to read TOC for %s: %s", self._current_path, exc)
             toc = []
         if not toc:
             self._set_toc_tab_visible(False)
@@ -504,10 +557,7 @@ class PdfViewerPanel(QWidget):
             self._set_toc_tab_visible(True)
             self._sidebar_tabs.setCurrentIndex(self._toc_tab_idx)
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to build TOC tree for %s: %s",
-                self._current_path, exc)
+            _log.warning("Failed to build TOC tree for %s: %s", self._current_path, exc)
             self._toc_tree.clear()
             self._set_toc_tab_visible(False)
 
@@ -557,12 +607,40 @@ class PdfViewerPanel(QWidget):
         self._refresh_recents()
 
     def load(self, path: str):
-        if not path or not os.path.isfile(path):
+        print(f"[PDFApps] Loading: {path}")
+        _log.info("Loading PDF in panel: %s", path)
+        if not path:
             return
-        if not path.lower().endswith(".pdf"):
+
+        resolved = path
+        if not os.path.isfile(resolved):
+            if os.path.isfile(resolved + ".pdf"):
+                resolved = resolved + ".pdf"
+            else:
+                print(f"[PDFApps ERROR] File does not exist on disk: {path}", file=sys.stderr)
+                _log.error("Could not load PDF, file does not exist: %s", path)
+                QMessageBox.warning(self, t("msg.error"), f"{t('viewer.error_open')}:\n{path}\n\nFile not found.")
+                return
+
+        path = resolved
+
+        is_pdf_format = path.lower().endswith(".pdf")
+        if not is_pdf_format:
+            try:
+                with open(path, "rb") as f:
+                    header = f.read(1024)
+                    if b"%PDF-" in header:
+                        is_pdf_format = True
+            except Exception:
+                is_pdf_format = False
+
+        if not is_pdf_format:
+            print(f"[PDFApps ERROR] Not a valid PDF: {path}", file=sys.stderr)
+            _log.warning("Invalid PDF format: %s", path)
             QMessageBox.warning(self, t("viewer.invalid_format"),
                                 t("viewer.invalid_msg"))
             return
+
         import fitz
         if self._fitz_doc:
             self._canvas.close_doc()
@@ -573,6 +651,8 @@ class PdfViewerPanel(QWidget):
         try:
             doc = fitz.open(path)
         except Exception as ex:
+            print(f"[PDFApps ERROR] Exception opening {path}: {ex}", file=sys.stderr)
+            _log.exception("Error opening PDF: %s", path)
             QMessageBox.critical(self, t("viewer.error_open"),
                                  t("viewer.error_open_msg", ex=ex))
             return
@@ -600,10 +680,21 @@ class PdfViewerPanel(QWidget):
         self._canvas_scroll.verticalScrollBar().setValue(0)
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
-        self._sidebar_panel.setVisible(True)
-        self._pages_sidebar_collapsed = False
-        self._sidebar_tabs.setVisible(True)
-        self._viewer_splitter.setSizes([220, 800])
+
+        # Honour the user's last collapsed / open Pages sidebar setting
+        show_pages = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
+        if show_pages is None:
+            show_pages = True
+        self._pages_sidebar_collapsed = not show_pages
+        self._sidebar_panel.setVisible(show_pages)
+        self._sidebar_tabs.setVisible(show_pages)
+        total = self._viewer_splitter.width() or 1020
+        if show_pages:
+            w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
+            self._viewer_splitter.setSizes([w, max(300, total - w)])
+        else:
+            self._viewer_splitter.setSizes([0, total])
+
         self._sel_status.setVisible(True)
         self._name_lbl.setText(os.path.basename(path))
         self._zoom_lbl.setText(t("zoom.fit"))
@@ -617,6 +708,8 @@ class PdfViewerPanel(QWidget):
             password=getattr(self, "_pdf_password", ""))
         self._thumbnails.set_current_page(0)
         self._populate_toc(doc)
+        print(f"[PDFApps] Successfully opened: {path} ({doc.page_count} pages)")
+        _log.info("Successfully opened: %s (%d pages)", path, doc.page_count)
 
     # ── Search ──────────────────────────────────────────────────────────
     def _toggle_search(self):
