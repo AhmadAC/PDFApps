@@ -1116,12 +1116,14 @@ class AnnotationOverlay(QWidget):
                     p.setPen(QPen(box.color, 1.8))
                     p.drawLine(QPointF(cx, cy), QPointF(cx, cy + cursor_h))
 
-        # 3. Draw laser pointer
+        # 3. Draw laser pointer (20% opacity)
         if self._tool == ToolMode.LASER and self._laser_pos is not None:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(239, 68, 68, 200))
+            # 20% opacity red outer halo (255 * 0.20 = 51)
+            p.setBrush(QColor(239, 68, 68, 51))
             p.drawEllipse(self._laser_pos, _LASER_RADIUS, _LASER_RADIUS)
-            p.setBrush(QColor(255, 255, 255, 80))
+            # 20% opacity white inner highlight (100 * 0.20 = 20)
+            p.setBrush(QColor(255, 255, 255, 20))
             p.drawEllipse(self._laser_pos, _LASER_RADIUS // 3, _LASER_RADIUS // 3)
 
         p.end()
