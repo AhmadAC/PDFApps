@@ -1,3 +1,5 @@
+#################### START OF FILE: app\window.py ####################
+
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
@@ -550,7 +552,6 @@ class MainWindow(QMainWindow):
             viewer._toc_tree.clear()
             viewer._toc_tree.setVisible(False)
             viewer._toc_btn.setVisible(False)
-            viewer._sel_status.setVisible(False)
             viewer._placeholder.setVisible(True)
             viewer._hdr.setVisible(False)
             viewer._name_lbl.setText(t("viewer.title"))

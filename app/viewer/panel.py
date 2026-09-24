@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QLineEdit, QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem,
+    QApplication,
 )
 from PySide6.QtGui import QKeySequence, QShortcut
 from shiboken6 import isValid
@@ -281,14 +282,6 @@ class PdfViewerPanel(QWidget):
         QShortcut(QKeySequence("Ctrl+F"), self, self._toggle_search)
         QShortcut(QKeySequence("Escape"), self._search_input, self._close_search)
 
-        # ── Status bar (text selection) ──────────────────────────────────
-        self._sel_status = QLabel(t("viewer.select_copy"))
-        self._sel_status.setObjectName("viewer_sel_status")
-        self._sel_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sel_status.setVisible(False)
-        layout.addWidget(self._sel_status)
-        self._canvas.text_copied.connect(self._on_text_copied)
-
     def _toggle_pages_sidebar(self):
         if not self._pages_sidebar_collapsed:
             self._saved_sidebar_width = max(180, self._sidebar_panel.width())
@@ -342,21 +335,6 @@ class PdfViewerPanel(QWidget):
     def _on_scroll(self, val: int):
         self._canvas.on_scroll()
         self._update_page_label()
-
-    def _on_text_copied(self, text: str):
-        if text:
-            self._sel_status.setText(t("viewer.copied", n=len(text)))
-            self._sel_status.setStyleSheet("color: #0D9488; padding: 4px;")
-        else:
-            self._sel_status.setText(t("viewer.no_text"))
-            self._sel_status.setStyleSheet("color: #D97706; padding: 4px;")
-
-        def _reset():
-            if not isValid(self._sel_status):
-                return
-            self._sel_status.setText(t("viewer.select_copy"))
-            self._sel_status.setStyleSheet("")
-        QTimer.singleShot(4000, _reset)
 
     def paintEvent(self, event):
         _paint_bg(self)
@@ -593,7 +571,6 @@ class PdfViewerPanel(QWidget):
         self._placeholder.setVisible(True)
         self._viewer_splitter.setVisible(False)
         self._sidebar_panel.setVisible(False)
-        self._sel_status.setVisible(False)
         self._name_lbl.setText(t("viewer.title"))
         self._page_lbl.setText("— / —")
         self._zoom_lbl.setText(t("zoom.fit"))
@@ -695,7 +672,6 @@ class PdfViewerPanel(QWidget):
         else:
             self._viewer_splitter.setSizes([0, total])
 
-        self._sel_status.setVisible(True)
         self._name_lbl.setText(os.path.basename(path))
         self._zoom_lbl.setText(t("zoom.fit"))
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,
@@ -858,6 +834,7 @@ class PdfViewerPanel(QWidget):
         from PySide6.QtPrintSupport import QPrinter, QPrintDialog
         from PySide6.QtGui import QPainter, QImage
         from PySide6.QtCore import QRectF
+        from PySide6.QtWidgets import QProgressDialog
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setDocName(os.path.basename(self._current_path))
@@ -890,32 +867,52 @@ class PdfViewerPanel(QWidget):
             pages = list(reversed(pages))
         copies = max(1, printer.copyCount())
 
-        first_page_printed = True
-        for copy in range(copies):
-            for i in pages:
-                if not first_page_printed:
-                    printer.newPage()
-                first_page_printed = False
-                page = self._fitz_doc[i]
-                dpi = printer.resolution()
-                zoom = dpi / 72.0
-                mat = fitz.Matrix(zoom, zoom)
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                if pix.n != 3:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                img = QImage(pix.samples, pix.width, pix.height,
-                             pix.stride, QImage.Format.Format_RGB888).copy()
-                target = QRectF(painter.viewport())
-                source = QRectF(0, 0, img.width(), img.height())
-                scale = min(target.width() / source.width(),
-                            target.height() / source.height())
-                w = source.width() * scale
-                h = source.height() * scale
-                x = (target.width() - w) / 2
-                y = (target.height() - h) / 2
-                painter.drawImage(QRectF(x, y, w, h), img, source)
+        total_steps = max(1, copies * len(pages))
+        progress = QProgressDialog(t("viewer.print"), t("btn.cancel"), 0, total_steps, self)
+        progress.setWindowTitle(t("viewer.print"))
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
 
-        painter.end()
+        step = 0
+        first_page_printed = True
+        try:
+            for copy in range(copies):
+                for i in pages:
+                    if progress.wasCanceled():
+                        break
+                    step += 1
+                    progress.setValue(step)
+                    progress.setLabelText(f"{t('viewer.print')}: {step}/{total_steps}…")
+                    QApplication.processEvents()
+
+                    if not first_page_printed:
+                        printer.newPage()
+                    first_page_printed = False
+                    page = self._fitz_doc[i]
+                    dpi = printer.resolution()
+                    zoom = dpi / 72.0
+                    mat = fitz.Matrix(zoom, zoom)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    if pix.n != 3:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    img = QImage(pix.samples, pix.width, pix.height,
+                                 pix.stride, QImage.Format.Format_RGB888).copy()
+                    target = QRectF(painter.viewport())
+                    source = QRectF(0, 0, img.width(), img.height())
+                    scale = min(target.width() / source.width(),
+                                target.height() / source.height())
+                    w = source.width() * scale
+                    h = source.height() * scale
+                    x = (target.width() - w) / 2
+                    y = (target.height() - h) / 2
+                    painter.drawImage(QRectF(x, y, w, h), img, source)
+                    QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
+        finally:
+            progress.close()
+            painter.end()
 
     # ── Password lifecycle ──────────────────────────────────────────────
     def _clear_pdf_password(self) -> None:
