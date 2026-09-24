@@ -1,5 +1,5 @@
 # app/viewer/thumbnails.py
-"""PDFApps – PDF page thumbnails panel for the viewer sidebar with Foxit-style context actions."""
+"""PDFApps – PDF page thumbnails panel for the viewer sidebar with Foxit-style multi-selection and context actions."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import os
 
 from PySide6.QtCore import (
     QAbstractListModel, QModelIndex, QRect, QSize, QStandardPaths, Qt,
-    QThread, QTimer, Signal, Slot, QPoint,
+    QThread, QTimer, Signal, Slot, QPoint, QItemSelection, QItemSelectionModel,
 )
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QListView, QStyle, QStyledItemDelegate,
     QVBoxLayout, QWidget, QMenu,
@@ -64,9 +64,9 @@ def _install_debug_log() -> None:
         _log.info("── thumbnail debug log opened (pid=%d) ──", os.getpid())
 
 
-DEFAULT_THUMB_WIDTH = 120
-DEFAULT_THUMB_HEIGHT = 160
-THUMB_PADDING = 12
+DEFAULT_THUMB_WIDTH = 130
+DEFAULT_THUMB_HEIGHT = 170
+THUMB_PADDING = 10
 PAGE_NUM_HEIGHT = 20
 CACHE_MAX = 200
 VISIBLE_BUFFER = 4
@@ -213,7 +213,7 @@ class ThumbnailModel(QAbstractListModel):
         if role == Qt.ItemDataRole.DecorationRole:
             return self._cache.get(row)
         if role == Qt.ItemDataRole.DisplayRole:
-            return str(row + 1)
+            return f"{row + 1} / {self._page_count}" if self._page_count > 0 else str(row + 1)
         return None
 
     def set_document(self, doc_path: str, page_count: int) -> None:
@@ -232,7 +232,7 @@ class ThumbnailModel(QAbstractListModel):
         if self._page_count > 0:
             top = self.index(0)
             bottom = self.index(self._page_count - 1)
-            self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.DecorationRole])
+            self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.DisplayRole])
 
     def cache_pixmap(self, page_idx: int, pix: QPixmap) -> None:
         if page_idx in self._cache:
@@ -255,19 +255,20 @@ class ThumbnailModel(QAbstractListModel):
             return
         top = self.index(0)
         bottom = self.index(self._page_count - 1)
-        self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.DecorationRole])
+        self.dataChanged.emit(top, bottom, [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.DisplayRole])
 
 
 # ── Delegate ──────────────────────────────────────────────────────────
 
 
 class ThumbnailDelegate(QStyledItemDelegate):
-    """Paint each row: thumbnail + page number, with current-page
-    highlight in ACCENT and hover feedback."""
+    """Paint each row centered: thumbnail + page number in '1 / N' format,
+    with multi-selection support and current-page highlight."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._current_page = -1
+        self._total_pages = 0
         self._dark = True
         self._thumb_w = DEFAULT_THUMB_WIDTH
         self._thumb_h = DEFAULT_THUMB_HEIGHT
@@ -276,6 +277,9 @@ class ThumbnailDelegate(QStyledItemDelegate):
         old = self._current_page
         self._current_page = page_idx
         return old
+
+    def set_total_pages(self, total: int) -> None:
+        self._total_pages = max(0, int(total))
 
     def set_dark(self, dark: bool) -> None:
         self._dark = bool(dark)
@@ -298,37 +302,48 @@ class ThumbnailDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        if page_idx == self._current_page:
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        is_current = (page_idx == self._current_page)
+
+        # Highlight background box covering item
+        if is_selected or is_current:
             accent = QColor(ACCENT)
-            accent.setAlpha(60)
+            accent.setAlpha(70 if is_selected else 40)
             painter.setBrush(accent)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), 6, 6)
+            if is_selected and is_current:
+                painter.setPen(QPen(QColor(ACCENT), 2))
+            elif is_selected:
+                painter.setPen(QPen(QColor(ACCENT), 1.5))
+            else:
+                painter.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+            painter.drawRoundedRect(rect.adjusted(6, 4, -6, -4), 6, 6)
         elif option.state & QStyle.StateFlag.State_MouseOver:
-            hover = QColor(255, 255, 255, 20) if self._dark \
-                else QColor(0, 0, 0, 20)
+            hover = QColor(255, 255, 255, 22) if self._dark else QColor(0, 0, 0, 20)
             painter.setBrush(hover)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), 6, 6)
+            painter.drawRoundedRect(rect.adjusted(6, 4, -6, -4), 6, 6)
 
-        thumb_x = rect.x() + THUMB_PADDING
+        # Centered thumbnail within available row width
+        thumb_w = min(self._thumb_w, max(40, rect.width() - 2 * THUMB_PADDING))
+        thumb_h = self._thumb_h
+        thumb_x = rect.x() + (rect.width() - thumb_w) // 2
         thumb_y = rect.y() + THUMB_PADDING
-        thumb_rect = QRect(thumb_x, thumb_y, self._thumb_w, self._thumb_h)
+        thumb_rect = QRect(thumb_x, thumb_y, thumb_w, thumb_h)
 
         if pix is not None and not pix.isNull():
             dpr = pix.devicePixelRatio() or 1.0
             scaled = pix.scaled(
-                round(self._thumb_w * dpr), round(self._thumb_h * dpr),
+                round(thumb_w * dpr), round(thumb_h * dpr),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             scaled.setDevicePixelRatio(dpr)
             lw = round(scaled.width() / dpr)
             lh = round(scaled.height() / dpr)
-            cx = thumb_x + (self._thumb_w - lw) // 2
-            cy = thumb_y + (self._thumb_h - lh) // 2
+            cx = rect.x() + (rect.width() - lw) // 2
+            cy = thumb_y + (thumb_h - lh) // 2
             painter.drawPixmap(cx, cy, scaled)
-            painter.setPen(QColor(0, 0, 0, 60))
+            painter.setPen(QColor(0, 0, 0, 80))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(cx, cy, lw - 1, lh - 1)
         else:
@@ -337,25 +352,29 @@ class ThumbnailDelegate(QStyledItemDelegate):
             painter.drawRect(thumb_rect)
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "…")
 
-        if page_idx == self._current_page:
+        # Centered page number displaying "1 / N"
+        total = self._total_pages or (index.model().rowCount() if index.model() else 0)
+        label_text = f"{page_idx + 1} / {total}" if total > 0 else str(page_idx + 1)
+
+        if is_selected or is_current:
             painter.setPen(QColor(ACCENT))
         else:
             painter.setPen(QColor(TEXT_SEC))
+
         num_rect = QRect(
             rect.x(), thumb_y + self._thumb_h + 2,
             rect.width(), PAGE_NUM_HEIGHT,
         )
-        painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter,
-                         str(page_idx + 1))
+        painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter, label_text)
 
         painter.restore()
 
 
-# ── Custom List View with Context Menu ───────────────────────────────
+# ── Custom List View with Multi-Selection Context Menu ───────────────
 
 
 class _ThumbnailListView(QListView):
-    """QListView with native right click context menu for page manipulation."""
+    """QListView supporting multi-selection and context menu."""
 
     def __init__(self, panel: ThumbnailPanel) -> None:
         super().__init__(panel)
@@ -364,10 +383,22 @@ class _ThumbnailListView(QListView):
     def contextMenuEvent(self, event):
         pos = event.pos()
         idx = self.indexAt(pos)
-        page_idx = idx.row() if idx.isValid() else self._panel._anchor
-        if page_idx < 0:
-            page_idx = 0
-        self._panel._show_context_menu(event.globalPos(), page_idx)
+        selected_indexes = self.selectedIndexes()
+        selected_pages = sorted({i.row() for i in selected_indexes if i.isValid()})
+
+        if idx.isValid():
+            clicked_page = idx.row()
+            if clicked_page not in selected_pages:
+                self.setCurrentIndex(idx)
+                selected_pages = [clicked_page]
+        else:
+            if not selected_pages:
+                selected_pages = [self._panel._anchor] if self._panel._anchor >= 0 else [0]
+
+        if not selected_pages:
+            selected_pages = [0]
+
+        self._panel._show_context_menu(event.globalPos(), selected_pages)
 
 
 # ── Panel ─────────────────────────────────────────────────────────────
@@ -377,7 +408,7 @@ class ThumbnailPanel(QWidget):
     """Sidebar container hosting the QListView of thumbnails with Foxit-style actions."""
 
     page_requested = Signal(int)
-    action_requested = Signal(str, int)  # (action_name, page_index)
+    action_requested = Signal(str, object)  # (action_name, list[int])
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -409,7 +440,7 @@ class ThumbnailPanel(QWidget):
         self._view.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
         self._view.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection)
+            QAbstractItemView.SelectionMode.ExtendedSelection)
         self._view.setVerticalScrollMode(
             QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._view.setHorizontalScrollBarPolicy(
@@ -428,17 +459,19 @@ class ThumbnailPanel(QWidget):
 
     # ── Context Menu (Foxit Layout) ───────────────────────────────
 
-    def _show_context_menu(self, global_pos: QPoint, page_idx: int) -> None:
+    def _show_context_menu(self, global_pos: QPoint, selected_pages: list[int]) -> None:
         if self._model.rowCount() <= 0:
             return
 
         dark = self._delegate._dark
         icon_color = TEXT_PRI if dark else _LQ
+        n_sel = len(selected_pages)
+        suffix = f" ({n_sel})" if n_sel > 1 else ""
 
         menu = QMenu(self)
 
         # 1. Clipboard
-        act_copy = menu.addAction(qta.icon("fa5s.copy", color=icon_color), "Copy")
+        act_copy = menu.addAction(qta.icon("fa5s.copy", color=icon_color), f"Copy{suffix}")
         act_paste = menu.addAction(qta.icon("fa5s.paste", color=icon_color), "Paste")
         menu.addSeparator()
 
@@ -458,21 +491,21 @@ class ThumbnailPanel(QWidget):
         act_ins_file = insert_menu.addAction(qta.icon("fa5s.folder-open", color=icon_color), "From File...")
 
         # 5. Core Page Manipulations
-        act_delete = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), "Delete Pages...")
-        act_extract = menu.addAction(qta.icon("fa5s.file-export", color=icon_color), "Extract Pages...")
-        act_reverse = menu.addAction(qta.icon("fa5s.sort-numeric-down-alt", color=icon_color), "Reverse Pages...")
+        act_delete = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), f"Delete Pages{suffix}...")
+        act_extract = menu.addAction(qta.icon("fa5s.file-export", color=icon_color), f"Extract Pages{suffix}...")
+        act_reverse = menu.addAction(qta.icon("fa5s.sort-numeric-down-alt", color=icon_color), f"Reverse Pages{suffix}...")
         act_replace = menu.addAction(qta.icon("fa5s.exchange-alt", color=icon_color), "Replace Pages...")
         act_swap = menu.addAction(qta.icon("fa5s.random", color=icon_color), "Swap Pages...")
-        act_duplicate = menu.addAction(qta.icon("fa5s.clone", color=icon_color), "Duplicate Pages...")
-        act_move = menu.addAction(qta.icon("fa5s.arrows-alt", color=icon_color), "Move Pages...")
+        act_duplicate = menu.addAction(qta.icon("fa5s.clone", color=icon_color), f"Duplicate Pages{suffix}...")
+        act_move = menu.addAction(qta.icon("fa5s.arrows-alt", color=icon_color), f"Move Pages{suffix}...")
         act_split = menu.addAction(qta.icon("fa5s.cut", color=icon_color), "Split Document...")
         menu.addSeparator()
 
         # 6. Page Geometry
-        act_crop = menu.addAction(qta.icon("fa5s.crop-alt", color=icon_color), "Crop Pages...")
-        act_resize = menu.addAction(qta.icon("fa5s.expand-arrows-alt", color=icon_color), "Resize pages...")
+        act_crop = menu.addAction(qta.icon("fa5s.crop-alt", color=icon_color), f"Crop Pages{suffix}...")
+        act_resize = menu.addAction(qta.icon("fa5s.expand-arrows-alt", color=icon_color), f"Resize pages{suffix}...")
 
-        rotate_menu = menu.addMenu(qta.icon("fa5s.sync-alt", color=icon_color), "Rotate Pages...")
+        rotate_menu = menu.addMenu(qta.icon("fa5s.sync-alt", color=icon_color), f"Rotate Pages{suffix}...")
         act_rot_right = rotate_menu.addAction(qta.icon("fa5s.redo", color=icon_color), "Rotate Right (90° Clockwise)")
         act_rot_left = rotate_menu.addAction(qta.icon("fa5s.undo", color=icon_color), "Rotate Left (90° Counter-Clockwise)")
         act_rot_180 = rotate_menu.addAction(qta.icon("fa5s.sync-alt", color=icon_color), "Rotate 180°")
@@ -480,11 +513,11 @@ class ThumbnailPanel(QWidget):
 
         # 7. Navigation & Numbering
         act_transitions = menu.addAction(qta.icon("fa5s.tv", color=icon_color), "Page Transitions...")
-        act_page_nums = menu.addAction(qta.icon("fa5s.list-ol", color=icon_color), "Format Page Numbers...")
+        act_page_nums = menu.addAction(qta.icon("fa5s.list-ol", color=icon_color), f"Format Page Numbers{suffix}...")
         menu.addSeparator()
 
         # 8. Print & Properties
-        act_print = menu.addAction(qta.icon("fa5s.print", color=icon_color), "Print Pages...")
+        act_print = menu.addAction(qta.icon("fa5s.print", color=icon_color), f"Print Pages{suffix}...")
         act_props = menu.addAction(qta.icon("fa5s.info-circle", color=icon_color), "Properties...")
 
         selected_action = menu.exec(global_pos)
@@ -493,55 +526,55 @@ class ThumbnailPanel(QWidget):
 
         # Action Router
         if selected_action == act_copy:
-            self.action_requested.emit("copy", page_idx)
+            self.action_requested.emit("copy", selected_pages)
         elif selected_action == act_paste:
-            self.action_requested.emit("paste", page_idx)
+            self.action_requested.emit("paste", selected_pages)
         elif selected_action == act_enlarge:
             self._enlarge_thumbnails()
         elif selected_action == act_reduce:
             self._reduce_thumbnails()
         elif selected_action == act_embed:
-            self.action_requested.emit("embed_thumbnails", page_idx)
+            self.action_requested.emit("embed_thumbnails", selected_pages)
         elif selected_action == act_rem_embed:
-            self.action_requested.emit("remove_thumbnails", page_idx)
+            self.action_requested.emit("remove_thumbnails", selected_pages)
         elif selected_action == act_ins_blank:
-            self.action_requested.emit("insert_blank", page_idx)
+            self.action_requested.emit("insert_blank", selected_pages)
         elif selected_action == act_ins_file:
-            self.action_requested.emit("insert_file", page_idx)
+            self.action_requested.emit("insert_file", selected_pages)
         elif selected_action == act_delete:
-            self.action_requested.emit("delete", page_idx)
+            self.action_requested.emit("delete", selected_pages)
         elif selected_action == act_extract:
-            self.action_requested.emit("extract", page_idx)
+            self.action_requested.emit("extract", selected_pages)
         elif selected_action == act_reverse:
-            self.action_requested.emit("reverse", page_idx)
+            self.action_requested.emit("reverse", selected_pages)
         elif selected_action == act_replace:
-            self.action_requested.emit("replace", page_idx)
+            self.action_requested.emit("replace", selected_pages)
         elif selected_action == act_swap:
-            self.action_requested.emit("swap", page_idx)
+            self.action_requested.emit("swap", selected_pages)
         elif selected_action == act_duplicate:
-            self.action_requested.emit("duplicate", page_idx)
+            self.action_requested.emit("duplicate", selected_pages)
         elif selected_action == act_move:
-            self.action_requested.emit("move", page_idx)
+            self.action_requested.emit("move", selected_pages)
         elif selected_action == act_split:
-            self.action_requested.emit("split", page_idx)
+            self.action_requested.emit("split", selected_pages)
         elif selected_action == act_crop:
-            self.action_requested.emit("crop", page_idx)
+            self.action_requested.emit("crop", selected_pages)
         elif selected_action == act_resize:
-            self.action_requested.emit("resize", page_idx)
+            self.action_requested.emit("resize", selected_pages)
         elif selected_action == act_rot_right:
-            self.action_requested.emit("rotate_right", page_idx)
+            self.action_requested.emit("rotate_right", selected_pages)
         elif selected_action == act_rot_left:
-            self.action_requested.emit("rotate_left", page_idx)
+            self.action_requested.emit("rotate_left", selected_pages)
         elif selected_action == act_rot_180:
-            self.action_requested.emit("rotate_180", page_idx)
+            self.action_requested.emit("rotate_180", selected_pages)
         elif selected_action == act_transitions:
-            self.action_requested.emit("transitions", page_idx)
+            self.action_requested.emit("transitions", selected_pages)
         elif selected_action == act_page_nums:
-            self.action_requested.emit("page_numbers", page_idx)
+            self.action_requested.emit("page_numbers", selected_pages)
         elif selected_action == act_print:
-            self.action_requested.emit("print", page_idx)
+            self.action_requested.emit("print", selected_pages)
         elif selected_action == act_props:
-            self.action_requested.emit("properties", page_idx)
+            self.action_requested.emit("properties", selected_pages)
 
     def _enlarge_thumbnails(self) -> None:
         self._thumb_scale = min(2.5, round(self._thumb_scale * 1.25, 2))
@@ -567,6 +600,36 @@ class ThumbnailPanel(QWidget):
 
     # ── Public API ────────────────────────────────────────────────
 
+    def selected_pages(self) -> list[int]:
+        """Return the sorted list of 0-based indices of all currently selected pages."""
+        if not self._view or not self._model:
+            return [self._anchor] if self._anchor >= 0 else [0]
+        selected_indexes = self._view.selectedIndexes()
+        pages = sorted({i.row() for i in selected_indexes if i.isValid() and 0 <= i.row() < self._model.rowCount()})
+        return pages if pages else ([self._anchor] if 0 <= self._anchor < self._model.rowCount() else [0])
+
+    def set_selected_pages(self, pages: list[int]) -> None:
+        """Select the specified list of page indices in the thumbnail view."""
+        if not self._view or not self._model or self._model.rowCount() <= 0:
+            return
+        selection = QItemSelection()
+        for p in pages:
+            if 0 <= p < self._model.rowCount():
+                idx = self._model.index(p)
+                selection.select(idx, idx)
+        sm = self._view.selectionModel()
+        if sm is not None:
+            sm.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if pages:
+            first_p = min(pages)
+            self._delegate.set_current_page(first_p)
+            self._anchor = first_p
+            idx = self._model.index(first_p)
+            self._view.setCurrentIndex(idx)
+        vp = self._view.viewport()
+        if vp is not None:
+            vp.update()
+
     def set_document(self, doc_path: str, page_count: int,
                      password: str = "") -> None:
         self._doc_path = doc_path
@@ -577,6 +640,7 @@ class ThumbnailPanel(QWidget):
         self._epoch += 1
         self._inflight.clear()
         self._anchor = 0
+        self._delegate.set_total_pages(page_count)
         self._model.set_document(doc_path, page_count)
         self._delegate.set_current_page(-1)
         _log.debug(
@@ -612,6 +676,7 @@ class ThumbnailPanel(QWidget):
         self._inflight.clear()
         self._anchor = 0
         self._model.clear()
+        self._delegate.set_total_pages(0)
         self._delegate.set_current_page(-1)
 
     def set_current_page(self, page_idx: int) -> None:
@@ -620,14 +685,16 @@ class ThumbnailPanel(QWidget):
         self._anchor = page_idx
         old = self._delegate.set_current_page(page_idx)
         idx = self._model.index(page_idx)
-        self._view.setCurrentIndex(idx)
+        if len(self._view.selectedIndexes()) <= 1:
+            self._view.setCurrentIndex(idx)
         self._view.scrollTo(
             idx, QAbstractItemView.ScrollHint.EnsureVisible)
         vp = self._view.viewport()
-        if old >= 0:
-            old_rect = self._view.visualRect(self._model.index(old))
-            vp.update(old_rect)
-        vp.update(self._view.visualRect(idx))
+        if vp is not None:
+            if old >= 0:
+                old_rect = self._view.visualRect(self._model.index(old))
+                vp.update(old_rect)
+            vp.update(self._view.visualRect(idx))
         self._render_visible()
 
     def update_theme(self, dark: bool) -> None:
@@ -638,7 +705,11 @@ class ThumbnailPanel(QWidget):
 
     def _on_activated(self, index: QModelIndex) -> None:
         if index.isValid():
+            self._delegate.set_current_page(index.row())
             self.page_requested.emit(index.row())
+            vp = self._view.viewport()
+            if vp is not None:
+                vp.update()
 
     def _row_height(self) -> int:
         return (self._delegate.sizeHint(None, self._model.index(0)).height()

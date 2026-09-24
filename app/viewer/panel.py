@@ -1,6 +1,5 @@
-
 # app/viewer/panel.py
-"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, and thumbnail actions."""
+"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, and thumbnail multi-page actions."""
 
 import os
 import sys
@@ -554,54 +553,80 @@ class PdfViewerPanel(QWidget):
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
 
-    # ── Foxit Context Menu Operations Handler ───────────────────────────
+    # ── Multi-page Context Menu Operations Handler ───────────────────────
 
-    def _on_thumbnail_action(self, action: str, page_idx: int) -> None:
+    def _on_thumbnail_action(self, action: str, pages_arg: object) -> None:
         if not self._fitz_doc or not self._current_path:
+            return
+
+        if isinstance(pages_arg, int):
+            pages = [pages_arg]
+        elif isinstance(pages_arg, (list, tuple, set)):
+            pages = sorted(list(pages_arg))
+        else:
+            pages = [0]
+
+        if not pages:
             return
 
         if action in ("rotate_right", "rotate_left", "rotate_180"):
             delta = 90 if action == "rotate_right" else (270 if action == "rotate_left" else 180)
-            self._rotate_single_page(page_idx, delta)
+            self._rotate_pages(pages, delta)
         elif action == "delete":
-            self._delete_single_page(page_idx)
+            self._delete_pages(pages)
         elif action == "extract":
-            self._extract_single_page(page_idx)
+            self._extract_pages(pages)
         elif action == "insert_blank":
-            self._insert_blank_page(page_idx)
+            self._insert_blank_page(pages[-1])
         elif action == "insert_file":
-            self._insert_pages_from_file(page_idx)
+            self._insert_pages_from_file(pages[-1])
         elif action == "duplicate":
-            self._duplicate_page(page_idx)
+            self._duplicate_pages(pages)
         elif action == "reverse":
-            self._reverse_all_pages()
+            self._reverse_pages(pages)
         elif action == "swap":
-            self._swap_page_dialog(page_idx)
+            self._swap_page_dialog(pages[0])
         elif action == "move":
-            self._move_page_dialog(page_idx)
+            self._move_page_dialog(pages)
         elif action == "replace":
-            self._replace_page_dialog(page_idx)
+            self._replace_page_dialog(pages[0])
         elif action == "resize":
-            self._resize_page_dialog(page_idx)
+            self._resize_pages_dialog(pages)
         elif action == "crop":
-            self._trigger_crop_tool()
+            self._trigger_crop_tool(pages)
         elif action == "page_numbers":
-            self._trigger_page_numbers_tool()
+            self._trigger_page_numbers_tool(pages)
         elif action == "split":
             self._trigger_split_tool()
         elif action == "print":
-            self._print_pdf()
+            self._print_pdf(pages)
         elif action == "properties":
             self._show_properties_dialog()
         elif action == "copy":
-            self._copy_page_content(page_idx)
+            self._copy_page_content(pages)
         elif action == "paste":
-            self._paste_page_content(page_idx)
+            self._paste_page_content(pages[0])
 
-    def _save_and_reload(self, doc_to_save):
-        """Atomically persist modifications and reload live viewer."""
+    def _save_and_reload(self, doc_to_save, target_page: int | None = None, selected_pages: list[int] | None = None):
+        """Atomically persist modifications and reload live viewer, preserving viewport position and selection."""
         try:
             saved_path = self._current_path
+
+            # Preserve current view states before unloading
+            scroll_val = self._canvas_scroll.verticalScrollBar().value()
+            viewed_page = self._canvas.page_at_y(scroll_val) if self._canvas.page_count() > 0 else 0
+            if target_page is not None:
+                viewed_page = target_page
+
+            if selected_pages is None and hasattr(self, "_thumbnails"):
+                selected_pages = self._thumbnails.selected_pages()
+
+            thumb_scroll_val = 0
+            if hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
+                sb = self._thumbnails._view.verticalScrollBar()
+                if sb:
+                    thumb_scroll_val = sb.value()
+
             # Release all open document handles before saving/replacing in-place
             self._canvas.close_doc()
             if self._fitz_doc is not None:
@@ -616,38 +641,59 @@ class PdfViewerPanel(QWidget):
                 close_writer=True,
             )
             self.load(saved_path)
+
+            # Restore scroll position, viewed page, and multi-selection
+            def _restore_state():
+                if not isValid(self):
+                    return
+                if 0 <= viewed_page < self._canvas.page_count():
+                    y = self._canvas.scroll_to_page(viewed_page)
+                    self._canvas_scroll.verticalScrollBar().setValue(y)
+                if hasattr(self, "_thumbnails"):
+                    if selected_pages:
+                        self._thumbnails.set_selected_pages(selected_pages)
+                    if thumb_scroll_val > 0 and self._thumbnails._view:
+                        sb = self._thumbnails._view.verticalScrollBar()
+                        if sb:
+                            sb.setValue(min(thumb_scroll_val, sb.maximum()))
+                self._update_page_nav()
+
+            QTimer.singleShot(60, _restore_state)
         except Exception as exc:
             show_error(self, exc)
 
-    def _rotate_single_page(self, page_idx: int, delta: int) -> None:
+    def _rotate_pages(self, pages: list[int], delta: int) -> None:
         try:
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
-            if 0 <= page_idx < doc.page_count:
-                cur_rot = doc[page_idx].rotation
-                doc[page_idx].set_rotation((cur_rot + delta) % 360)
-                self._save_and_reload(doc)
-            else:
-                doc.close()
+            for p_idx in pages:
+                if 0 <= p_idx < doc.page_count:
+                    page = doc[p_idx]
+                    cur_rot = page.rotation
+                    page.set_rotation((cur_rot + delta) % 360)
+            first_page = min(pages) if pages else None
+            self._save_and_reload(doc, target_page=first_page, selected_pages=pages)
         except Exception as exc:
             show_error(self, exc)
 
-    def _delete_single_page(self, page_idx: int) -> None:
+    def _delete_pages(self, pages: list[int]) -> None:
         try:
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
-            if doc.page_count <= 1:
-                QMessageBox.warning(self, t("msg.warning"), "Cannot delete the only page in the document.")
+            if doc.page_count <= len(pages):
+                QMessageBox.warning(self, t("msg.warning"), "Cannot delete all pages in the document.")
                 doc.close()
                 return
 
+            page_str = ", ".join(str(p + 1) for p in pages)
+            if len(pages) > 6:
+                page_str = f"{len(pages)} pages ({pages[0] + 1}..{pages[-1] + 1})"
+
             reply = QMessageBox.question(
                 self, t("msg.confirm"),
-                t("viewer.confirm_delete_page", n=page_idx + 1)
-                if t("viewer.confirm_delete_page") != "viewer.confirm_delete_page"
-                else f"Are you sure you want to delete page {page_idx + 1}?",
+                f"Are you sure you want to delete page(s) {page_str}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -655,14 +701,21 @@ class PdfViewerPanel(QWidget):
                 doc.close()
                 return
 
-            doc.delete_page(page_idx)
-            self._save_and_reload(doc)
+            for p_idx in sorted(pages, reverse=True):
+                if 0 <= p_idx < doc.page_count:
+                    doc.delete_page(p_idx)
+
+            target = min(pages[0], doc.page_count - 1)
+            self._save_and_reload(doc, target_page=target, selected_pages=[target])
         except Exception as exc:
             show_error(self, exc)
 
-    def _extract_single_page(self, page_idx: int) -> None:
+    def _extract_pages(self, pages: list[int]) -> None:
         base, ext = os.path.splitext(os.path.basename(self._current_path))
-        default_name = f"{base}_page_{page_idx + 1}{ext}"
+        if len(pages) == 1:
+            default_name = f"{base}_page_{pages[0] + 1}{ext}"
+        else:
+            default_name = f"{base}_extracted_pages{ext}"
         out_path, _ = QFileDialog.getSaveFileName(
             self, t("tool.extract.name"),
             os.path.join(os.path.dirname(self._current_path), default_name),
@@ -675,10 +728,12 @@ class PdfViewerPanel(QWidget):
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
             new_doc = fitz.open()
-            new_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+            for p_idx in pages:
+                if 0 <= p_idx < doc.page_count:
+                    new_doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
             doc.close()
             atomic_pdf_write(new_doc, out_path, close_writer=True)
-            QMessageBox.information(self, t("msg.done"), f"Page {page_idx + 1} extracted to:\n{out_path}")
+            QMessageBox.information(self, t("msg.done"), f"{len(pages)} page(s) extracted to:\n{out_path}")
         except Exception as exc:
             show_error(self, exc)
 
@@ -689,7 +744,7 @@ class PdfViewerPanel(QWidget):
                 doc.authenticate(self._pdf_password)
             ref_rect = doc[page_idx].rect if 0 <= page_idx < doc.page_count else fitz.Rect(0, 0, 595, 842)
             doc.new_page(pno=page_idx + 1, width=ref_rect.width, height=ref_rect.height)
-            self._save_and_reload(doc)
+            self._save_and_reload(doc, target_page=page_idx + 1, selected_pages=[page_idx + 1])
         except Exception as exc:
             show_error(self, exc)
 
@@ -704,21 +759,23 @@ class PdfViewerPanel(QWidget):
             src = fitz.open(p)
             doc.insert_pdf(src, start_at=page_idx + 1)
             src.close()
-            self._save_and_reload(doc)
+            self._save_and_reload(doc, target_page=page_idx + 1, selected_pages=[page_idx + 1])
         except Exception as exc:
             show_error(self, exc)
 
-    def _duplicate_page(self, page_idx: int) -> None:
+    def _duplicate_pages(self, pages: list[int]) -> None:
         try:
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
-            doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx, start_at=page_idx + 1)
-            self._save_and_reload(doc)
+            for p_idx in sorted(pages, reverse=True):
+                if 0 <= p_idx < doc.page_count:
+                    doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx, start_at=p_idx + 1)
+            self._save_and_reload(doc, target_page=pages[0], selected_pages=pages)
         except Exception as exc:
             show_error(self, exc)
 
-    def _reverse_all_pages(self) -> None:
+    def _reverse_pages(self, pages: list[int]) -> None:
         try:
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
@@ -727,11 +784,18 @@ class PdfViewerPanel(QWidget):
             if n <= 1:
                 doc.close()
                 return
+            order = list(range(n))
+            if len(pages) > 1:
+                sub_order = list(reversed(pages))
+                for orig_idx, rev_idx in zip(pages, sub_order):
+                    order[orig_idx] = rev_idx
+            else:
+                order = list(reversed(order))
             new_doc = fitz.open()
-            for i in range(n - 1, -1, -1):
-                new_doc.insert_pdf(doc, from_page=i, to_page=i)
+            for idx in order:
+                new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
             doc.close()
-            self._save_and_reload(new_doc)
+            self._save_and_reload(new_doc, target_page=pages[0] if pages else 0, selected_pages=pages)
         except Exception as exc:
             show_error(self, exc)
 
@@ -739,7 +803,7 @@ class PdfViewerPanel(QWidget):
         total = self._fitz_doc.page_count if self._fitz_doc else 1
         target, ok = QInputDialog.getInt(
             self, "Swap Pages",
-            f"Swap page {page_idx + 1} with page:",
+            f"Swap page {page_idx + 1} with page (1-{total}):",
             min(total, max(1, page_idx + 2)), 1, total, 1
         )
         if not ok or target == page_idx + 1:
@@ -755,32 +819,35 @@ class PdfViewerPanel(QWidget):
             for idx in order:
                 new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
             doc.close()
-            self._save_and_reload(new_doc)
+            self._save_and_reload(new_doc, target_page=target_idx, selected_pages=[target_idx])
         except Exception as exc:
             show_error(self, exc)
 
-    def _move_page_dialog(self, page_idx: int) -> None:
+    def _move_page_dialog(self, pages: list[int]) -> None:
         total = self._fitz_doc.page_count if self._fitz_doc else 1
+        page_str = ", ".join(str(p + 1) for p in pages)
         dest, ok = QInputDialog.getInt(
-            self, "Move Page",
-            f"Move page {page_idx + 1} to position:",
-            min(total, max(1, page_idx + 2)), 1, total, 1
+            self, "Move Pages",
+            f"Move page(s) {page_str} to position (1-{total}):",
+            min(total, max(1, max(pages) + 2)), 1, total, 1
         )
-        if not ok or dest == page_idx + 1:
+        if not ok:
             return
         try:
             dest_idx = dest - 1
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
-            order = list(range(doc.page_count))
-            p = order.pop(page_idx)
-            order.insert(dest_idx, p)
+            order = [i for i in range(doc.page_count) if i not in pages]
+            dest_clamped = max(0, min(dest_idx, len(order)))
+            for i, p in enumerate(pages):
+                order.insert(dest_clamped + i, p)
             new_doc = fitz.open()
             for idx in order:
                 new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
             doc.close()
-            self._save_and_reload(new_doc)
+            new_selected = list(range(dest_clamped, dest_clamped + len(pages)))
+            self._save_and_reload(new_doc, target_page=dest_clamped, selected_pages=new_selected)
         except Exception as exc:
             show_error(self, exc)
 
@@ -796,11 +863,11 @@ class PdfViewerPanel(QWidget):
             doc.insert_pdf(src, from_page=0, to_page=0, start_at=page_idx)
             doc.delete_page(page_idx + 1)
             src.close()
-            self._save_and_reload(doc)
+            self._save_and_reload(doc, target_page=page_idx, selected_pages=[page_idx])
         except Exception as exc:
             show_error(self, exc)
 
-    def _resize_page_dialog(self, page_idx: int) -> None:
+    def _resize_pages_dialog(self, pages: list[int]) -> None:
         sizes = {
             "A4 (595 × 842 pt)": (595.0, 842.0),
             "Letter (612 × 792 pt)": (612.0, 792.0),
@@ -808,7 +875,7 @@ class PdfViewerPanel(QWidget):
             "A5 (420 × 595 pt)": (420.0, 595.0),
         }
         item, ok = QInputDialog.getItem(
-            self, "Resize Page", "Select page size:", list(sizes.keys()), 0, False
+            self, "Resize Pages", f"Select page size for {len(pages)} page(s):", list(sizes.keys()), 0, False
         )
         if not ok or item not in sizes:
             return
@@ -817,18 +884,28 @@ class PdfViewerPanel(QWidget):
             doc = fitz.open(self._current_path)
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
-            page = doc[page_idx]
-            page.set_mediabox(fitz.Rect(0, 0, new_w, new_h))
-            self._save_and_reload(doc)
+            for p_idx in pages:
+                if 0 <= p_idx < doc.page_count:
+                    doc[p_idx].set_mediabox(fitz.Rect(0, 0, new_w, new_h))
+            self._save_and_reload(doc, target_page=pages[0] if pages else 0, selected_pages=pages)
         except Exception as exc:
             show_error(self, exc)
 
-    def _copy_page_content(self, page_idx: int) -> None:
-        if not self._fitz_doc or page_idx >= self._fitz_doc.page_count:
+    def _copy_page_content(self, pages: list[int]) -> None:
+        if not self._fitz_doc:
             return
-        text = self._fitz_doc[page_idx].get_text("text").strip()
-        if text:
-            QApplication.clipboard().setText(text)
+        texts = []
+        for p_idx in pages:
+            if 0 <= p_idx < self._fitz_doc.page_count:
+                t_str = self._fitz_doc[p_idx].get_text("text").strip()
+                if t_str:
+                    texts.append(t_str)
+        if texts:
+            combined = "\n\n--- Page Break ---\n\n".join(texts)
+            QApplication.clipboard().setText(combined)
+            win = self.window()
+            if hasattr(win, "_set_status"):
+                win._set_status(f"✔ Copied text from {len(texts)} page(s) to clipboard")
 
     def _paste_page_content(self, page_idx: int) -> None:
         text = QApplication.clipboard().text().strip()
@@ -840,7 +917,7 @@ class PdfViewerPanel(QWidget):
                 doc.authenticate(self._pdf_password)
             page = doc[page_idx]
             page.insert_textbox(page.rect.adjusted(36, 36, -36, -36), text, fontsize=11, fontname="helv")
-            self._save_and_reload(doc)
+            self._save_and_reload(doc, target_page=page_idx, selected_pages=[page_idx])
         except Exception as exc:
             show_error(self, exc)
 
@@ -851,15 +928,28 @@ class PdfViewerPanel(QWidget):
         if hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.info"))
 
-    def _trigger_crop_tool(self) -> None:
+    def _trigger_crop_tool(self, pages: list[int] | None = None) -> None:
         win = self.window()
         if hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.crop"))
+            if pages and hasattr(win, "stack") and hasattr(win, "_crop_tool_idx"):
+                crop_idx = win._crop_tool_idx()
+                if crop_idx >= 0:
+                    crop_w = win.stack.widget(crop_idx)
+                    if hasattr(crop_w, "cmb_page_mode") and hasattr(crop_w, "edit_custom_pages"):
+                        crop_w.cmb_page_mode.setCurrentIndex(2)
+                        crop_w.edit_custom_pages.setText(",".join(str(p + 1) for p in pages))
 
-    def _trigger_page_numbers_tool(self) -> None:
+    def _trigger_page_numbers_tool(self, pages: list[int] | None = None) -> None:
         win = self.window()
         if hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.page_numbers"))
+            if pages and hasattr(win, "stack"):
+                for i in range(win.stack.count()):
+                    w = win.stack.widget(i)
+                    if hasattr(w, "edit_pages") and hasattr(w, "spin_start_page"):
+                        w.edit_pages.setText(",".join(str(p + 1) for p in pages))
+                        break
 
     def _trigger_split_tool(self) -> None:
         win = self.window()
@@ -1064,7 +1154,7 @@ class PdfViewerPanel(QWidget):
             if text:
                 self._do_search(text)
             return
-        total = sum(len(rects) for _, rects in self._search_results)
+        total = sum(len(rects) for _, rects in results) if (results := self._search_results) else 0
         if total == 0:
             return
         self._search_current = (self._search_current + 1) % total
@@ -1108,7 +1198,7 @@ class PdfViewerPanel(QWidget):
             self._prev_btn.setEnabled(False)
             self._next_btn.setEnabled(False)
             return
-        sb_val = self._canvas_scroll.verticalScrollBar().value()
+        sb_val = self._viewer._canvas_scroll.verticalScrollBar().value() if hasattr(self, "_viewer") else self._canvas_scroll.verticalScrollBar().value()
         idx = self._canvas.page_at_y(sb_val)
         total = len(pages)
         self._page_lbl.setText(f"{idx + 1} / {total}")
@@ -1138,7 +1228,7 @@ class PdfViewerPanel(QWidget):
         self._zoom_lbl.setText(t("zoom.fit"))
 
     # ── Print ────────────────────────────────────────────────────────────────
-    def _print_pdf(self):
+    def _print_pdf(self, page_indices: list[int] | None = None):
         doc = self._fitz_doc
         if doc is None or getattr(doc, "is_closed", False):
             return
@@ -1160,14 +1250,17 @@ class PdfViewerPanel(QWidget):
             return
 
         page_count = len(self._fitz_doc)
-        from_page = printer.fromPage()
-        to_page = printer.toPage()
-        if from_page == 0 and to_page == 0:
-            pages = list(range(page_count))
+        if page_indices is not None and len(page_indices) > 0:
+            pages = [p for p in page_indices if 0 <= p < page_count]
         else:
-            start = max(0, from_page - 1)
-            end = min(page_count, to_page)
-            pages = list(range(start, end))
+            from_page = printer.fromPage()
+            to_page = printer.toPage()
+            if from_page == 0 and to_page == 0:
+                pages = list(range(page_count))
+            else:
+                start = max(0, from_page - 1)
+                end = min(page_count, to_page)
+                pages = list(range(start, end))
         try:
             reverse = (printer.pageOrder()
                        == QPrinter.PageOrder.LastPageFirst)
