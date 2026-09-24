@@ -141,7 +141,8 @@ class MainWindow(QMainWindow):
         sb_lay.setSpacing(0)
 
         brand = QWidget(); brand.setObjectName("brand_area")
-        bh = QHBoxLayout(brand); bh.setContentsMargins(12, 10, 10, 10); bh.setSpacing(8)
+        self._brand_layout = bh = QHBoxLayout(brand)
+        bh.setContentsMargins(12, 10, 10, 10); bh.setSpacing(8)
         ico_lbl = QLabel()
         from PySide6.QtGui import QPixmap as _QPixmap, QPainter, QImage
         from PySide6.QtSvg import QSvgRenderer
@@ -170,11 +171,14 @@ class MainWindow(QMainWindow):
         ico_lbl.setPixmap(_app_pix); ico_lbl.setObjectName("app_icon")
         ico_lbl.setFixedSize(_w, _h); ico_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bh.addWidget(ico_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        brand_text = QVBoxLayout(); brand_text.setContentsMargins(0, 0, 0, 0); brand_text.setSpacing(1)
+
+        self._brand_text_w = QWidget()
+        brand_text = QVBoxLayout(self._brand_text_w)
+        brand_text.setContentsMargins(0, 0, 0, 0); brand_text.setSpacing(1)
         self._brand_title = QLabel(t("app.name")); self._brand_title.setObjectName("app_title")
         self._brand_sub = QLabel(t("app.subtitle")); self._brand_sub.setObjectName("app_sub")
         brand_text.addWidget(self._brand_title); brand_text.addWidget(self._brand_sub)
-        bh.addLayout(brand_text, 1)
+        bh.addWidget(self._brand_text_w, 1)
         sb_lay.addWidget(brand)
 
         sep = QFrame(); sep.setObjectName("nav_sep"); sep.setFixedHeight(1)
@@ -601,7 +605,6 @@ class MainWindow(QMainWindow):
             self._viewer.set_page_rotations(rots)
         elif self._current_tool == self._crop_tool_idx():
             crop_w = self.stack.widget(self._crop_tool_idx())
-            self._viewer.set_crop_mode(crop_w.btn_draw_crop.isChecked())
             crop_w._emit_preview()
             self._viewer.set_page_crops(crop_w._applied_crops)
         else:
@@ -1230,6 +1233,10 @@ class MainWindow(QMainWindow):
         if not self._sidebar_collapsed and self._sidebar.width() > 60:
             self._sidebar_collapsed = False
             self._sidebar.setFixedWidth(52)
+            self._brand_layout.setContentsMargins(8, 10, 8, 10)
+            self._brand_text_w.setVisible(False)
+            self._brand_title.setVisible(False)
+            self._brand_sub.setVisible(False)
             self._nav_search.setVisible(False)
             self._footer_w.setVisible(False)
             for r in range(self.nav.count()):
@@ -1246,6 +1253,10 @@ class MainWindow(QMainWindow):
             self._sidebar_collapsed = False
             self._sidebar.setVisible(True)
             self._sidebar.setFixedWidth(228)
+            self._brand_layout.setContentsMargins(12, 10, 10, 10)
+            self._brand_text_w.setVisible(True)
+            self._brand_title.setVisible(True)
+            self._brand_sub.setVisible(True)
             self._nav_search.setVisible(True)
             self._footer_w.setVisible(True)
             for r in range(self.nav.count()):
