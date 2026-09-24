@@ -1,8 +1,11 @@
+# app\tools\info.py
+
 """PDFApps – TabInfo: PDF information/metadata tool."""
 
 import os
 
-from PySide6.QtWidgets import QTextEdit
+from PySide6.QtWidgets import QTextEdit, QSizePolicy
+from PySide6.QtGui import QFont
 
 from app.base import BasePage
 from app.i18n import t
@@ -33,12 +36,12 @@ class TabInfo(BasePage):
 
         self.txt = QTextEdit()
         self.txt.setReadOnly(True)
-        from PySide6.QtGui import QFont
         self.txt.setFont(QFont("Consolas", 10))
-        self.txt.setMinimumHeight(260)
+        self.txt.setMinimumHeight(280)
+        self.txt.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._dark_mode = True
         self._apply_txt_theme()
-        f.addWidget(self.txt); f.addStretch()
+        f.addWidget(self.txt, 1)
 
         self._action_bar.setVisible(False)
         self._path = ""

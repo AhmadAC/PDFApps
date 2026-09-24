@@ -1,3 +1,5 @@
+# app\utils.py
+
 """PDFApps – utility functions and reusable UI factory helpers."""
 
 # app/utils.py
@@ -5,6 +7,7 @@ import contextlib
 import logging
 import logging.handlers
 import os
+import subprocess
 import sys
 import traceback
 
@@ -31,6 +34,34 @@ def resource_path(rel):
     base = getattr(sys, '_MEIPASS',
                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(base, rel)
+
+
+def reveal_file(path: str) -> None:
+    """Open the OS file manager and highlight the given file when possible.
+    Falls back to opening the parent folder on Linux."""
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path) or "."])
+    except OSError:
+        pass
+
+
+def open_folder(path: str) -> None:
+    """Open the folder containing the given file (or the folder itself)."""
+    try:
+        folder = os.path.dirname(path) if os.path.isfile(path) else path
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", os.path.normpath(folder)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+    except OSError:
+        pass
 
 
 def format_size_localized(value: float, decimals: int = 1) -> str:

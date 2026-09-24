@@ -1,3 +1,5 @@
+# app\tools\rotate.py
+
 """PDFApps – TabRotar: rotate PDF pages tool."""
 import contextlib
 import os

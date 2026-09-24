@@ -1,3 +1,4 @@
+
 # app/tools/crop.py
 
 """PDFApps – TabCortar: crop PDF pages tool."""
@@ -984,4 +985,3 @@ class TabCortar(BasePage):
             QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e:
             show_error(self, e)
-

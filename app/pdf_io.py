@@ -1,3 +1,5 @@
+# app\pdf_io.py 
+
 """PDFApps – pdf_io: low-level atomic PDF write helpers.
 
 Extracted from :class:`app.base.BasePage` (R3) so the same safe-write
@@ -17,7 +19,9 @@ cycle.
 
 import contextlib
 import os
+import sys
 import tempfile
+import time
 from typing import Iterable
 
 __all__ = ["atomic_pdf_write", "check_not_same_path"]
@@ -116,7 +120,17 @@ def atomic_pdf_write(writer, dst: str, *,
         # save→close→replace ordering exactly.
         if close_writer:
             writer.close()
-        os.replace(tmp, dst)
+
+        # On Windows, releasing file handles or transient OS indexer locks
+        # can briefly delay atomic replacement. Retry briefly before raising.
+        for attempt in range(5):
+            try:
+                os.replace(tmp, dst)
+                break
+            except PermissionError:
+                if attempt == 4 or sys.platform != "win32":
+                    raise
+                time.sleep(0.05)
     except Exception:
         with contextlib.suppress(Exception):
             if os.path.exists(tmp):

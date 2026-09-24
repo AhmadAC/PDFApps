@@ -1,25 +1,30 @@
+
 # app/viewer/panel.py
-"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop and text selection."""
+"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, and thumbnail actions."""
 
 import os
 import sys
 import logging
 import contextlib
+import tempfile
+import shutil
 
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
     QLineEdit, QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem,
-    QApplication,
+    QApplication, QInputDialog,
 )
 from PySide6.QtGui import QKeySequence, QShortcut
 from shiboken6 import isValid
 import qtawesome as qta
+import fitz
 
 from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
 from app.pdf_password import authenticate_fitz
-from app.utils import _paint_bg
+from app.utils import _paint_bg, show_error, format_size_localized
+from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 from app.viewer.canvas import _SelectCanvas
 from app.viewer.thumbnails import ThumbnailPanel
@@ -43,6 +48,7 @@ class PdfViewerPanel(QWidget):
         self.setMinimumWidth(260)
         self._current_path = ""
         self._fitz_doc     = None
+        self._pdf_password = ""
 
         if PdfViewerPanel._pages_sidebar_visible_pref is None:
             try:
@@ -182,6 +188,7 @@ class PdfViewerPanel(QWidget):
         # ── Thumbnails (Pages tab of the sidebar) ───────────────────────
         self._thumbnails = ThumbnailPanel(self)
         self._thumbnails.page_requested.connect(self._on_thumbnail_clicked)
+        self._thumbnails.action_requested.connect(self._on_thumbnail_action)
 
         # Sidebar tab widget: [Contents | Pages]
         self._sidebar_tabs = QTabWidget()
@@ -444,16 +451,13 @@ class PdfViewerPanel(QWidget):
             lay.addWidget(row)
 
     def _on_recent_clicked(self, path: str, row_widget=None):
-        """Handle clicks on recent files with path resolution, validation and debug output."""
         print(f"[PDFApps] Recent file clicked: {path}")
         _log.info("Recent file clicked: %s", path)
         resolved = path
         if not os.path.isfile(resolved):
             if os.path.isfile(resolved + ".pdf"):
                 resolved = resolved + ".pdf"
-                print(f"[PDFApps] Resolved extension to: {resolved}")
         if not os.path.isfile(resolved):
-            print(f"[PDFApps ERROR] File does not exist: {path}", file=sys.stderr)
             _log.warning("Recent file does not exist: %s", path)
             QMessageBox.warning(
                 self, t("msg.warning"),
@@ -550,6 +554,318 @@ class PdfViewerPanel(QWidget):
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
 
+    # ── Foxit Context Menu Operations Handler ───────────────────────────
+
+    def _on_thumbnail_action(self, action: str, page_idx: int) -> None:
+        if not self._fitz_doc or not self._current_path:
+            return
+
+        if action in ("rotate_right", "rotate_left", "rotate_180"):
+            delta = 90 if action == "rotate_right" else (270 if action == "rotate_left" else 180)
+            self._rotate_single_page(page_idx, delta)
+        elif action == "delete":
+            self._delete_single_page(page_idx)
+        elif action == "extract":
+            self._extract_single_page(page_idx)
+        elif action == "insert_blank":
+            self._insert_blank_page(page_idx)
+        elif action == "insert_file":
+            self._insert_pages_from_file(page_idx)
+        elif action == "duplicate":
+            self._duplicate_page(page_idx)
+        elif action == "reverse":
+            self._reverse_all_pages()
+        elif action == "swap":
+            self._swap_page_dialog(page_idx)
+        elif action == "move":
+            self._move_page_dialog(page_idx)
+        elif action == "replace":
+            self._replace_page_dialog(page_idx)
+        elif action == "resize":
+            self._resize_page_dialog(page_idx)
+        elif action == "crop":
+            self._trigger_crop_tool()
+        elif action == "page_numbers":
+            self._trigger_page_numbers_tool()
+        elif action == "split":
+            self._trigger_split_tool()
+        elif action == "print":
+            self._print_pdf()
+        elif action == "properties":
+            self._show_properties_dialog()
+        elif action == "copy":
+            self._copy_page_content(page_idx)
+        elif action == "paste":
+            self._paste_page_content(page_idx)
+
+    def _save_and_reload(self, doc_to_save):
+        """Atomically persist modifications and reload live viewer."""
+        try:
+            saved_path = self._current_path
+            # Release all open document handles before saving/replacing in-place
+            self._canvas.close_doc()
+            if self._fitz_doc is not None:
+                with contextlib.suppress(Exception):
+                    self._fitz_doc.close()
+                self._fitz_doc = None
+            self._thumbnails._stop_all_workers()
+
+            atomic_pdf_write(
+                doc_to_save, saved_path,
+                save_opts={"garbage": 4, "deflate": True},
+                close_writer=True,
+            )
+            self.load(saved_path)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _rotate_single_page(self, page_idx: int, delta: int) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            if 0 <= page_idx < doc.page_count:
+                cur_rot = doc[page_idx].rotation
+                doc[page_idx].set_rotation((cur_rot + delta) % 360)
+                self._save_and_reload(doc)
+            else:
+                doc.close()
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _delete_single_page(self, page_idx: int) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            if doc.page_count <= 1:
+                QMessageBox.warning(self, t("msg.warning"), "Cannot delete the only page in the document.")
+                doc.close()
+                return
+
+            reply = QMessageBox.question(
+                self, t("msg.confirm"),
+                t("viewer.confirm_delete_page", n=page_idx + 1)
+                if t("viewer.confirm_delete_page") != "viewer.confirm_delete_page"
+                else f"Are you sure you want to delete page {page_idx + 1}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                doc.close()
+                return
+
+            doc.delete_page(page_idx)
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _extract_single_page(self, page_idx: int) -> None:
+        base, ext = os.path.splitext(os.path.basename(self._current_path))
+        default_name = f"{base}_page_{page_idx + 1}{ext}"
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, t("tool.extract.name"),
+            os.path.join(os.path.dirname(self._current_path), default_name),
+            t("file_filter.pdf"),
+        )
+        if not out_path:
+            return
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            new_doc = fitz.open()
+            new_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+            doc.close()
+            atomic_pdf_write(new_doc, out_path, close_writer=True)
+            QMessageBox.information(self, t("msg.done"), f"Page {page_idx + 1} extracted to:\n{out_path}")
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _insert_blank_page(self, page_idx: int) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            ref_rect = doc[page_idx].rect if 0 <= page_idx < doc.page_count else fitz.Rect(0, 0, 595, 842)
+            doc.new_page(pno=page_idx + 1, width=ref_rect.width, height=ref_rect.height)
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _insert_pages_from_file(self, page_idx: int) -> None:
+        p, _ = QFileDialog.getOpenFileName(self, "Insert Pages from PDF", DESKTOP, t("file_filter.pdf"))
+        if not p or not os.path.isfile(p):
+            return
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            src = fitz.open(p)
+            doc.insert_pdf(src, start_at=page_idx + 1)
+            src.close()
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _duplicate_page(self, page_idx: int) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx, start_at=page_idx + 1)
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _reverse_all_pages(self) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            n = doc.page_count
+            if n <= 1:
+                doc.close()
+                return
+            new_doc = fitz.open()
+            for i in range(n - 1, -1, -1):
+                new_doc.insert_pdf(doc, from_page=i, to_page=i)
+            doc.close()
+            self._save_and_reload(new_doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _swap_page_dialog(self, page_idx: int) -> None:
+        total = self._fitz_doc.page_count if self._fitz_doc else 1
+        target, ok = QInputDialog.getInt(
+            self, "Swap Pages",
+            f"Swap page {page_idx + 1} with page:",
+            min(total, max(1, page_idx + 2)), 1, total, 1
+        )
+        if not ok or target == page_idx + 1:
+            return
+        try:
+            target_idx = target - 1
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            order = list(range(doc.page_count))
+            order[page_idx], order[target_idx] = order[target_idx], order[page_idx]
+            new_doc = fitz.open()
+            for idx in order:
+                new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
+            doc.close()
+            self._save_and_reload(new_doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _move_page_dialog(self, page_idx: int) -> None:
+        total = self._fitz_doc.page_count if self._fitz_doc else 1
+        dest, ok = QInputDialog.getInt(
+            self, "Move Page",
+            f"Move page {page_idx + 1} to position:",
+            min(total, max(1, page_idx + 2)), 1, total, 1
+        )
+        if not ok or dest == page_idx + 1:
+            return
+        try:
+            dest_idx = dest - 1
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            order = list(range(doc.page_count))
+            p = order.pop(page_idx)
+            order.insert(dest_idx, p)
+            new_doc = fitz.open()
+            for idx in order:
+                new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
+            doc.close()
+            self._save_and_reload(new_doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _replace_page_dialog(self, page_idx: int) -> None:
+        p, _ = QFileDialog.getOpenFileName(self, "Replace with PDF", DESKTOP, t("file_filter.pdf"))
+        if not p or not os.path.isfile(p):
+            return
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            src = fitz.open(p)
+            doc.insert_pdf(src, from_page=0, to_page=0, start_at=page_idx)
+            doc.delete_page(page_idx + 1)
+            src.close()
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _resize_page_dialog(self, page_idx: int) -> None:
+        sizes = {
+            "A4 (595 × 842 pt)": (595.0, 842.0),
+            "Letter (612 × 792 pt)": (612.0, 792.0),
+            "A3 (842 × 1191 pt)": (842.0, 1191.0),
+            "A5 (420 × 595 pt)": (420.0, 595.0),
+        }
+        item, ok = QInputDialog.getItem(
+            self, "Resize Page", "Select page size:", list(sizes.keys()), 0, False
+        )
+        if not ok or item not in sizes:
+            return
+        try:
+            new_w, new_h = sizes[item]
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            page = doc[page_idx]
+            page.set_mediabox(fitz.Rect(0, 0, new_w, new_h))
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _copy_page_content(self, page_idx: int) -> None:
+        if not self._fitz_doc or page_idx >= self._fitz_doc.page_count:
+            return
+        text = self._fitz_doc[page_idx].get_text("text").strip()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    def _paste_page_content(self, page_idx: int) -> None:
+        text = QApplication.clipboard().text().strip()
+        if not text:
+            return
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            page = doc[page_idx]
+            page.insert_textbox(page.rect.adjusted(36, 36, -36, -36), text, fontsize=11, fontname="helv")
+            self._save_and_reload(doc)
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _show_properties_dialog(self) -> None:
+        if not self._current_path or not os.path.isfile(self._current_path):
+            return
+        win = self.window()
+        if hasattr(win, "_open_tool_by_name"):
+            win._open_tool_by_name(t("nav.info"))
+
+    def _trigger_crop_tool(self) -> None:
+        win = self.window()
+        if hasattr(win, "_open_tool_by_name"):
+            win._open_tool_by_name(t("nav.crop"))
+
+    def _trigger_page_numbers_tool(self) -> None:
+        win = self.window()
+        if hasattr(win, "_open_tool_by_name"):
+            win._open_tool_by_name(t("nav.page_numbers"))
+
+    def _trigger_split_tool(self) -> None:
+        win = self.window()
+        if hasattr(win, "_open_tool_by_name"):
+            win._open_tool_by_name(t("nav.split"))
+
     def _toggle_night_mode(self):
         self._canvas.set_night_mode(self._night_btn.isChecked())
 
@@ -593,11 +909,10 @@ class PdfViewerPanel(QWidget):
         if not os.path.isfile(resolved):
             if os.path.isfile(resolved + ".pdf"):
                 resolved = resolved + ".pdf"
-            else:
-                print(f"[PDFApps ERROR] File does not exist on disk: {path}", file=sys.stderr)
-                _log.error("Could not load PDF, file does not exist: %s", path)
-                QMessageBox.warning(self, t("msg.error"), f"{t('viewer.error_open')}:\n{path}\n\nFile not found.")
-                return
+        if not os.path.isfile(resolved):
+            _log.error("Could not load PDF, file does not exist: %s", path)
+            QMessageBox.warning(self, t("msg.error"), f"{t('viewer.error_open')}:\n{path}\n\nFile not found.")
+            return
 
         path = resolved
 
@@ -612,13 +927,11 @@ class PdfViewerPanel(QWidget):
                 is_pdf_format = False
 
         if not is_pdf_format:
-            print(f"[PDFApps ERROR] Not a valid PDF: {path}", file=sys.stderr)
             _log.warning("Invalid PDF format: %s", path)
             QMessageBox.warning(self, t("viewer.invalid_format"),
                                 t("viewer.invalid_msg"))
             return
 
-        import fitz
         if self._fitz_doc:
             self._canvas.close_doc()
             self._fitz_doc = None
@@ -628,7 +941,6 @@ class PdfViewerPanel(QWidget):
         try:
             doc = fitz.open(path)
         except Exception as ex:
-            print(f"[PDFApps ERROR] Exception opening {path}: {ex}", file=sys.stderr)
             _log.exception("Error opening PDF: %s", path)
             QMessageBox.critical(self, t("viewer.error_open"),
                                  t("viewer.error_open_msg", ex=ex))
@@ -684,7 +996,6 @@ class PdfViewerPanel(QWidget):
             password=getattr(self, "_pdf_password", ""))
         self._thumbnails.set_current_page(0)
         self._populate_toc(doc)
-        print(f"[PDFApps] Successfully opened: {path} ({doc.page_count} pages)")
         _log.info("Successfully opened: %s (%d pages)", path, doc.page_count)
 
     # ── Search ──────────────────────────────────────────────────────────
@@ -832,7 +1143,7 @@ class PdfViewerPanel(QWidget):
         if doc is None or getattr(doc, "is_closed", False):
             return
         from PySide6.QtPrintSupport import QPrinter, QPrintDialog
-        from PySide6.QtGui import QPainter, QImage
+        from PySide6.QtGui import QImage
         from PySide6.QtCore import QRectF
         from PySide6.QtWidgets import QProgressDialog
 
@@ -848,7 +1159,6 @@ class PdfViewerPanel(QWidget):
         if not painter.begin(printer):
             return
 
-        import fitz
         page_count = len(self._fitz_doc)
         from_page = printer.fromPage()
         to_page = printer.toPage()

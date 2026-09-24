@@ -66,7 +66,7 @@ class _PageJob(QRunnable):
             mat = fitz.Matrix(rz, rz)
             if rot:
                 mat = mat.prerotate(rot)
-            pix = page.get_pixmap(matrix=mat, annots=False)
+            pix = page.get_pixmap(matrix=mat, alpha=False, annots=False)
             if self._night_mode:
                 pix.invert_irect()
             words = page.get_text("words")

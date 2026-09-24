@@ -1,5 +1,3 @@
-#################### START OF FILE: app\window.py ####################
-
 # app/window.py
 
 """PDFApps – MainWindow: application main window."""
@@ -7,7 +5,7 @@ import contextlib
 import os
 import sys
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint
 from PySide6.QtGui import QIcon, QColor, QShortcut, QKeySequence
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
@@ -16,11 +14,12 @@ from PySide6.QtWidgets import (
     QFrame, QApplication, QLineEdit, QMenu, QTabBar, QFileDialog, QMessageBox,
 )
 import qtawesome as qta
+import fitz
 
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP, BORDER
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
-from app.utils import resource_path, _make_palette, show_error
+from app.utils import resource_path, _make_palette, show_error, reveal_file
 from app.widgets import DropFileEdit, MultiDropWidget
 from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
@@ -270,8 +269,13 @@ class MainWindow(QMainWindow):
         tc_lay = QVBoxLayout(self._tab_container); tc_lay.setContentsMargins(0, 0, 0, 0); tc_lay.setSpacing(0)
 
         tab_row = QHBoxLayout(); tab_row.setContentsMargins(0, 0, 0, 0); tab_row.setSpacing(0)
-        self._tab_bar = QTabBar(); self._tab_bar.setTabsClosable(True); self._tab_bar.setMovable(True)
-        self._tab_bar.setExpanding(False); self._tab_bar.setObjectName("viewer_tabs")
+        self._tab_bar = QTabBar()
+        self._tab_bar.setTabsClosable(True)
+        self._tab_bar.setMovable(True)
+        self._tab_bar.setExpanding(False)
+        self._tab_bar.setObjectName("viewer_tabs")
+        self._tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
         self._current_tool = -1
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabCloseRequested.connect(self._close_tab)
@@ -319,7 +323,8 @@ class MainWindow(QMainWindow):
         self.nav.itemClicked.connect(self._on_nav_clicked)
         for i in range(self.stack.count()):
             for dfe in self.stack.widget(i).findChildren(DropFileEdit):
-                dfe.path_changed.connect(lambda p: self._viewer.load(p))
+                if not dfe._save:
+                    dfe.path_changed.connect(lambda p: self._viewer.load(p) if p and os.path.isfile(p) else None)
 
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -359,6 +364,61 @@ class MainWindow(QMainWindow):
 
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
+
+    # ── Tab Right-Click Context Menu ─────────────────────────────────────
+
+    def _on_tab_context_menu(self, pos: QPoint):
+        idx = self._tab_bar.tabAt(pos)
+        if idx < 0 or idx >= len(self._viewers):
+            return
+
+        viewer = self._viewers[idx]
+        path = viewer.current_path()
+        if not path:
+            return
+
+        dark = self._dark_mode
+        c = TEXT_PRI if dark else _LQ
+
+        menu = QMenu(self)
+
+        # 1. Clipboard options
+        act_copy_path = menu.addAction(qta.icon("fa5s.copy", color=c), "Copy Full Path")
+        act_copy_name = menu.addAction(qta.icon("fa5s.file", color=c), "Copy File Name")
+        menu.addSeparator()
+
+        # 2. Explorer / Finder actions
+        reveal_label = "Reveal in File Explorer" if sys.platform == "win32" else ("Reveal in Finder" if sys.platform == "darwin" else "Show in File Manager")
+        act_reveal = menu.addAction(qta.icon("fa5s.folder-open", color=c), reveal_label)
+        menu.addSeparator()
+
+        # 3. Tab management
+        act_close = menu.addAction(qta.icon("fa5s.times", color="#EF4444"), "Close Tab")
+        act_close_others = menu.addAction("Close Other Tabs")
+
+        action = menu.exec(self._tab_bar.mapToGlobal(pos))
+        if not action:
+            return
+
+        if action == act_copy_path:
+            QApplication.clipboard().setText(os.path.normpath(path))
+            self._set_status(f"✔ Copied path to clipboard: {os.path.normpath(path)}")
+        elif action == act_copy_name:
+            name = os.path.basename(path)
+            QApplication.clipboard().setText(name)
+            self._set_status(f"✔ Copied file name to clipboard: {name}")
+        elif action == act_reveal:
+            reveal_file(path)
+        elif action == act_close:
+            self._close_tab(idx)
+        elif action == act_close_others:
+            self._close_other_tabs(idx)
+
+    def _close_other_tabs(self, keep_idx: int):
+        total = len(self._viewers)
+        for i in range(total - 1, -1, -1):
+            if i != keep_idx:
+                self._close_tab(i)
 
     def _toggle_pages_sidebar(self):
         v = self._viewer
@@ -574,19 +634,13 @@ class MainWindow(QMainWindow):
 
     def _open_tool_by_name(self, tool_name: str):
         for i, (name, _, _) in enumerate(NAV_ITEMS):
-            if name == tool_name:
+            if name == tool_name or t(name) == tool_name:
                 for r in range(self.nav.count()):
                     if self.nav.item(r).data(Qt.ItemDataRole.UserRole) == i:
                         self.nav.setCurrentRow(r)
-                        break
-                self._current_tool = i
-                self.stack.setCurrentIndex(i)
-                self.stack.setVisible(True)
-                self._right_tool_container.setVisible(True)
-                self._right_pane_toggle_btn.setVisible(True)
-                self._tab_container.setVisible(False)
-                self._breadcrumb.setText(f"{t('workspace.title')}  ›  {name}")
-                self._try_auto_load(i)
+                        self._on_nav_clicked(self.nav.item(r))
+                        return
+                self._activate_tool(i)
                 return
 
     def _try_auto_load(self, index: int):
@@ -902,7 +956,7 @@ class MainWindow(QMainWindow):
         for _k in list(env.keys()):
             if _k.startswith("_PYI_") or _k.startswith("_MEIPASS"):
                 env.remove(_k)
-        proc.setProcessEnvironment(env)
+        proc.setEnvironment(env)
         proc.startDetached()
         QApplication.instance().exit(0)
 

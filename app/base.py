@@ -1,8 +1,8 @@
+# app\base.py
+
 """PDFApps – BasePage: standard page layout (header + scroll + action bar)."""
 
 import os
-import subprocess
-import sys
 import tempfile
 import shutil
 from typing import Iterable
@@ -17,45 +17,17 @@ from app import pdf_io
 from app.constants import DESKTOP, ACCENT
 from app.i18n import t
 from app.utils import (ToolHeader, ActionBar, scrolled, _paint_bg,
-                       WrongPasswordError)
+                       WrongPasswordError, reveal_file, open_folder)
 
-# Iterable is referenced via string-typed annotations in
-# _atomic_pdf_write / _check_not_same_path; keep it importable so
-# tooling that resolves forward refs (e.g. typing.get_type_hints)
-# finds the symbol.
-__all__ = ["BasePage", "Iterable"]
+# Backward-compatibility aliases
+_reveal_file = reveal_file
+_open_folder = open_folder
 
-
-def _reveal_file(path: str) -> None:
-    """Open the OS file manager and highlight the given file when possible.
-    Falls back to opening the parent folder on Linux (xdg-open can't select)."""
-    try:
-        if sys.platform == "win32":
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", path])
-        else:
-            subprocess.Popen(["xdg-open", os.path.dirname(path) or "."])
-    except OSError:
-        pass
-
-
-def _open_folder(path: str) -> None:
-    """Open the folder containing the given file (or the folder itself)."""
-    try:
-        folder = os.path.dirname(path) if os.path.isfile(path) else path
-        if sys.platform == "win32":
-            subprocess.Popen(["explorer", os.path.normpath(folder)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", folder])
-        else:
-            subprocess.Popen(["xdg-open", folder])
-    except OSError:
-        pass
+__all__ = ["BasePage", "Iterable", "_reveal_file", "_open_folder"]
 
 
 class BasePage(QWidget):
-    """Standard layout: fixed header + scroll area + action bar."""
+    """Standard layout: header + scroll area + action bar."""
 
     pipeline_done = Signal(str)  # emitted with temp output path
     pipeline_save_requested = Signal()  # toast "Save as..." button clicked
@@ -76,14 +48,23 @@ class BasePage(QWidget):
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.setSpacing(0)
 
-        page_layout.addWidget(ToolHeader(icon, title, desc))
+        # Header inside the scrollable container so scrolling down scrolls the header away
+        self._header = ToolHeader(icon, title, desc)
 
         # scrollable content
         self._inner = QWidget(); self._inner.setObjectName("scroll_inner")
         self._inner.setMinimumWidth(0)
-        self._form  = QVBoxLayout(self._inner)
-        self._form.setContentsMargins(24, 20, 24, 20)
+        inner_layout = QVBoxLayout(self._inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(0)
+        inner_layout.addWidget(self._header)
+
+        form_container = QWidget()
+        self._form = QVBoxLayout(form_container)
+        self._form.setContentsMargins(24, 16, 24, 20)
         self._form.setSpacing(10)
+        inner_layout.addWidget(form_container, 1)
+
         scroll_area = scrolled(self._inner)
         scroll_area.setMinimumWidth(0)
         page_layout.addWidget(scroll_area, 1)
@@ -138,7 +119,6 @@ class BasePage(QWidget):
                              filter_key: str = "file_filter.pdf") -> str:
         """Return the output file path, prompting via Save dialog if empty.
         In pipeline mode, returns a temp file path instead of prompting."""
-        # Pipeline mode: save to temp file, skip dialog
         if self._pipeline_active:
             return self._make_pipeline_temp(input_path, drop_widget)
         out = drop_widget.path()
@@ -184,7 +164,6 @@ class BasePage(QWidget):
     def set_compact_mode(self, active: bool, path: str = "") -> None:
         """Hide source/output boilerplate when the input PDF is implicit
         (e.g. coming from the viewer with a loaded document)."""
-        # Pre-load the source path if provided
         if active and path:
             fn = getattr(self, "auto_load", None)
             if callable(fn):
@@ -194,10 +173,8 @@ class BasePage(QWidget):
             try:
                 w.setVisible(not active)
             except RuntimeError:
-                pass  # widget destroyed
+                pass
 
-        # Lazily create the small "Change source..." link the first time we
-        # enter compact mode.
         if active and self._compact_link is None:
             link = QPushButton("← " + t("compact.change_source"))
             link.setObjectName("compact_link")
@@ -208,13 +185,6 @@ class BasePage(QWidget):
                 f"background:transparent; padding:2px 4px; text-align:left; }}"
                 f"QPushButton#compact_link:hover {{ text-decoration: underline; }}"
             )
-            # R6 O2: guard against the page being destroyed between the
-            # Qt click queueing and the slot actually running. PySide6
-            # has no QPointer, so use shiboken6.isValid() — without it
-            # the lambda may touch a dead C++ QWidget and crash with
-            # "Internal C++ object already deleted". The lambda is the
-            # only callback installed here, so cost is one isValid call
-            # per compact-mode exit.
             link.clicked.connect(
                 lambda: self.set_compact_mode(False) if isValid(self) else None)
             self._form.insertWidget(0, link)
@@ -229,20 +199,7 @@ class BasePage(QWidget):
     def _show_toast(self, message: str, file_path: str = "",
                     with_save: bool = False) -> None:
         """Show a brief success toast above the action bar with optional
-        'Save as...' / 'Open file' / 'Open folder' buttons.
-
-        When with_save is True (pipeline mode), a prominent 'Save as...'
-        button is rendered first to make the save action discoverable —
-        without it, users assume the result is already saved (it isn't;
-        it's in a temp dir until Ctrl+S). The button is wired
-        signal-to-signal to pipeline_save_requested; passing
-        `pipeline_save_requested.emit` as a Python callable instead
-        wraps it in a hidden QObject whose thread affinity gets garbled
-        on Python 3.14, breaking subsequent signal dispatch from this
-        page (pipeline_done.emit appeared to return without invoking
-        any slot)."""
-        import os
-        # Remove previous toast if any
+        'Save as...' / 'Open file' / 'Open folder' buttons."""
         old = getattr(self, "_toast_widget", None)
         if old:
             old.setParent(None); old.deleteLater()
@@ -267,26 +224,17 @@ class BasePage(QWidget):
         if file_path and os.path.exists(file_path):
             btn_file = QPushButton(t("toast.open_file"))
             btn_file.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_file.clicked.connect(lambda: _reveal_file(file_path))
+            btn_file.clicked.connect(lambda: reveal_file(file_path))
             h.addWidget(btn_file)
             btn_folder = QPushButton(t("toast.open_folder"))
             btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_folder.clicked.connect(lambda: _open_folder(file_path))
+            btn_folder.clicked.connect(lambda: open_folder(file_path))
             h.addWidget(btn_folder)
 
-        # Insert above action bar
         layout = self.layout()
         idx = layout.indexOf(self._action_bar)
         layout.insertWidget(idx, toast)
         self._toast_widget = toast
-        # In pipeline mode (with_save=True) the toast is the ONLY UI
-        # that surfaces the unsaved-state save action. Don't auto-hide
-        # it — the user needs time to notice and click. In plain
-        # "operation done" mode the toast is just confirmation, so the
-        # original 8 s auto-hide is fine. Guard the timer: if a newer
-        # toast already deleteLater'd this one, the lambda must not
-        # touch the dead C++ object. PySide6 has no QPointer, so use
-        # shiboken6.isValid() to check liveness.
         if not with_save:
             QTimer.singleShot(
                 8000, lambda t=toast: t.setVisible(False) if isValid(t) else None)
@@ -305,38 +253,12 @@ class BasePage(QWidget):
     # ── encrypted-PDF helpers ──────────────────────────────────────────────
 
     def _maybe_prompt_password(self, path: str) -> bool:
-        """If the PDF at `path` is encrypted, prompt the user; on success
-        store the password on `self._pdf_password` and return True. Plain
-        PDFs return True with the password cleared. Returns False if the
-        user cancelled the prompt — caller should abort the load.
-
-        If a password is already stored (e.g. propagated from the viewer
-        in compact mode), it is tried silently first. Only if it fails
-        is the user prompted.
-
-        The value stored is the exact candidate spelling that
-        authenticated (see :mod:`app.pdf_password`); it is never
-        canonicalised. Normalising it here is what used to make every
-        tool reject a password the viewer had just accepted.
-
-        Post-condition relied on elsewhere: on ``True``,
-        ``self._pdf_password`` is a spelling that opens *this* file, so
-        the ~20 bare ``doc.authenticate(self._pdf_password)`` /
-        ``reader.decrypt(...)`` calls downstream (convert, ocr, nup,
-        page_numbers, the editor and viewer canvases, the thumbnail
-        worker, presentation mode) need no candidate expansion of their
-        own. That only holds while this method — or an equivalent
-        re-anchor such as :func:`app.pdf_password.resolve_file_password`
-        — runs upstream of them on the same path. A new load path that
-        stores a raw typed password without re-anchoring silently
-        reintroduces the original bug at every one of those sites.
-        """
         from app.pdf_password import authenticate_fitz
         try:
             import fitz
             doc = fitz.open(path)
         except Exception:
-            return True  # let downstream surface its own error
+            return True
         try:
             if not doc.needs_pass:
                 self._pdf_password = ""
@@ -344,9 +266,6 @@ class BasePage(QWidget):
             if self._pdf_password:
                 winner = authenticate_fitz(doc, self._pdf_password)
                 if winner is not None:
-                    # Re-anchor the cache on the spelling that worked so
-                    # the ~30 raw ``self._pdf_password`` reads under
-                    # tools/ and the render jobs all hash the same bytes.
                     self._pdf_password = winner
                     return True
         finally:
@@ -359,60 +278,24 @@ class BasePage(QWidget):
         return True
 
     def _open_reader(self, path: str):
-        """Open a pypdf PdfReader, decrypting with the stored password if
-        the file is encrypted.
-
-        The cached password is expanded into candidate spellings and each
-        one is offered to :meth:`pypdf.PdfReader.decrypt` as raw UTF-8
-        ``bytes`` first — pypdf's ``bytes`` branch skips its SASLprep /
-        Latin-1 encoding, which is what makes this agree byte-for-byte
-        with :meth:`_open_fitz`. See :mod:`app.pdf_password`.
-
-        Deliberately does *not* write the winning candidate back to
-        ``self._pdf_password``: this runs inside ``_run_background``
-        workers, and re-expanding a handful of candidates is cheaper than
-        making the cache attribute a cross-thread mutable.
-        """
         from app.pdf_password import decrypt_pypdf
         from pypdf import PdfReader
         r = PdfReader(path)
         if r.is_encrypted and self._pdf_password:
-            # R11-M4: pypdf returns 0 on a wrong password and silently
-            # exposes a reader with zero accessible pages — every
-            # downstream tool then writes an empty PDF. Raise instead.
             if decrypt_pypdf(r, self._pdf_password) is None:
                 raise WrongPasswordError(t("tool.err.wrong_password"))
         return r
 
     def _open_fitz(self, path: str):
-        """Open a PyMuPDF Document, authenticating with the stored
-        password if needed.
-
-        Same candidate expansion as :meth:`_open_reader`, and the same
-        no-writeback rule. MuPDF hashes the raw UTF-8 bytes of the string
-        for R>=5, so passing the candidate ``str`` here and its
-        ``.encode("utf-8")`` there feeds both engines identical bytes.
-        """
         from app.pdf_password import authenticate_fitz
         import fitz
         doc = fitz.open(path)
         if doc.needs_pass and self._pdf_password:
-            # PyMuPDF's authenticate() returns a falsy value (0) on a
-            # wrong password and leaves the document locked — mirror
-            # _open_reader and raise instead of handing back a Document
-            # whose pages can't be read.
             if authenticate_fitz(doc, self._pdf_password) is None:
                 raise WrongPasswordError(t("tool.err.wrong_password"))
         return doc
 
     def _clear_pdf_password(self) -> None:
-        """Best-effort wipe of the cached PDF password from memory.
-
-        Thin wrapper around :func:`app.utils.wipe_pdf_password` so every
-        close / reload path (closeEvent, ``_close_pdf``, loading a
-        different file) can drop the cached password uniformly. See the
-        helper docstring for the immutability caveat.
-        """
         from app.utils import wipe_pdf_password
         wipe_pdf_password(self)
 
@@ -421,21 +304,6 @@ class BasePage(QWidget):
     @staticmethod
     def _check_not_same_path(dst: str,
                              sources: "Iterable[str] | None" = None) -> None:
-        """Raise RuntimeError if ``dst`` resolves to any of ``sources``.
-
-        Shared invariant for every tool that takes a PDF in and writes
-        a result back to disk: if the user picks the same path for
-        input and output, opening the output for writing truncates the
-        input before the writer's lazy stream reads complete and we
-        get silent dataloss + corrupted output.
-
-        Thin wrapper around :func:`app.pdf_io.check_not_same_path`
-        (R3): the logic now lives in the low-level ``pdf_io`` module so
-        the visual editor can reuse the exact same guard without
-        importing this Qt-heavy page base. Kept as a ``@staticmethod``
-        so ``BasePage._check_not_same_path`` / ``self._check_not_same_path``
-        call sites and the unit tests stay unchanged.
-        """
         pdf_io.check_not_same_path(dst, sources)
 
     @staticmethod
@@ -443,37 +311,6 @@ class BasePage(QWidget):
                           sources: "Iterable[str] | None" = None,
                           save_opts: "dict | None" = None,
                           close_writer: bool = False) -> None:
-        """Write a PdfWriter (pypdf) or fitz.Document to ``dst`` atomically.
-
-        Thin wrapper around :func:`app.pdf_io.atomic_pdf_write` (R3):
-        the tempfile + ``os.replace`` + same-source-guard logic now
-        lives in the low-level ``pdf_io`` module so ``TabEditar._run``
-        reuses the identical write path instead of duplicating it.
-        Kept as a ``@staticmethod`` with the same signature so the
-        ~20 ``self._atomic_pdf_write`` / ``BasePage._atomic_pdf_write``
-        call sites and the regression tests are untouched.
-
-        The two defensive layers are unchanged:
-
-        1. Reject up-front if ``dst`` resolves to any path in
-           ``sources`` (via ``os.path.realpath``) — this catches the
-           "user picked the same path for input and output" case which
-           was producing corrupt output + losing the original.
-
-        2. Write to a same-directory tempfile and atomically rename to
-           ``dst`` via :func:`os.replace` (works on POSIX and Windows).
-
-        ``writer`` may be a pypdf ``PdfWriter`` (uses ``writer.write(fh)``)
-        or a PyMuPDF ``fitz.Document`` (uses ``writer.save(tmp)``).
-        Anything else with a ``.write(fh)`` method is accepted. The
-        writer is left OPEN by default (BasePage tools never save back onto the
-        input handle); passing ``close_writer=True`` closes the writer
-        after saving but before the ``os.replace`` rename.
-
-        Raises :class:`RuntimeError` with a translated message when the
-        same-source check fails; the caller's existing ``show_error``
-        path surfaces it as a friendly dialog.
-        """
         pdf_io.atomic_pdf_write(writer, dst, sources=sources,
                                 save_opts=save_opts,
                                 close_writer=close_writer)
@@ -483,17 +320,6 @@ class BasePage(QWidget):
     def _run_background(self, do_work_fn, total: int, label: str,
                         on_done=None, on_err=None,
                         cancelled_status: str = "") -> None:
-        """Run `do_work_fn(worker)` in a QThread with a progress dialog.
-
-        do_work_fn receives the TaskRunner so it can emit
-        `worker.progress.emit(pct, label)` and check
-        `worker.is_cancelled()`. Returning None signals cancel.
-
-        Connections are routed back to the main thread:
-            - on_done(result)  → success path
-            - on_err(exc)      → exception path (default: show_error friendly dialog)
-        Disables the action button while the task is running.
-        """
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtWidgets import QProgressDialog
         from app.worker import TaskRunner, run_task
@@ -519,45 +345,19 @@ class BasePage(QWidget):
                 on_done(r)
 
         def _wrap_err(exc):
-            # `exc` is the Exception instance emitted by TaskRunner.run()
-            # via Signal(object). Legacy callers may still emit a plain
-            # str; wrap that in a RuntimeError so show_error() always
-            # receives a BaseException.
             if not isinstance(exc, BaseException):
                 exc = RuntimeError(str(exc))
             self.action_btn.setEnabled(True)
             if on_err:
                 on_err(exc)
             else:
-                # Route the default error path through show_error so
-                # users get a friendly translated dialog with collapsible
-                # technical details + a file log entry, instead of the
-                # raw str(exception) traceback dumped in a QMessageBox.
                 show_error(self, exc)
 
-        # Keep the runner + thread alive until they finish — Qt owns them
-        # but Python may garbage-collect the wrapping objects otherwise.
         self._bg_runner = _Run()
         self._bg_thread = run_task(self, self._bg_runner, progress,
                                    _wrap_done, _wrap_err)
 
     def wait_for_workers(self, timeout_ms: int = 2000) -> None:
-        """Cancel any active background workers and wait for them to
-        finish. Called by the main window's closeEvent so QThreads
-        are not destroyed while do_work() is still running — Qt
-        otherwise emits 'QThread: Destroyed while thread is still
-        running' and may crash.
-
-        Implementation note: we don't call `thread.wait()`. The
-        runner's `finished` signal is delivered via QueuedConnection
-        to a closure on the main thread; if we block here, the
-        closure never runs, and Qt then teardown-deletes the runner
-        (via `thread.finished -> runner.deleteLater` direct-connected
-        on the worker thread) — at which point the main-thread queued
-        slot is silently discarded because its sender is gone.
-        Instead we cancel + pump events: the normal flow (finished →
-        _final → thread.quit) gets to run, the worker exits cleanly,
-        and on_done/_drain fire while the page is still valid."""
         from PySide6.QtCore import QCoreApplication, QEventLoop
         import time
 
@@ -573,8 +373,6 @@ class BasePage(QWidget):
                     continue
             except RuntimeError:
                 continue
-            # cancel() is best-effort — blocking calls inside do_work
-            # only honour it at the next checkpoint.
             if runner is not None and isValid(runner):
                 try: runner.cancel()
                 except Exception: pass
@@ -597,7 +395,4 @@ class BasePage(QWidget):
             remaining_ms = int((deadline - time.monotonic()) * 1000)
             if remaining_ms <= 0:
                 break
-            # Pump events for up to 50 ms — gives the queued
-            # runner.finished slot a chance to run _final, which
-            # calls thread.quit() and lets the worker exit cleanly.
             QCoreApplication.processEvents(flags, min(50, remaining_ms))

@@ -2,6 +2,8 @@
 *.txt
 *.md
 tests
+tests/*
+.pytest_cache
 run_tests.py
 failed.txt
 create_shortcut.py
