@@ -640,25 +640,18 @@ class PdfViewerPanel(QWidget):
                 save_opts={"garbage": 4, "deflate": True},
                 close_writer=True,
             )
-            self.load(saved_path)
 
-            # Restore scroll position, viewed page, and multi-selection
-            def _restore_state():
-                if not isValid(self):
-                    return
-                if 0 <= viewed_page < self._canvas.page_count():
-                    y = self._canvas.scroll_to_page(viewed_page)
-                    self._canvas_scroll.verticalScrollBar().setValue(y)
-                if hasattr(self, "_thumbnails"):
-                    if selected_pages:
-                        self._thumbnails.set_selected_pages(selected_pages)
-                    if thumb_scroll_val > 0 and self._thumbnails._view:
-                        sb = self._thumbnails._view.verticalScrollBar()
-                        if sb:
-                            sb.setValue(min(thumb_scroll_val, sb.maximum()))
-                self._update_page_nav()
+            # Reload with target page and scroll value passed in directly
+            self.load(saved_path, target_page=viewed_page, target_scroll=scroll_val, selected_pages=selected_pages)
 
-            QTimer.singleShot(60, _restore_state)
+            if thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
+                sb = self._thumbnails._view.verticalScrollBar()
+                if sb:
+                    sb.setValue(min(thumb_scroll_val, sb.maximum()))
+
+            win = self.window()
+            if hasattr(win, "_update_page_nav"):
+                win._update_page_nav()
         except Exception as exc:
             show_error(self, exc)
 
@@ -671,7 +664,8 @@ class PdfViewerPanel(QWidget):
                 if 0 <= p_idx < doc.page_count:
                     page = doc[p_idx]
                     cur_rot = page.rotation
-                    page.set_rotation((cur_rot + delta) % 360)
+                    new_rot = (cur_rot + delta) % 360
+                    page.set_rotation(new_rot)
             first_page = min(pages) if pages else None
             self._save_and_reload(doc, target_page=first_page, selected_pages=pages)
         except Exception as exc:
@@ -989,7 +983,7 @@ class PdfViewerPanel(QWidget):
             btn.setEnabled(False)
         self._refresh_recents()
 
-    def load(self, path: str):
+    def load(self, path: str, target_page: int = 0, target_scroll: int = -1, selected_pages: list[int] | None = None):
         print(f"[PDFApps] Loading: {path}")
         _log.info("Loading PDF in panel: %s", path)
         if not path:
@@ -1055,12 +1049,17 @@ class PdfViewerPanel(QWidget):
         self.set_page_rotations({})
         self.set_crop_preview(None)
         self.set_page_crops({})
-        self._canvas.load(doc, 0, path=path, password=getattr(self, "_pdf_password", ""))
-        self._canvas_scroll.verticalScrollBar().setValue(0)
+        self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)
+        if target_scroll >= 0:
+            self._canvas_scroll.verticalScrollBar().setValue(target_scroll)
+        elif target_page > 0 and target_page < doc.page_count:
+            self._canvas_scroll.verticalScrollBar().setValue(self._canvas.scroll_to_page(target_page))
+        else:
+            self._canvas_scroll.verticalScrollBar().setValue(0)
+
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
 
-        # Honour the user's last collapsed / open Pages sidebar setting
         show_pages = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
         if show_pages is None:
             show_pages = True
@@ -1084,8 +1083,14 @@ class PdfViewerPanel(QWidget):
         self._thumbnails.set_document(
             path, doc.page_count,
             password=getattr(self, "_pdf_password", ""))
-        self._thumbnails.set_current_page(0)
+
+        if selected_pages:
+            self._thumbnails.set_selected_pages(selected_pages)
+        else:
+            self._thumbnails.set_current_page(target_page)
+
         self._populate_toc(doc)
+        self._update_page_label()
         _log.info("Successfully opened: %s (%d pages)", path, doc.page_count)
 
     # ── Search ──────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QSize, QTimer, QPoint
-from PySide6.QtGui import QIcon, QColor, QShortcut, QKeySequence
+from PySide6.QtGui import QIcon, QColor, QShortcut, QKeySequence, QMouseEvent
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -32,6 +32,26 @@ from app.workspace_bar import WorkspaceBar
 from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
 
 
+class _ViewerTabBar(QTabBar):
+    """Custom tab bar supporting middle-click (mouse wheel click) to close tabs."""
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            idx = self.tabAt(pos)
+            if idx >= 0:
+                self.tabCloseRequested.emit(idx)
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -44,7 +64,6 @@ class MainWindow(QMainWindow):
             if os.path.exists(_svg):
                 self.setWindowIcon(QIcon(_svg))
         self.resize(1220, 700)
-        self.showMaximized()
         self.setMinimumSize(860, 540)
 
         self._sb = QStatusBar(); self.setStatusBar(self._sb)
@@ -170,6 +189,12 @@ class MainWindow(QMainWindow):
 
         self.nav = QListWidget(); self.nav.setObjectName("nav_list")
         self.nav.setSpacing(0); self.nav.setIconSize(QSize(18, 18))
+        self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if self.nav.verticalScrollBar():
+            self.nav.verticalScrollBar().setFixedWidth(0)
+            self.nav.verticalScrollBar().setMaximumWidth(0)
+            self.nav.verticalScrollBar().setStyleSheet("width: 0px; max-width: 0px; border: none; background: transparent;")
 
         self._tool_usage = {}
         try:
@@ -269,7 +294,7 @@ class MainWindow(QMainWindow):
         tc_lay = QVBoxLayout(self._tab_container); tc_lay.setContentsMargins(0, 0, 0, 0); tc_lay.setSpacing(0)
 
         tab_row = QHBoxLayout(); tab_row.setContentsMargins(0, 0, 0, 0); tab_row.setSpacing(0)
-        self._tab_bar = QTabBar()
+        self._tab_bar = _ViewerTabBar()
         self._tab_bar.setTabsClosable(True)
         self._tab_bar.setMovable(True)
         self._tab_bar.setExpanding(False)
@@ -293,6 +318,7 @@ class MainWindow(QMainWindow):
         self._splitter.addWidget(self._tab_container)
         self._splitter.addWidget(self._right_tool_container)
         self._splitter.setCollapsible(0, False); self._splitter.setCollapsible(1, False)
+        self._splitter.setSizes([1200, 0])
 
         main_h.addWidget(self._sidebar)
         main_h.addWidget(self._splitter, 1)
@@ -304,10 +330,6 @@ class MainWindow(QMainWindow):
             import json
             with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
                 _saved = json.load(_cf)
-            sizes = _saved.get("splitter_sizes")
-            if (isinstance(sizes, list) and len(sizes) == self._splitter.count()
-                    and all(isinstance(s, int) and s >= 0 for s in sizes) and sum(sizes) > 0):
-                self._splitter.setSizes(sizes)
             mode = _saved.get("sidebar_mode")
             if mode == "icons":
                 self._toggle_sidebar()

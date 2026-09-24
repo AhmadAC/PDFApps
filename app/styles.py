@@ -26,6 +26,10 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 #sidebar    {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #151C22, stop:1 #0F1418);
               border-right: 1px solid {BORDER}; }}
+#sidebar QScrollBar:vertical, #sidebar QScrollBar:horizontal {{
+    width: 0px; height: 0px; max-width: 0px; max-height: 0px;
+    background: transparent; border: none;
+}}
 #brand_area {{ background: {BG_SIDE}; padding: 0; }}
 
 #app_title {{ font-size: 15pt; font-weight: 700; color: #FFFFFF;
@@ -40,6 +44,10 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 
 #nav_list  {{ background: transparent; border: none; outline: none;
              color: #AFC1BC; font-size: 11pt; }}
+#nav_list QScrollBar:vertical, #nav_list QScrollBar:horizontal {{
+    width: 0px; height: 0px; max-width: 0px; max-height: 0px;
+    background: transparent; border: none;
+}}
 #nav_list::item          {{ padding: 10px 14px; margin: 2px 8px; border-radius: 6px; }}
 #nav_list::item:hover    {{ background: #22303A; color: {TEXT_PRI}; }}
 #nav_list::item:selected {{ background: #134E4A; border: 1px solid #2FAE99;
@@ -282,6 +290,10 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 
 #sidebar    {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #EEF6F4, stop:1 #E3EEEB);
               border-right: 1px solid {_LO}; }}
+#sidebar QScrollBar:vertical, #sidebar QScrollBar:horizontal {{
+    width: 0px; height: 0px; max-width: 0px; max-height: 0px;
+    background: transparent; border: none;
+}}
 #brand_area {{ background: {_LS}; padding: 0; }}
 #app_title  {{ font-size: 15pt; font-weight: 700; color: {_LP};
               background: transparent; padding: 0; }}
@@ -292,6 +304,10 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
               color: {_LP}; padding: 6px 10px; margin: 4px 12px 4px 12px; font-size: 10pt; }}
 #nav_list   {{ background: transparent; border: none; outline: none;
               color: {_LQ}; font-size: 11pt; }}
+#nav_list QScrollBar:vertical, #nav_list QScrollBar:horizontal {{
+    width: 0px; height: 0px; max-width: 0px; max-height: 0px;
+    background: transparent; border: none;
+}}
 #nav_list::item          {{ padding: 10px 14px; margin: 2px 8px; border-radius: 6px; }}
 #nav_list::item:hover    {{ background: #D9E8E4; color: {_LP}; }}
 #nav_list::item:selected {{ background: #D6F2EC; border: 1px solid #83CABB;

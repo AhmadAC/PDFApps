@@ -155,7 +155,7 @@ class _SelectCanvas(QWidget):
 
     # ── Public API ───────────────────────────────────────────────────────────
 
-    def load(self, doc, page_idx: int = 0, path: str = "", password: str = ""):
+    def load(self, doc, page_idx: int = 0, path: str = "", password: str = "", target_scroll: int = -1):
         self._doc      = doc
         self._path     = path or (doc.name if doc else "")
         self._password = password
@@ -168,7 +168,7 @@ class _SelectCanvas(QWidget):
         self._pending.clear()
         self._clear_selection()
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._layout_and_schedule)
+        QTimer.singleShot(0, lambda: self._layout_and_schedule(target_page=page_idx, target_scroll=target_scroll))
 
     def set_page_rotations(self, rotations: dict[int, int]):
         """Update in-memory preview rotations for pages without saving."""
@@ -291,7 +291,7 @@ class _SelectCanvas(QWidget):
             e.pixmap = None
         self._layout_and_schedule()
 
-    def _layout_and_schedule(self):
+    def _layout_and_schedule(self, target_page: int = 0, target_scroll: int = -1):
         if not self._doc or self._doc.page_count == 0:
             return
         import fitz
@@ -340,6 +340,16 @@ class _SelectCanvas(QWidget):
         self._load_annotations()
         self._open_note = None
         self.update()
+
+        # Apply target scroll position directly during layout
+        vp = self.parent()
+        sa = vp.parent() if vp else None
+        if sa and hasattr(sa, "verticalScrollBar"):
+            if target_scroll >= 0:
+                sa.verticalScrollBar().setValue(min(target_scroll, sa.verticalScrollBar().maximum()))
+            elif 0 < target_page < len(self._entries):
+                sa.verticalScrollBar().setValue(self._entries[target_page].y_off)
+
         self._schedule_visible()
 
     def _load_annotations(self):
@@ -506,7 +516,6 @@ class _SelectCanvas(QWidget):
 
     def _draw_crop_box(self, p: QPainter, px: int, py: int, pw: int, ph: int,
                        cx0: int, cy0: int, cx1: int, cy1: int):
-        # 1. Shaded mask outside crop rect
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(0, 0, 0, 140))
         if cy0 > py:
@@ -518,12 +527,10 @@ class _SelectCanvas(QWidget):
         if cx1 < px + pw:
             p.drawRect(cx1, cy0, px + pw - cx1, cy1 - cy0)
 
-        # 2. Dashed crop boundary
         p.setPen(QPen(QColor(ACCENT), 2, Qt.PenStyle.DashLine))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(cx0, cy0, max(1, cx1 - cx0), max(1, cy1 - cy0))
 
-        # 3. Corner brackets
         k = 14
         p.setPen(QPen(QColor(ACCENT), 3, Qt.PenStyle.SolidLine))
         p.drawLine(cx0, cy0, cx0 + k, cy0)
@@ -535,7 +542,6 @@ class _SelectCanvas(QWidget):
         p.drawLine(cx1, cy1, cx1 - k, cy1)
         p.drawLine(cx1, cy1, cx1, cy1 - k)
 
-        # 4. Dimension badge
         z = self._zoom or 1.0
         pt_w = int(round((cx1 - cx0) / z))
         pt_h = int(round((cy1 - cy0) / z))
@@ -643,7 +649,7 @@ class _SelectCanvas(QWidget):
         for r in self._sel_rects:
             p.fillRect(r, QColor(59, 130, 246, 90))
 
-        # ── Crop overlay preview ──────────────────────────────────────
+        # Crop preview
         if (self._crop_mode and self._crop_drag_start and self._crop_drag_cur
                 and 0 <= self._crop_active_page < len(self._entries)):
             i = self._crop_active_page

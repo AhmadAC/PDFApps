@@ -173,7 +173,7 @@ def main():
     window = MainWindow()
     if icon_file:
         window.setWindowIcon(QIcon(str(icon_file)))
-    window.show()
+    window.showMaximized()
 
     # Open PDFs passed as arguments (e.g.: double-click on a .pdf file
     # or multi-select "Open With" on Windows/macOS). Each valid path
