@@ -370,15 +370,42 @@ class ThumbnailDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-# ── Custom List View with Multi-Selection Context Menu ───────────────
+# ── Custom List View with Multi-Selection Context Menu & Shortcuts ────
 
 
 class _ThumbnailListView(QListView):
-    """QListView supporting multi-selection and context menu."""
+    """QListView supporting multi-selection, keyboard shortcuts, and context menu."""
 
     def __init__(self, panel: ThumbnailPanel) -> None:
         super().__init__(panel)
         self._panel = panel
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            selected_pages = self._panel.selected_pages()
+            if selected_pages:
+                self._panel.action_requested.emit("delete", selected_pages)
+                event.accept()
+                return
+
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.Key.Key_Left:
+                selected_pages = self._panel.selected_pages()
+                if selected_pages:
+                    self._panel.action_requested.emit("rotate_left", selected_pages)
+                    event.accept()
+                    return
+            elif key == Qt.Key.Key_Right:
+                selected_pages = self._panel.selected_pages()
+                if selected_pages:
+                    self._panel.action_requested.emit("rotate_right", selected_pages)
+                    event.accept()
+                    return
+
+        super().keyPressEvent(event)
 
     def contextMenuEvent(self, event):
         pos = event.pos()
@@ -491,7 +518,7 @@ class ThumbnailPanel(QWidget):
         act_ins_file = insert_menu.addAction(qta.icon("fa5s.folder-open", color=icon_color), "From File...")
 
         # 5. Core Page Manipulations
-        act_delete = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), f"Delete Pages{suffix}...")
+        act_delete = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), f"Delete Pages{suffix}...\tDel")
         act_extract = menu.addAction(qta.icon("fa5s.file-export", color=icon_color), f"Extract Pages{suffix}...")
         act_reverse = menu.addAction(qta.icon("fa5s.sort-numeric-down-alt", color=icon_color), f"Reverse Pages{suffix}...")
         act_replace = menu.addAction(qta.icon("fa5s.exchange-alt", color=icon_color), "Replace Pages...")
@@ -506,8 +533,8 @@ class ThumbnailPanel(QWidget):
         act_resize = menu.addAction(qta.icon("fa5s.expand-arrows-alt", color=icon_color), f"Resize pages{suffix}...")
 
         rotate_menu = menu.addMenu(qta.icon("fa5s.sync-alt", color=icon_color), f"Rotate Pages{suffix}...")
-        act_rot_right = rotate_menu.addAction(qta.icon("fa5s.redo", color=icon_color), "Rotate Right (90° Clockwise)")
-        act_rot_left = rotate_menu.addAction(qta.icon("fa5s.undo", color=icon_color), "Rotate Left (90° Counter-Clockwise)")
+        act_rot_right = rotate_menu.addAction(qta.icon("fa5s.redo", color=icon_color), "Rotate Right (90° Clockwise)\tCtrl+Right")
+        act_rot_left = rotate_menu.addAction(qta.icon("fa5s.undo", color=icon_color), "Rotate Left (90° Counter-Clockwise)\tCtrl+Left")
         act_rot_180 = rotate_menu.addAction(qta.icon("fa5s.sync-alt", color=icon_color), "Rotate 180°")
         menu.addSeparator()
 

@@ -558,13 +558,21 @@ class MainWindow(QMainWindow):
                 orig(*args, **kwargs)
                 if viewer.current_path():
                     curr = viewer.current_path()
-                    if track:
-                        add_recent_file(curr)
-                    name = os.path.basename(curr)
+                    vid = id(viewer)
+                    ps = self._pipeline_state.get(vid)
+                    if ps and ps.get("original_path"):
+                        orig_path = ps["original_path"]
+                        name = f"● {os.path.basename(orig_path)}"
+                        tooltip = f"{orig_path} (modified)"
+                    else:
+                        if track:
+                            add_recent_file(curr)
+                        name = os.path.basename(curr)
+                        tooltip = curr
                     for i in range(len(self._viewers)):
                         if self._viewers[i] is viewer:
                             self._tab_bar.setTabText(i, name)
-                            self._tab_bar.setTabToolTip(i, curr)
+                            self._tab_bar.setTabToolTip(i, tooltip)
                             break
                     self._refresh_viewer_top_buttons()
                 QTimer.singleShot(100, self._update_page_nav)
@@ -1083,6 +1091,7 @@ class MainWindow(QMainWindow):
         idx = self._viewer_stack.currentIndex()
         orig_name = os.path.basename(ps["original_path"])
         self._tab_bar.setTabText(idx, f"● {orig_name}")
+        self._tab_bar.setTabToolTip(idx, f"{ps['original_path']} (modified)")
         self._sb.showMessage(t("pipeline.applied"))
         if self._current_tool >= 0:
             w = self.stack.widget(self._current_tool)
@@ -1147,6 +1156,10 @@ class MainWindow(QMainWindow):
         ps = self._pipeline_state.pop(viewer_id, None)
         if not ps:
             return
+        temp_path = ps.get("temp_path")
+        if temp_path and os.path.isfile(temp_path):
+            with contextlib.suppress(Exception):
+                os.unlink(temp_path)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             if isinstance(w, BasePage):

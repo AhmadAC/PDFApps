@@ -511,7 +511,7 @@ class PdfViewerPanel(QWidget):
             self._sidebar_tabs.removeTab(self._toc_tab_idx)
             self._pages_tab_idx = self._sidebar_tabs.indexOf(self._thumbnails)
 
-    def _populate_toc(self, doc):
+    def _populate_toc(self, doc, active_sidebar_tab: QWidget | int | None = None):
         self._toc_tree.clear()
         try:
             toc = doc.get_toc()
@@ -536,7 +536,12 @@ class PdfViewerPanel(QWidget):
                 stack.append((level, item))
             self._toc_tree.expandToDepth(1)
             self._set_toc_tab_visible(True)
-            self._sidebar_tabs.setCurrentIndex(self._toc_tab_idx)
+            if isinstance(active_sidebar_tab, QWidget) and self._sidebar_tabs.indexOf(active_sidebar_tab) != -1:
+                self._sidebar_tabs.setCurrentWidget(active_sidebar_tab)
+            elif isinstance(active_sidebar_tab, int) and 0 <= active_sidebar_tab < self._sidebar_tabs.count():
+                self._sidebar_tabs.setCurrentIndex(active_sidebar_tab)
+            else:
+                self._sidebar_tabs.setCurrentIndex(self._toc_tab_idx)
         except Exception as exc:
             _log.warning("Failed to build TOC tree for %s: %s", self._current_path, exc)
             self._toc_tree.clear()
@@ -608,9 +613,23 @@ class PdfViewerPanel(QWidget):
             self._paste_page_content(pages[0])
 
     def _save_and_reload(self, doc_to_save, target_page: int | None = None, selected_pages: list[int] | None = None):
-        """Atomically persist modifications and reload live viewer, preserving viewport position and selection."""
+        """Persist modifications to a temporary pipeline file and reload live viewer without modifying original on disk."""
         try:
-            saved_path = self._current_path
+            win = self.window()
+            vid = id(self)
+            ps = getattr(win, "_pipeline_state", None)
+
+            # Determine original path and temp path
+            orig_path = self._current_path
+            if ps is not None and vid in ps:
+                orig_path = ps[vid].get("original_path") or self._current_path
+                temp_path = ps[vid].get("temp_path")
+            else:
+                temp_path = None
+
+            if not temp_path:
+                fd, temp_path = tempfile.mkstemp(prefix="pdfapps_modified_", suffix=".pdf")
+                os.close(fd)
 
             # Preserve current view states before unloading
             scroll_val = self._canvas_scroll.verticalScrollBar().value()
@@ -620,6 +639,8 @@ class PdfViewerPanel(QWidget):
 
             if selected_pages is None and hasattr(self, "_thumbnails"):
                 selected_pages = self._thumbnails.selected_pages()
+
+            current_tab_widget = self._sidebar_tabs.currentWidget()
 
             thumb_scroll_val = 0
             if hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
@@ -636,22 +657,45 @@ class PdfViewerPanel(QWidget):
             self._thumbnails._stop_all_workers()
 
             atomic_pdf_write(
-                doc_to_save, saved_path,
+                doc_to_save, temp_path,
                 save_opts={"garbage": 4, "deflate": True},
                 close_writer=True,
             )
 
+            # Track pipeline state in MainWindow so it knows the document is modified (unsaved)
+            if ps is not None:
+                ps[vid] = {
+                    "original_path": orig_path,
+                    "temp_path": temp_path,
+                }
+
             # Reload with target page and scroll value passed in directly
-            self.load(saved_path, target_page=viewed_page, target_scroll=scroll_val, selected_pages=selected_pages)
+            self.load(
+                temp_path,
+                target_page=viewed_page,
+                target_scroll=scroll_val,
+                selected_pages=selected_pages,
+                active_sidebar_tab=current_tab_widget,
+            )
+
+            # Update tab bar text in window to reflect unsaved state
+            if win and hasattr(win, "_tab_bar") and hasattr(win, "_viewers"):
+                for idx, v in enumerate(win._viewers):
+                    if v is self:
+                        orig_name = os.path.basename(orig_path)
+                        win._tab_bar.setTabText(idx, f"● {orig_name}")
+                        win._tab_bar.setTabToolTip(idx, f"{orig_path} (modified)")
+                        break
 
             if thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
                 sb = self._thumbnails._view.verticalScrollBar()
                 if sb:
                     sb.setValue(min(thumb_scroll_val, sb.maximum()))
 
-            win = self.window()
             if hasattr(win, "_update_page_nav"):
                 win._update_page_nav()
+            if hasattr(win, "_set_status"):
+                win._set_status("ℹ Document modified (Press Ctrl+S to save changes)")
         except Exception as exc:
             show_error(self, exc)
 
@@ -983,7 +1027,7 @@ class PdfViewerPanel(QWidget):
             btn.setEnabled(False)
         self._refresh_recents()
 
-    def load(self, path: str, target_page: int = 0, target_scroll: int = -1, selected_pages: list[int] | None = None):
+    def load(self, path: str, target_page: int = 0, target_scroll: int = -1, selected_pages: list[int] | None = None, active_sidebar_tab: QWidget | int | None = None):
         print(f"[PDFApps] Loading: {path}")
         _log.info("Loading PDF in panel: %s", path)
         if not path:
@@ -1073,7 +1117,14 @@ class PdfViewerPanel(QWidget):
         else:
             self._viewer_splitter.setSizes([0, total])
 
-        self._name_lbl.setText(os.path.basename(path))
+        display_name = os.path.basename(path)
+        win = self.window()
+        if win and hasattr(win, "_pipeline_state"):
+            ps = win._pipeline_state.get(id(self))
+            if ps and ps.get("original_path"):
+                display_name = f"● {os.path.basename(ps['original_path'])}"
+        self._name_lbl.setText(display_name)
+
         self._zoom_lbl.setText(t("zoom.fit"))
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,
                     self._print_btn, self._night_btn):
@@ -1089,7 +1140,12 @@ class PdfViewerPanel(QWidget):
         else:
             self._thumbnails.set_current_page(target_page)
 
-        self._populate_toc(doc)
+        self._populate_toc(doc, active_sidebar_tab=active_sidebar_tab)
+        if isinstance(active_sidebar_tab, QWidget) and self._sidebar_tabs.indexOf(active_sidebar_tab) != -1:
+            self._sidebar_tabs.setCurrentWidget(active_sidebar_tab)
+        elif isinstance(active_sidebar_tab, int) and 0 <= active_sidebar_tab < self._sidebar_tabs.count():
+            self._sidebar_tabs.setCurrentIndex(active_sidebar_tab)
+
         self._update_page_label()
         _log.info("Successfully opened: %s (%d pages)", path, doc.page_count)
 
