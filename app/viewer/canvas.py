@@ -113,6 +113,7 @@ class _SelectCanvas(QWidget):
     crop_applied        = Signal()
     crop_undo_requested = Signal()
     crop_redo_requested = Signal()
+    page_action_requested = Signal(str, object)  # (action, list[int])
 
     def __init__(self):
         super().__init__()
@@ -540,7 +541,7 @@ class _SelectCanvas(QWidget):
         p.drawLine(cx0, cy1, cx0 + k, cy1)
         p.drawLine(cx0, cy1, cx0, cy1 - k)
         p.drawLine(cx1, cy1, cx1 - k, cy1)
-        p.drawLine(cx1, cy1, cx1, cy1 - k)
+        p.drawLine(cx1, cy1, cx1 - k, cy1)
 
         z = self._zoom or 1.0
         pt_w = int(round((cx1 - cx0) / z))
@@ -806,12 +807,47 @@ class _SelectCanvas(QWidget):
                 self.crop_redo_requested.emit()
                 e.accept()
                 return
-        if (e.modifiers() & Qt.KeyboardModifier.ControlModifier
-                and e.key() == Qt.Key.Key_C and self._sel_text):
-            QApplication.clipboard().setText(self._sel_text)
+
+        # Canvas-focused keyboard events routed to appropriate global actions
+        if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if e.key() == Qt.Key.Key_Z:
+                sb_val = self.parent().parent().verticalScrollBar().value() if self.parent() and self.parent().parent() else 0
+                idx = self.page_at_y(sb_val)
+                action = "redo" if (e.modifiers() & Qt.KeyboardModifier.ShiftModifier) else "undo"
+                self.page_action_requested.emit(action, [idx])
+                e.accept()
+                return
+            elif e.key() == Qt.Key.Key_Y:
+                sb_val = self.parent().parent().verticalScrollBar().value() if self.parent() and self.parent().parent() else 0
+                idx = self.page_at_y(sb_val)
+                self.page_action_requested.emit("redo", [idx])
+                e.accept()
+                return
+            elif e.key() == Qt.Key.Key_Left:
+                sb_val = self.parent().parent().verticalScrollBar().value() if self.parent() and self.parent().parent() else 0
+                idx = self.page_at_y(sb_val)
+                self.page_action_requested.emit("rotate_left", [idx])
+                e.accept()
+                return
+            elif e.key() == Qt.Key.Key_Right:
+                sb_val = self.parent().parent().verticalScrollBar().value() if self.parent() and self.parent().parent() else 0
+                idx = self.page_at_y(sb_val)
+                self.page_action_requested.emit("rotate_right", [idx])
+                e.accept()
+                return
+            elif e.key() == Qt.Key.Key_C and self._sel_text:
+                QApplication.clipboard().setText(self._sel_text)
+                e.accept()
+                return
+
+        if not self._crop_mode and e.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            sb_val = self.parent().parent().verticalScrollBar().value() if self.parent() and self.parent().parent() else 0
+            idx = self.page_at_y(sb_val)
+            self.page_action_requested.emit("delete", [idx])
             e.accept()
-        else:
-            super().keyPressEvent(e)
+            return
+
+        super().keyPressEvent(e)
 
     # ── Context menu ───────────────────────────────────────────────────────
 

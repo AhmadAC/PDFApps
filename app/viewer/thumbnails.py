@@ -404,6 +404,17 @@ class _ThumbnailListView(QListView):
                     self._panel.action_requested.emit("rotate_right", selected_pages)
                     event.accept()
                     return
+            elif key == Qt.Key.Key_Z:
+                if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    self._panel.action_requested.emit("redo", [])
+                else:
+                    self._panel.action_requested.emit("undo", [])
+                event.accept()
+                return
+            elif key == Qt.Key.Key_Y:
+                self._panel.action_requested.emit("redo", [])
+                event.accept()
+                return
 
         super().keyPressEvent(event)
 

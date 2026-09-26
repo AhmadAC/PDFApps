@@ -52,6 +52,9 @@ class TabRotar(BasePage):
         self._rotations: dict[int, int] = {}
         self._updating_controls = False
 
+        self._undo_stack: list[dict[int, int]] = []
+        self._redo_stack: list[dict[int, int]] = []
+
         f = self._form
 
         sec_src = section(t("tool.rotate.source"))
@@ -160,9 +163,30 @@ class TabRotar(BasePage):
         except ValueError:
             return []
 
+    def _push_undo(self):
+        self._undo_stack.append(dict(self._rotations))
+        self._redo_stack.clear()
+
+    def _undo(self):
+        if not self._undo_stack:
+            return
+        self._redo_stack.append(dict(self._rotations))
+        self._rotations = self._undo_stack.pop()
+        self._sync_angle_combo()
+        self.rotations_changed.emit(self._rotations)
+
+    def _redo(self):
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(dict(self._rotations))
+        self._rotations = self._redo_stack.pop()
+        self._sync_angle_combo()
+        self.rotations_changed.emit(self._rotations)
+
     def _on_angle_changed(self):
         if self._updating_controls:
             return
+        self._push_undo()
         angle = {0: 90, 1: 180, 2: 270}.get(self.cmb_angle.currentIndex(), 90)
         target_pages = self._get_target_pages()
         for p in target_pages:
@@ -172,6 +196,7 @@ class TabRotar(BasePage):
     def _on_pages_changed(self):
         if self._updating_controls:
             return
+        self._push_undo()
         angle = {0: 90, 1: 180, 2: 270}.get(self.cmb_angle.currentIndex(), 90)
         target_pages = self._get_target_pages()
         self._rotations.clear()
@@ -180,6 +205,7 @@ class TabRotar(BasePage):
         self.rotations_changed.emit(self._rotations)
 
     def _rotate_left(self):
+        self._push_undo()
         target_pages = self._get_target_pages()
         for p in target_pages:
             self._rotations[p] = (self._rotations.get(p, 0) + 270) % 360
@@ -187,6 +213,7 @@ class TabRotar(BasePage):
         self.rotations_changed.emit(self._rotations)
 
     def _rotate_right(self):
+        self._push_undo()
         target_pages = self._get_target_pages()
         for p in target_pages:
             self._rotations[p] = (self._rotations.get(p, 0) + 90) % 360
@@ -194,6 +221,7 @@ class TabRotar(BasePage):
         self.rotations_changed.emit(self._rotations)
 
     def _rotate_180(self):
+        self._push_undo()
         target_pages = self._get_target_pages()
         for p in target_pages:
             self._rotations[p] = (self._rotations.get(p, 0) + 180) % 360
@@ -201,6 +229,9 @@ class TabRotar(BasePage):
         self.rotations_changed.emit(self._rotations)
 
     def _reset_rotations(self):
+        if not self._rotations:
+            return
+        self._push_undo()
         self._rotations.clear()
         target_pages = self._get_target_pages()
         for p in target_pages:
@@ -248,7 +279,11 @@ class TabRotar(BasePage):
             except Exception as e:
                 self.lbl_info.setText(t("tool.split.error_info", e=e))
                 return
+        
         self._rotations.clear()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        
         self.lbl_info.setText(t("edit.status.pages", n=self._page_count))
         self.rotations_changed.emit(self._rotations)
 
