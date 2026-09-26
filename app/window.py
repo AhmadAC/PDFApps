@@ -94,10 +94,12 @@ class MainWindow(QMainWindow):
         self._zp_btn = wb._zp_btn
         self._z0_btn = wb._z0_btn
         self._page_nav_widget = wb._page_nav_widget
+        self._first_pg_btn = wb._first_pg_btn
         self._prev_pg_btn = wb._prev_pg_btn
         self._page_input = wb._page_input
         self._page_total_lbl = wb._page_total_lbl
         self._next_pg_btn = wb._next_pg_btn
+        self._last_pg_btn = wb._last_pg_btn
         self._undo_top_btn = wb._undo_top_btn
         self._redo_top_btn = wb._redo_top_btn
         self._help_btn = wb._help_btn
@@ -115,8 +117,10 @@ class MainWindow(QMainWindow):
         self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf())
         self._present_btn.clicked.connect(self._start_presentation)
         self._search_top_btn.clicked.connect(lambda: self._viewer._toggle_search())
+        self._first_pg_btn.clicked.connect(self._goto_first_page)
         self._prev_pg_btn.clicked.connect(self._goto_prev_page)
         self._next_pg_btn.clicked.connect(self._goto_next_page)
+        self._last_pg_btn.clicked.connect(self._goto_last_page)
         self._page_input.returnPressed.connect(self._goto_input_page)
         self._help_btn.clicked.connect(lambda: __import__('webbrowser').open("https://pdf-apps.com/docs#first-steps"))
         self._lang_btn.clicked.connect(self._show_language_menu)
@@ -909,8 +913,17 @@ class MainWindow(QMainWindow):
         total = len(entries)
         self._page_input.setText(str(idx + 1))
         self._page_total_lbl.setText(f"/ {total}")
+        self._first_pg_btn.setEnabled(idx > 0)
         self._prev_pg_btn.setEnabled(idx > 0)
         self._next_pg_btn.setEnabled(idx < total - 1)
+        self._last_pg_btn.setEnabled(idx < total - 1)
+
+    def _goto_first_page(self):
+        canvas = self._viewer._canvas
+        if not canvas._entries:
+            return
+        sb = self._viewer._canvas_scroll.verticalScrollBar()
+        sb.setValue(canvas.scroll_to_page(0))
 
     def _goto_prev_page(self):
         canvas = self._viewer._canvas
@@ -929,6 +942,13 @@ class MainWindow(QMainWindow):
         idx = canvas.page_at_y(sb.value())
         if idx < len(canvas._entries) - 1:
             sb.setValue(canvas.scroll_to_page(idx + 1))
+
+    def _goto_last_page(self):
+        canvas = self._viewer._canvas
+        if not canvas._entries:
+            return
+        sb = self._viewer._canvas_scroll.verticalScrollBar()
+        sb.setValue(canvas.scroll_to_page(len(canvas._entries) - 1))
 
     def _goto_input_page(self):
         canvas = self._viewer._canvas

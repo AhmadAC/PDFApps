@@ -7,3 +7,13 @@ tests/*
 run_tests.py
 failed.txt
 create_shortcut.py
+app\translations.json
+translations.json
+CONTRIBUTING.md
+.gitignore
+installer.spec
+launch_texts.md
+LICENSE
+pdfapps.spec
+README.md
+SECURITY.md

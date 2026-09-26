@@ -134,6 +134,13 @@ class WorkspaceBar(QWidget):
         pn_h.setContentsMargins(0, 0, 0, 0)
         pn_h.setSpacing(4)
 
+        self._first_pg_btn = QPushButton()
+        self._first_pg_btn.setIcon(qta.icon("fa5s.angle-double-left", color=TEXT_PRI))
+        self._first_pg_btn.setFixedSize(28, 28)
+        self._first_pg_btn.setObjectName("viewer_nav_btn")
+        first_tip = t("nav.first_page") if t("nav.first_page") != "nav.first_page" else "First page"
+        _a11y(self._first_pg_btn, first_tip)
+
         self._prev_pg_btn = QPushButton()
         self._prev_pg_btn.setIcon(qta.icon("fa5s.chevron-left", color=TEXT_PRI))
         self._prev_pg_btn.setFixedSize(28, 28)
@@ -154,10 +161,19 @@ class WorkspaceBar(QWidget):
         self._next_pg_btn.setObjectName("viewer_nav_btn")
         _a11y(self._next_pg_btn, t("nav.next_page"))
 
+        self._last_pg_btn = QPushButton()
+        self._last_pg_btn.setIcon(qta.icon("fa5s.angle-double-right", color=TEXT_PRI))
+        self._last_pg_btn.setFixedSize(28, 28)
+        self._last_pg_btn.setObjectName("viewer_nav_btn")
+        last_tip = t("nav.last_page") if t("nav.last_page") != "nav.last_page" else "Last page"
+        _a11y(self._last_pg_btn, last_tip)
+
+        pn_h.addWidget(self._first_pg_btn)
         pn_h.addWidget(self._prev_pg_btn)
         pn_h.addWidget(self._page_input)
         pn_h.addWidget(self._page_total_lbl)
         pn_h.addWidget(self._next_pg_btn)
+        pn_h.addWidget(self._last_pg_btn)
         self._page_nav_widget.setVisible(False)
         layout.addWidget(self._page_nav_widget)
 
@@ -240,6 +256,8 @@ class WorkspaceBar(QWidget):
         self._redo_top_btn.setIcon(qta.icon("fa5s.redo", color=bar_color))
         self._zm_btn.setIcon(qta.icon("fa5s.search-minus", color=bar_color))
         self._zp_btn.setIcon(qta.icon("fa5s.search-plus", color=bar_color))
+        self._first_pg_btn.setIcon(qta.icon("fa5s.angle-double-left", color=bar_color))
         self._prev_pg_btn.setIcon(qta.icon("fa5s.chevron-left", color=bar_color))
         self._next_pg_btn.setIcon(qta.icon("fa5s.chevron-right", color=bar_color))
+        self._last_pg_btn.setIcon(qta.icon("fa5s.angle-double-right", color=bar_color))
         self._theme_btn.setText("☀" if dark else "🌙")
