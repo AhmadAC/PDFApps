@@ -220,6 +220,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._canvas.crop_applied.connect(self.crop_applied.emit)
         self._canvas.crop_undo_requested.connect(self.crop_undo_requested.emit)
         self._canvas.crop_redo_requested.connect(self.crop_redo_requested.emit)
+        self._canvas.page_action_requested.connect(self._on_thumbnail_action)
 
         self._canvas_scroll = QScrollArea()
         self._canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -293,9 +294,8 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._search_debounce.timeout.connect(self._run_pending_search)
         self._pending_search_query = ""
 
-        # Shortcuts
-        QShortcut(QKeySequence("Ctrl+F"), self, self._toggle_search)
-        QShortcut(QKeySequence("Escape"), self._search_input, self._close_search)
-        QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, self.redo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self.redo)
+        # Shortcuts (Correctly scoped context)
+        sc_find = QShortcut(QKeySequence("Ctrl+F"), self, self._toggle_search)
+        sc_find.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc_esc = QShortcut(QKeySequence("Escape"), self._search_input, self._close_search)
+        sc_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)

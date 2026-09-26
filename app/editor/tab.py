@@ -1,3 +1,6 @@
+
+# app/editor/tab.py
+
 """PDFApps – TabEditar: visual PDF editor tool tab."""
 
 import contextlib
@@ -382,11 +385,6 @@ class TabEditar(QWidget):
 
         self._action_bar, _ = ActionBar(t("btn.apply_save"), self._run)
         root.addWidget(self._action_bar)
-
-        from PySide6.QtGui import QShortcut, QKeySequence
-        QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, self._redo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
 
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()

@@ -549,10 +549,7 @@ class TabCortar(BasePage):
         # Keyboard shortcuts within the tool panel
         sc_enter1 = QShortcut(QKeySequence(Qt.Key.Key_Return), self, self.apply_crop_preview)
         sc_enter2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self, self.apply_crop_preview)
-        sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
-        sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._redo)
-        sc_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
-        for sc in (sc_enter1, sc_enter2, sc_undo, sc_redo1, sc_redo2):
+        for sc in (sc_enter1, sc_enter2):
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
     def _on_draw_btn_clicked(self):
@@ -985,3 +982,4 @@ class TabCortar(BasePage):
             QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e:
             show_error(self, e)
+
