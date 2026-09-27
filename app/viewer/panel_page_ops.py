@@ -1,5 +1,5 @@
 # app/viewer/panel_page_ops.py
-"""PDFApps – Multi-page operations and thumbnail action handlers."""
+"""PDFApps – Multi-page operations, drag/drop reordering, and thumbnail action handlers."""
 import os
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
@@ -24,6 +24,13 @@ class PanelPageOpsMixin:
         if action == "redo":
             self.redo()
             return
+
+        if action == "reorder":
+            if isinstance(pages_arg, (tuple, list)) and len(pages_arg) == 2:
+                pages_to_move, target_index = pages_arg
+                if isinstance(pages_to_move, (list, tuple, set)):
+                    self._move_pages_to(sorted(list(pages_to_move)), int(target_index))
+                    return
 
         if isinstance(pages_arg, int):
             pages = [pages_arg]
@@ -235,6 +242,48 @@ class PanelPageOpsMixin:
         except Exception as exc:
             show_error(self, exc)
 
+    def _move_pages_to(self, pages: list[int], target_index: int) -> None:
+        """Move one or more pages to target_index using standard reordering logic."""
+        if not self._fitz_doc or not self._current_path:
+            return
+        total = self._fitz_doc.page_count
+        if total <= 1 or not pages:
+            return
+
+        pages = [p for p in pages if 0 <= p < total]
+        if not pages or len(pages) == total:
+            return
+
+        order = [i for i in range(total) if i not in pages]
+        dest_pos = sum(1 for i in order if i < target_index)
+        dest_pos = max(0, min(dest_pos, len(order)))
+
+        for i, p in enumerate(pages):
+            order.insert(dest_pos + i, p)
+
+        if order == list(range(total)):
+            return
+
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+
+            new_doc = fitz.open()
+            for idx in order:
+                new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
+            doc.close()
+
+            new_selected = list(range(dest_pos, dest_pos + len(pages)))
+            target_view_page = dest_pos
+            self._save_and_reload(new_doc, target_page=target_view_page, selected_pages=new_selected, scroll_to_target=True)
+
+            win = self.window()
+            if hasattr(win, "_set_status"):
+                win._set_status(f"✔ Moved {len(pages)} page(s)")
+        except Exception as exc:
+            show_error(self, exc)
+
     def _move_page_dialog(self, pages: list[int]) -> None:
         total = self._fitz_doc.page_count if self._fitz_doc else 1
         page_str = ", ".join(str(p + 1) for p in pages)
@@ -245,23 +294,11 @@ class PanelPageOpsMixin:
         )
         if not ok:
             return
-        try:
-            dest_idx = dest - 1
-            doc = fitz.open(self._current_path)
-            if self._pdf_password and doc.needs_pass:
-                doc.authenticate(self._pdf_password)
-            order = [i for i in range(doc.page_count) if i not in pages]
-            dest_clamped = max(0, min(dest_idx, len(order)))
-            for i, p in enumerate(pages):
-                order.insert(dest_clamped + i, p)
-            new_doc = fitz.open()
-            for idx in order:
-                new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
-            doc.close()
-            new_selected = list(range(dest_clamped, dest_clamped + len(pages)))
-            self._save_and_reload(new_doc, target_page=dest_clamped, selected_pages=new_selected)
-        except Exception as exc:
-            show_error(self, exc)
+        dest_idx = dest - 1
+        order = [i for i in range(total) if i not in pages]
+        dest_clamped = max(0, min(dest_idx, len(order)))
+        target_index = order[dest_clamped] if dest_clamped < len(order) else total
+        self._move_pages_to(pages, target_index)
 
     def _replace_page_dialog(self, page_idx: int) -> None:
         p, _ = QFileDialog.getOpenFileName(self, "Replace with PDF", DESKTOP, t("file_filter.pdf"))

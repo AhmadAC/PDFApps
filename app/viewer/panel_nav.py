@@ -68,6 +68,13 @@ class PanelNavMixin:
         if hasattr(self, "_thumbnails"):
             self._thumbnails.set_page_crops(crops)
 
+    def set_page_order(self, order: list[int] | None):
+        """Update live preview page order across continuous scroll and thumbnail sidebar."""
+        if hasattr(self, "_canvas"):
+            self._canvas.set_page_order(order)
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.set_page_order(order)
+
     def _on_zoom_changed(self, pct: int):
         self._zoom_lbl.setText(f"{pct}%")
         self._update_page_label()
@@ -299,6 +306,7 @@ class PanelNavMixin:
         self.set_crop_mode(False)
         self.set_crop_preview(None)
         self.set_page_crops({})
+        self.set_page_order(None)
         self._placeholder.setVisible(True)
         self._viewer_splitter.setVisible(False)
         self._sidebar_panel.setVisible(False)
@@ -384,6 +392,7 @@ class PanelNavMixin:
         self.set_page_rotations({})
         self.set_crop_preview(None)
         self.set_page_crops({})
+        self.set_page_order(None)
         self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)
         if target_scroll >= 0:
             self._canvas_scroll.verticalScrollBar().setValue(target_scroll)

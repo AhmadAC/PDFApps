@@ -116,6 +116,7 @@ class WindowActionsMixin:
         edit_idx = self._edit_tool_idx()
         rotate_idx = self._rotate_tool_idx()
         crop_idx = self._crop_tool_idx()
+        reorder_idx = self._reorder_tool_idx()
 
         if row == self._current_tool:
             self.nav.clearSelection()
@@ -146,6 +147,7 @@ class WindowActionsMixin:
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
             self._viewer.set_page_crops({})
+            self._viewer.set_page_order(None)
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
@@ -184,6 +186,7 @@ class WindowActionsMixin:
                 self._viewer.set_crop_mode(False)
                 self._viewer.set_crop_preview(None)
                 self._viewer.set_page_crops({})
+                self._viewer.set_page_order(None)
             else:
                 self._pages_toggle_btn.setVisible(True)
                 self.stack.setMinimumWidth(320)
@@ -229,6 +232,14 @@ class WindowActionsMixin:
                     self._viewer.set_page_crops({})
                     self._undo_top_btn.setVisible(False)
                     self._redo_top_btn.setVisible(False)
+
+                if row == reorder_idx:
+                    reorder_w = self.stack.widget(reorder_idx)
+                    order = getattr(reorder_w, "get_order", lambda: [])()
+                    if order:
+                        self._viewer.set_page_order(order)
+                else:
+                    self._viewer.set_page_order(None)
 
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)

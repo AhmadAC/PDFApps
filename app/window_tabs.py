@@ -14,6 +14,7 @@ from app.utils import reveal_file
 from app.viewer.panel import PdfViewerPanel
 from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
+from app.tools.reorder import TabReordenar
 from app.editor.tab import TabEditar
 from app.nav_config import NAV_ITEMS
 
@@ -54,6 +55,9 @@ class WindowTabsMixin:
     def _crop_tool_idx(self) -> int:
         return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabCortar)
 
+    def _reorder_tool_idx(self) -> int:
+        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabReordenar)
+
     def _edit_tool_idx(self) -> int:
         return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabEditar)
 
@@ -65,6 +69,9 @@ class WindowTabsMixin:
 
     def _on_crops_changed(self, crops: dict):
         self._viewer.set_page_crops(crops)
+
+    def _on_order_changed(self, order: list[int]):
+        self._viewer.set_page_order(order)
 
     def _on_crop_mode_toggled(self, active: bool):
         if self._current_tool == self._crop_tool_idx():
@@ -180,6 +187,11 @@ class WindowTabsMixin:
             self._undo_top_btn.clicked.connect(self._viewer.undo)
             self._redo_top_btn.clicked.connect(self._viewer.redo)
             self._undo_redo_handlers = (self._viewer.undo, self._viewer.redo)
+            self._viewer.set_page_rotations({})
+            self._viewer.set_crop_mode(False)
+            self._viewer.set_crop_preview(None)
+            self._viewer.set_page_crops({})
+            self._viewer.set_page_order(None)
         elif self._current_tool == self._rotate_tool_idx():
             rot_w = self.stack.widget(self._rotate_tool_idx())
             rots = getattr(rot_w, "_rotations", {})
@@ -188,11 +200,19 @@ class WindowTabsMixin:
             crop_w = self.stack.widget(self._crop_tool_idx())
             crop_w._emit_preview()
             self._viewer.set_page_crops(crop_w._applied_crops)
+        elif self._current_tool == self._reorder_tool_idx():
+            reorder_w = self.stack.widget(self._reorder_tool_idx())
+            order = getattr(reorder_w, "get_order", lambda: [])()
+            if order:
+                self._viewer.set_page_order(order)
+            else:
+                self._viewer.set_page_order(None)
         else:
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
             self._viewer.set_page_crops({})
+            self._viewer.set_page_order(None)
         self._refresh_viewer_top_buttons()
 
     def _close_tab(self, idx: int):

@@ -3,6 +3,14 @@
 *.md
 tests
 tests/*
+flatpak
+appimage
+aur
+docs
+rpm
+scripts
+snap
+winget
 .pytest_cache
 run_tests.py
 failed.txt

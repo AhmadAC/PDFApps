@@ -159,7 +159,7 @@ class PanelHistoryMixin:
         if hasattr(win, "_update_page_nav"):
             win._update_page_nav()
 
-    def _save_and_reload(self, doc_to_save, target_page: int | None = None, selected_pages: list[int] | None = None):
+    def _save_and_reload(self, doc_to_save, target_page: int | None = None, selected_pages: list[int] | None = None, scroll_to_target: bool = False):
         """Persist modifications to a temporary pipeline file and reload live viewer without modifying original on disk."""
         try:
             win = self.window()
@@ -231,10 +231,11 @@ class PanelHistoryMixin:
                     "temp_path": temp_path,
                 }
 
+            reload_scroll = -1 if scroll_to_target else scroll_val
             self.load(
                 temp_path,
                 target_page=viewed_page,
-                target_scroll=scroll_val,
+                target_scroll=reload_scroll,
                 selected_pages=selected_pages,
                 active_sidebar_tab=current_tab_widget,
                 _is_history_step=True,
@@ -248,7 +249,7 @@ class PanelHistoryMixin:
                         win._tab_bar.setTabToolTip(idx, f"{orig_path} (modified)")
                         break
 
-            if thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
+            if not scroll_to_target and thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
                 sb = self._thumbnails._view.verticalScrollBar()
                 if sb:
                     sb.setValue(min(thumb_scroll_val, sb.maximum()))
