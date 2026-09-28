@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class CanvasPainter:
-    """Renders pages, annotations, search highlights, selection rects, and crop overlays."""
+    """Renders pages, annotations, search highlights, selection rects, crop, and page numbers overlay."""
 
     @staticmethod
     def draw_crop_box(p: QPainter, zoom: float, px: int, py: int, pw: int, ph: int,
@@ -43,7 +43,7 @@ class CanvasPainter:
         p.drawLine(cx0, cy1, cx0 + k, cy1)
         p.drawLine(cx0, cy1, cx0, cy1 - k)
         p.drawLine(cx1, cy1, cx1 - k, cy1)
-        p.drawLine(cx1, cy1, cx1, cy1 - k)
+        p.drawLine(cx1, cy1, cx1 - k, cy1)
 
         z = zoom or 1.0
         pt_w = int(round((cx1 - cx0) / z))
@@ -192,3 +192,52 @@ class CanvasPainter:
                     cy1 = e.y_off + e.h - int(round(bot_m * z))
                     if cx1 > cx0 and cy1 > cy0:
                         cls.draw_crop_box(p, canvas._zoom, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
+
+        # Page numbers live preview
+        np = getattr(canvas, "_numbers_preview", None)
+        if np:
+            targets = np.get("targets", {})
+            pos_code = np.get("pos_code", "bc")
+            font_size = np.get("font_size", 10)
+            margin = max(18.0, (font_size + 8.0)) * z
+            screen_font_size = max(7, int(font_size * z))
+            font = QFont("Helvetica", screen_font_size)
+            font.setBold(True)
+            p.setFont(font)
+            fm = p.fontMetrics()
+
+            for i in range(first, last + 1):
+                if i not in targets:
+                    continue
+                label = targets[i]
+                e = canvas._entries[i]
+                x_page = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
+                tw = fm.horizontalAdvance(label)
+                th = fm.height()
+
+                if pos_code[0] == "t":  # top
+                    y_baseline = e.y_off + margin
+                else:                   # bottom
+                    y_baseline = e.y_off + e.h - margin
+
+                if pos_code[1] == "l":  # left
+                    x = x_page + margin
+                elif pos_code[1] == "c":# center
+                    x = x_page + (e.w - tw) / 2
+                else:                   # right
+                    x = x_page + e.w - margin - tw
+
+                badge_pad_x = 6
+                badge_pad_y = 3
+                badge_rect = QRect(int(x - badge_pad_x), int(y_baseline - th + badge_pad_y * 2),
+                                   int(tw + badge_pad_x * 2), int(th + badge_pad_y * 2))
+
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(20, 184, 166, 60))
+                p.drawRoundedRect(badge_rect, 4, 4)
+
+                p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                p.drawRoundedRect(badge_rect, 4, 4)
+
+                p.setPen(QColor(ACCENT))
+                p.drawText(int(x), int(y_baseline), label)

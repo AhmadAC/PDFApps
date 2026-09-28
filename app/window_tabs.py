@@ -15,6 +15,7 @@ from app.viewer.panel import PdfViewerPanel
 from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
 from app.tools.reorder import TabReordenar
+from app.tools.page_numbers import TabPageNumbers
 from app.editor.tab import TabEditar
 from app.nav_config import NAV_ITEMS
 
@@ -58,6 +59,9 @@ class WindowTabsMixin:
     def _reorder_tool_idx(self) -> int:
         return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabReordenar)
 
+    def _page_numbers_tool_idx(self) -> int:
+        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabPageNumbers)
+
     def _edit_tool_idx(self) -> int:
         return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabEditar)
 
@@ -69,6 +73,10 @@ class WindowTabsMixin:
 
     def _on_crops_changed(self, crops: dict):
         self._viewer.set_page_crops(crops)
+
+    def _on_numbers_preview_changed(self, preview_data: dict | None):
+        if self._current_tool == self._page_numbers_tool_idx():
+            self._viewer.set_numbers_preview(preview_data)
 
     def _on_order_changed(self, order: list[int]):
         self._viewer.set_page_order(order)
@@ -190,6 +198,7 @@ class WindowTabsMixin:
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
+            self._viewer.set_numbers_preview(None)
             self._viewer.set_page_crops({})
             self._viewer.set_page_order(None)
         elif self._current_tool == self._rotate_tool_idx():
@@ -200,6 +209,10 @@ class WindowTabsMixin:
             crop_w = self.stack.widget(self._crop_tool_idx())
             crop_w._emit_preview()
             self._viewer.set_page_crops(crop_w._applied_crops)
+        elif self._current_tool == self._page_numbers_tool_idx():
+            pn_w = self.stack.widget(self._page_numbers_tool_idx())
+            pn_w._emit_preview()
+            pn_w._update_undo_redo_state()
         elif self._current_tool == self._reorder_tool_idx():
             reorder_w = self.stack.widget(self._reorder_tool_idx())
             order = getattr(reorder_w, "get_order", lambda: [])()
@@ -211,6 +224,7 @@ class WindowTabsMixin:
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
+            self._viewer.set_numbers_preview(None)
             self._viewer.set_page_crops({})
             self._viewer.set_page_order(None)
         self._refresh_viewer_top_buttons()
@@ -364,4 +378,4 @@ class WindowTabsMixin:
             self.stack.setVisible(True)
             tool_w = min(600, max(320, getattr(self, "_saved_right_width", 400)))
             total = self._splitter.width()
-            self._splitter.setSizes([max(300, total - tool_w), tool_w])
+            self._splitter.setSizes([max(300, tool_w), tool_w])

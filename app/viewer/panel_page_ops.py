@@ -1,14 +1,211 @@
 # app/viewer/panel_page_ops.py
 """PDFApps – Multi-page operations, drag/drop reordering, and thumbnail action handlers."""
 import os
+import re
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+)
 import fitz
 
 from app.constants import DESKTOP
 from app.i18n import t
-from app.utils import show_error
 from app.pdf_io import atomic_pdf_write
+from app.utils import parse_pages, show_error
+
+
+class _PageTransitionsDialog(QDialog):
+    """Dialog to configure presentation page transitions and auto-advance timing."""
+
+    def __init__(self, parent, pages: list[int], total_pages: int, current_info: dict | None = None):
+        super().__init__(parent)
+        self.setWindowTitle(t("viewer.transitions", default="Page Transitions"))
+        self.setMinimumWidth(400)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+
+        # ── Group 1: Transition Effect ──
+        grp_effect = QGroupBox("Transition Effect")
+        form_effect = QFormLayout(grp_effect)
+        form_effect.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_effect.setSpacing(8)
+
+        self.cmb_effect = QComboBox()
+        self.effects = [
+            ("None (Remove transition)", "None"),
+            ("Split", "Split"),
+            ("Blinds", "Blinds"),
+            ("Box", "Box"),
+            ("Wipe", "Wipe"),
+            ("Dissolve", "Dissolve"),
+            ("Glitter", "Glitter"),
+            ("Push", "Push"),
+            ("Cover", "Cover"),
+            ("Uncover", "Uncover"),
+            ("Fade", "Fade"),
+        ]
+        for label, val in self.effects:
+            self.cmb_effect.addItem(label, val)
+        form_effect.addRow("Style:", self.cmb_effect)
+
+        self.spin_duration = QDoubleSpinBox()
+        self.spin_duration.setRange(0.1, 10.0)
+        self.spin_duration.setSingleStep(0.5)
+        self.spin_duration.setValue(1.0)
+        self.spin_duration.setSuffix(" s")
+        form_effect.addRow("Duration:", self.spin_duration)
+
+        self.cmb_direction = QComboBox()
+        self.directions = [
+            ("Left to Right (0°)", 0),
+            ("Bottom to Top (90°)", 90),
+            ("Right to Left (180°)", 180),
+            ("Top to Bottom (270°)", 270),
+        ]
+        for label, val in self.directions:
+            self.cmb_direction.addItem(label, val)
+        form_effect.addRow("Direction:", self.cmb_direction)
+
+        self.cmb_dimension = QComboBox()
+        self.cmb_dimension.addItem("Horizontal", "H")
+        self.cmb_dimension.addItem("Vertical", "V")
+        form_effect.addRow("Dimension:", self.cmb_dimension)
+
+        self.cmb_motion = QComboBox()
+        self.cmb_motion.addItem("Inward", "I")
+        self.cmb_motion.addItem("Outward", "O")
+        form_effect.addRow("Motion:", self.cmb_motion)
+
+        layout.addWidget(grp_effect)
+
+        # ── Group 2: Auto-Advance / Timing ──
+        grp_timing = QGroupBox("Auto-Advance & Duration")
+        form_timing = QFormLayout(grp_timing)
+        form_timing.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form_timing.setSpacing(8)
+
+        self.chk_auto_advance = QCheckBox("Auto-advance to next page after:")
+        self.spin_advance_seconds = QSpinBox()
+        self.spin_advance_seconds.setRange(1, 3600)
+        self.spin_advance_seconds.setValue(5)
+        self.spin_advance_seconds.setSuffix(" s")
+        self.spin_advance_seconds.setEnabled(False)
+        self.chk_auto_advance.toggled.connect(self.spin_advance_seconds.setEnabled)
+
+        form_timing.addRow(self.chk_auto_advance, self.spin_advance_seconds)
+        layout.addWidget(grp_timing)
+
+        # ── Group 3: Page Range ──
+        grp_range = QGroupBox("Page Range")
+        v_range = QVBoxLayout(grp_range)
+        v_range.setSpacing(6)
+
+        self.cmb_range = QComboBox()
+        sel_str = ", ".join(str(p + 1) for p in pages) if pages else "1"
+        if len(pages) > 5:
+            sel_str = f"{len(pages)} pages"
+        self.cmb_range.addItem(f"Selected page(s) ({sel_str})", "selected")
+        self.cmb_range.addItem(f"All pages in document (1-{total_pages})", "all")
+        self.cmb_range.addItem("Custom range:", "custom")
+
+        range_row = QHBoxLayout()
+        self.edit_custom = QLineEdit()
+        self.edit_custom.setPlaceholderText("e.g. 1-3, 5")
+        self.edit_custom.setEnabled(False)
+        if pages:
+            self.edit_custom.setText(",".join(str(p + 1) for p in pages))
+        range_row.addWidget(self.cmb_range)
+        range_row.addWidget(self.edit_custom)
+        v_range.addLayout(range_row)
+
+        self.cmb_range.currentIndexChanged.connect(
+            lambda idx: self.edit_custom.setEnabled(self.cmb_range.currentData() == "custom")
+        )
+        layout.addWidget(grp_range)
+
+        # ── Buttons ──
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
+        btn_box.addStretch()
+
+        self.btn_cancel = QPushButton(t("btn.cancel"))
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(self.btn_cancel)
+
+        self.btn_ok = QPushButton(t("btn.ok"))
+        self.btn_ok.setObjectName("btn_primary")
+        self.btn_ok.clicked.connect(self.accept)
+        btn_box.addWidget(self.btn_ok)
+
+        layout.addLayout(btn_box)
+
+        self.cmb_effect.currentIndexChanged.connect(self._update_effect_fields)
+        self._update_effect_fields()
+
+        if current_info:
+            eff = current_info.get("effect", "None")
+            for idx in range(self.cmb_effect.count()):
+                if self.cmb_effect.itemData(idx) == eff:
+                    self.cmb_effect.setCurrentIndex(idx)
+                    break
+            self.spin_duration.setValue(current_info.get("duration", 1.0))
+            di = current_info.get("direction", 0)
+            for idx in range(self.cmb_direction.count()):
+                if self.cmb_direction.itemData(idx) == di:
+                    self.cmb_direction.setCurrentIndex(idx)
+                    break
+            dm = current_info.get("dimension", "H")
+            for idx in range(self.cmb_dimension.count()):
+                if self.cmb_dimension.itemData(idx) == dm:
+                    self.cmb_dimension.setCurrentIndex(idx)
+                    break
+            m = current_info.get("motion", "I")
+            for idx in range(self.cmb_motion.count()):
+                if self.cmb_motion.itemData(idx) == m:
+                    self.cmb_motion.setCurrentIndex(idx)
+                    break
+            adv = current_info.get("auto_advance")
+            if adv is not None and adv > 0:
+                self.chk_auto_advance.setChecked(True)
+                self.spin_advance_seconds.setValue(int(round(adv)))
+
+    def _update_effect_fields(self):
+        eff = self.cmb_effect.currentData()
+        is_none = (eff == "None")
+        self.spin_duration.setEnabled(not is_none)
+        self.cmb_direction.setEnabled(eff in ("Wipe", "Glitter", "Push", "Cover", "Uncover"))
+        self.cmb_dimension.setEnabled(eff in ("Split", "Blinds"))
+        self.cmb_motion.setEnabled(eff in ("Split", "Box"))
+
+    def get_settings(self) -> dict:
+        return {
+            "effect": self.cmb_effect.currentData(),
+            "duration": self.spin_duration.value(),
+            "direction": self.cmb_direction.currentData(),
+            "dimension": self.cmb_dimension.currentData(),
+            "motion": self.cmb_motion.currentData(),
+            "auto_advance": self.spin_advance_seconds.value() if self.chk_auto_advance.isChecked() else None,
+            "range_type": self.cmb_range.currentData(),
+            "custom_range": self.edit_custom.text().strip(),
+        }
 
 
 class PanelPageOpsMixin:
@@ -71,6 +268,12 @@ class PanelPageOpsMixin:
             self._trigger_page_numbers_tool(pages)
         elif action == "split":
             self._trigger_split_tool()
+        elif action == "transitions":
+            self._page_transitions_dialog(pages)
+        elif action == "embed_thumbnails":
+            self._embed_all_thumbnails()
+        elif action == "remove_thumbnails":
+            self._remove_all_thumbnails()
         elif action == "print":
             self._print_pdf(pages)
         elif action == "properties":
@@ -79,6 +282,142 @@ class PanelPageOpsMixin:
             self._copy_page_content(pages)
         elif action == "paste":
             self._paste_page_content(pages[0])
+
+    @staticmethod
+    def _get_page_transition_info(doc, page_idx: int) -> dict:
+        info = {
+            "effect": "None",
+            "duration": 1.0,
+            "direction": 0,
+            "dimension": "H",
+            "motion": "I",
+            "auto_advance": None,
+        }
+        if 0 <= page_idx < doc.page_count:
+            page = doc[page_idx]
+            try:
+                dur_val = doc.xref_get_key(page.xref, "Dur")
+                if dur_val and dur_val[0] != "null":
+                    info["auto_advance"] = float(dur_val[1].strip())
+            except Exception:
+                pass
+            try:
+                trans_val = doc.xref_get_key(page.xref, "Trans")
+                if trans_val and trans_val[0] != "null":
+                    raw = trans_val[1]
+                    m_s = re.search(r"/S\s+/([A-Za-z]+)", raw)
+                    if m_s:
+                        info["effect"] = m_s.group(1)
+                    m_d = re.search(r"/D\s+([\d\.]+)", raw)
+                    if m_d:
+                        info["duration"] = float(m_d.group(1))
+                    m_di = re.search(r"/Di\s+(\d+)", raw)
+                    if m_di:
+                        info["direction"] = int(m_di.group(1))
+                    m_dm = re.search(r"/Dm\s+/([A-Za-z]+)", raw)
+                    if m_dm:
+                        info["dimension"] = m_dm.group(1).upper()
+                    m_m = re.search(r"/M\s+/([A-Za-z]+)", raw)
+                    if m_m:
+                        info["motion"] = m_m.group(1).upper()
+            except Exception:
+                pass
+        return info
+
+    def _page_transitions_dialog(self, pages: list[int]) -> None:
+        if not self._fitz_doc or not self._current_path:
+            return
+        total = self._fitz_doc.page_count
+        if total <= 0:
+            return
+
+        ref_page = pages[0] if pages else 0
+        current_info = self._get_page_transition_info(self._fitz_doc, ref_page)
+
+        dlg = _PageTransitionsDialog(self, pages, total, current_info)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        settings = dlg.get_settings()
+        range_type = settings["range_type"]
+        if range_type == "selected":
+            target_pages = [p for p in pages if 0 <= p < total]
+        elif range_type == "all":
+            target_pages = list(range(total))
+        else:
+            try:
+                target_pages = parse_pages(settings["custom_range"], total)
+            except ValueError as ex:
+                QMessageBox.warning(self, t("msg.warning"), str(ex))
+                return
+
+        if not target_pages:
+            QMessageBox.warning(self, t("msg.warning"), "No pages selected for transition.")
+            return
+
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+
+            effect = settings["effect"]
+            duration = settings["duration"]
+            direction = settings["direction"]
+            dimension = settings["dimension"]
+            motion = settings["motion"]
+            auto_advance = settings["auto_advance"]
+
+            for p_idx in target_pages:
+                if 0 <= p_idx < doc.page_count:
+                    page = doc[p_idx]
+                    if effect == "None":
+                        doc.xref_set_key(page.xref, "Trans", "null")
+                    else:
+                        parts = ["/Type /Trans", f"/S /{effect}", f"/D {duration:g}"]
+                        if effect in ("Split", "Blinds"):
+                            parts.append(f"/Dm /{dimension}")
+                        if effect in ("Split", "Box"):
+                            parts.append(f"/M /{motion}")
+                        if effect in ("Wipe", "Glitter", "Push", "Cover", "Uncover"):
+                            parts.append(f"/Di {direction}")
+                        trans_dict = "<< " + " ".join(parts) + " >>"
+                        doc.xref_set_key(page.xref, "Trans", trans_dict)
+
+                    if auto_advance is not None and auto_advance > 0:
+                        doc.xref_set_key(page.xref, "Dur", f"{auto_advance:g}")
+                    else:
+                        doc.xref_set_key(page.xref, "Dur", "null")
+
+            self._save_and_reload(doc, target_page=target_pages[0], selected_pages=target_pages)
+            win = self.window()
+            if hasattr(win, "_set_status"):
+                desc = "removed" if effect == "None" else f"'{effect}'"
+                win._set_status(f"✔ Page transition {desc} applied to {len(target_pages)} page(s)")
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _remove_all_thumbnails(self) -> None:
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            doc.scrub(thumbnails=True)
+            for page in doc:
+                doc.xref_set_key(page.xref, "Thumb", "null")
+            self._save_and_reload(doc)
+            win = self.window()
+            if hasattr(win, "_set_status"):
+                win._set_status("✔ Removed embedded page thumbnails")
+            QMessageBox.information(self, t("msg.done"), "Removed all embedded page thumbnails.")
+        except Exception as exc:
+            show_error(self, exc)
+
+    def _embed_all_thumbnails(self) -> None:
+        QMessageBox.information(
+            self,
+            t("msg.info"),
+            "PDFApps renders page thumbnails dynamically on the fly without increasing the PDF file size. Embedded thumbnail streams are an obsolete legacy feature not needed for modern viewers.",
+        )
 
     def _rotate_pages(self, pages: list[int], delta: int) -> None:
         try:

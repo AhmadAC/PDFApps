@@ -1,15 +1,15 @@
 # app/window_pipeline.py
 """PDFApps – Pipeline processing, state saving, and security wiping mixin."""
 import contextlib
+import logging
 import os
 import shutil
 import tempfile
-import logging
 
 from PySide6.QtWidgets import QFileDialog
 
-from app.i18n import t
 from app.base import BasePage
+from app.i18n import t
 
 
 class WindowPipelineMixin:
@@ -19,13 +19,16 @@ class WindowPipelineMixin:
         edit_idx = self._edit_tool_idx()
         crop_idx = self._crop_tool_idx()
         rotate_idx = self._rotate_tool_idx()
-        
+        page_numbers_idx = self._page_numbers_tool_idx()
+
         if self._current_tool == edit_idx:
             self.stack.widget(edit_idx)._undo()
         elif self._current_tool == crop_idx:
             self.stack.widget(crop_idx)._undo()
         elif self._current_tool == rotate_idx:
             self.stack.widget(rotate_idx)._undo()
+        elif self._current_tool == page_numbers_idx:
+            self.stack.widget(page_numbers_idx)._undo()
         elif self._current_tool == -1:
             self._viewer.undo()
 
@@ -33,13 +36,16 @@ class WindowPipelineMixin:
         edit_idx = self._edit_tool_idx()
         crop_idx = self._crop_tool_idx()
         rotate_idx = self._rotate_tool_idx()
-        
+        page_numbers_idx = self._page_numbers_tool_idx()
+
         if self._current_tool == edit_idx:
             self.stack.widget(edit_idx)._redo()
         elif self._current_tool == crop_idx:
             self.stack.widget(crop_idx)._redo()
         elif self._current_tool == rotate_idx:
             self.stack.widget(rotate_idx)._redo()
+        elif self._current_tool == page_numbers_idx:
+            self.stack.widget(page_numbers_idx)._redo()
         elif self._current_tool == -1:
             self._viewer.redo()
 

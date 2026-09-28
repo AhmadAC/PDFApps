@@ -1,10 +1,11 @@
-"""PDFApps – Presentation mode: fullscreen single-page viewer."""
+"""PDFApps – Presentation mode: fullscreen single-page viewer with page transitions and auto-advance."""
 
 import contextlib
 import logging
+import re
 import time
 
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from shiboken6 import isValid
@@ -30,7 +31,7 @@ _PALETTE_HOTKEYS = {
 
 class PresentationWidget(QWidget):
     """Fullscreen single-page PDF viewer with keyboard navigation, zoom controls,
-    and a PowerPoint/Edge-style annotation HUD (pen / highlighter / eraser / type / laser).
+    smooth page transitions, auto-advance (/Dur), and a PowerPoint/Edge-style annotation HUD.
     Annotations are session-scoped — kept per page while the window lives,
     discarded on close."""
 
@@ -42,6 +43,7 @@ class PresentationWidget(QWidget):
         self._current = start_page
         self._total = total_pages
         self._pixmap = None
+        self._prev_pixmap = None
         self._ready = False
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
@@ -53,6 +55,20 @@ class PresentationWidget(QWidget):
         self._is_panning = False
         self._pan_start_pos = QPoint()
         self._pan_start_offset = QPoint()
+
+        # Transitions state
+        self._trans_style = None
+        self._trans_progress = 1.0
+        self._trans_step = 0.05
+        self._trans_direction = 0
+        self._trans_timer = QTimer(self)
+        self._trans_timer.setInterval(25)
+        self._trans_timer.timeout.connect(self._on_trans_tick)
+
+        # Auto-advance (/Dur) timer
+        self._auto_advance_timer = QTimer(self)
+        self._auto_advance_timer.setSingleShot(True)
+        self._auto_advance_timer.timeout.connect(self._on_auto_advance)
 
         import fitz
         self._doc = fitz.open(self._path)
@@ -99,7 +115,7 @@ class PresentationWidget(QWidget):
         self.setWindowState(Qt.WindowState.WindowFullScreen)
 
         self._ready = True
-        QTimer.singleShot(0, self._render)
+        QTimer.singleShot(0, lambda: self._render(transition=False))
 
     def update_theme(self, dark: bool) -> None:
         self._dark_mode = bool(dark)
@@ -112,30 +128,27 @@ class PresentationWidget(QWidget):
 
     def _zoom_in(self):
         self._zoom_factor = min(5.0, round(self._zoom_factor * 1.25, 3))
-        self._render()
+        self._render(transition=False)
 
     def _zoom_out(self):
         self._zoom_factor = max(0.4, round(self._zoom_factor / 1.25, 3))
         if self._zoom_factor <= 1.0:
             self._pan_x = 0
             self._pan_y = 0
-        self._render()
+        self._render(transition=False)
 
     def _zoom_reset(self):
         self._zoom_factor = 1.0
         self._pan_x = 0
         self._pan_y = 0
-        self._render()
+        self._render(transition=False)
 
     def _scroll_page(self, up: bool, amount: float = 80.0):
-        """Scroll the current presented page up or down without changing pages."""
         if not self._pixmap:
             return
         dpr = self._pixmap.devicePixelRatio() or 1.0
         ph = self._pixmap.height() / dpr
         sh = float(self.height())
-
-        # Allow generous scrolling range based on page dimensions
         max_pan = max(0.0, (ph - sh) / 2.0) + (sh * 0.35 if ph > sh else sh * 0.45)
 
         if up:
@@ -154,7 +167,6 @@ class PresentationWidget(QWidget):
             e.accept()
             return
         else:
-            # Mouse wheel without Ctrl scrolls the current page up and down
             delta = e.angleDelta().y()
             if delta > 0:
                 self._scroll_page(up=True, amount=abs(delta) * 0.6)
@@ -163,8 +175,31 @@ class PresentationWidget(QWidget):
             e.accept()
             return
 
-    def _render(self):
+    def _go_to_page(self, new_page: int):
+        if new_page == self._current or not (0 <= new_page < self._total):
+            return
+        self._prev_pixmap = self._pixmap
+        self._current = new_page
+        self._pan_x = 0
+        self._pan_y = 0
+        self._render(transition=True)
+
+    def _on_auto_advance(self):
+        if self._current < self._total - 1:
+            self._go_to_page(self._current + 1)
+
+    def _on_trans_tick(self):
+        self._trans_progress += self._trans_step
+        if self._trans_progress >= 1.0:
+            self._trans_progress = 1.0
+            self._trans_timer.stop()
+            self._prev_pixmap = None
+        self.update()
+
+    def _render(self, transition: bool = False):
         import fitz
+        self._auto_advance_timer.stop()
+
         try:
             if self._doc is None:
                 self._pixmap = None
@@ -182,6 +217,48 @@ class PresentationWidget(QWidget):
             qp.loadFromData(pix.tobytes("png"))
             qp.setDevicePixelRatio(dpr)
             self._pixmap = qp
+
+            # Check /Dur for auto-advance
+            val_dur = self._doc.xref_get_key(page.xref, "Dur")
+            if val_dur and val_dur[0] != "null":
+                try:
+                    dur_s = float(val_dur[1].strip())
+                    if dur_s > 0:
+                        self._auto_advance_timer.start(int(dur_s * 1000))
+                except ValueError:
+                    pass
+
+            # Check /Trans for transition animation
+            if transition and self._prev_pixmap is not None:
+                trans_val = self._doc.xref_get_key(page.xref, "Trans")
+                trans_style = None
+                trans_dur = 0.6
+                direction = 0
+                if trans_val and trans_val[0] != "null":
+                    raw = trans_val[1]
+                    m_s = re.search(r"/S\s+/([A-Za-z]+)", raw)
+                    if m_s:
+                        trans_style = m_s.group(1)
+                    m_d = re.search(r"/D\s+([\d\.]+)", raw)
+                    if m_d:
+                        trans_dur = min(2.5, max(0.1, float(m_d.group(1))))
+                    m_di = re.search(r"/Di\s+(\d+)", raw)
+                    if m_di:
+                        direction = int(m_di.group(1))
+
+                if trans_style and trans_style != "None":
+                    self._trans_style = trans_style
+                    self._trans_direction = direction
+                    self._trans_progress = 0.0
+                    frames = max(10, int(trans_dur * 40.0))
+                    self._trans_step = 1.0 / frames
+                    self._trans_timer.start(25)
+                else:
+                    self._prev_pixmap = None
+                    self._trans_progress = 1.0
+            else:
+                self._prev_pixmap = None
+                self._trans_progress = 1.0
         except Exception:
             _log.exception("presentation _render failed")
             self._pixmap = None
@@ -258,20 +335,93 @@ class PresentationWidget(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("#000000"))
+
         if self._pixmap:
             dpr = self._pixmap.devicePixelRatio() or 1.0
             pw = self._pixmap.width() / dpr
             ph = self._pixmap.height() / dpr
             x = (self.width() - pw) / 2 + self._pan_x
             y = (self.height() - ph) / 2 + self._pan_y
-            p.drawPixmap(int(x), int(y), self._pixmap)
+
+            t = self._trans_progress
+            if self._prev_pixmap is not None and t < 1.0 and self._trans_style:
+                old_dpr = self._prev_pixmap.devicePixelRatio() or 1.0
+                old_w = self._prev_pixmap.width() / old_dpr
+                old_h = self._prev_pixmap.height() / old_dpr
+                old_x = (self.width() - old_w) / 2
+                old_y = (self.height() - old_h) / 2
+
+                style = self._trans_style
+                if style == "Push":
+                    di = self._trans_direction
+                    if di == 90:    # bottom to top
+                        dy = int(self.height() * t)
+                        p.drawPixmap(int(old_x), int(old_y - dy), self._prev_pixmap)
+                        p.drawPixmap(int(x), int(y + self.height() - dy), self._pixmap)
+                    elif di == 180: # right to left
+                        dx = int(self.width() * t)
+                        p.drawPixmap(int(old_x + dx), int(old_y), self._prev_pixmap)
+                        p.drawPixmap(int(x - self.width() + dx), int(y), self._pixmap)
+                    elif di == 270: # top to bottom
+                        dy = int(self.height() * t)
+                        p.drawPixmap(int(old_x), int(old_y + dy), self._prev_pixmap)
+                        p.drawPixmap(int(x), int(y - self.height() + dy), self._pixmap)
+                    else:           # left to right (0)
+                        dx = int(self.width() * t)
+                        p.drawPixmap(int(old_x - dx), int(old_y), self._prev_pixmap)
+                        p.drawPixmap(int(x + self.width() - dx), int(y), self._pixmap)
+
+                elif style in ("Wipe", "Cover"):
+                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    di = self._trans_direction
+                    p.save()
+                    if di == 90:
+                        split_y = int(self.height() * (1.0 - t))
+                        p.setClipRect(QRect(0, split_y, self.width(), self.height() - split_y))
+                    elif di == 180:
+                        split_x = int(self.width() * (1.0 - t))
+                        p.setClipRect(QRect(split_x, 0, self.width() - split_x, self.height()))
+                    elif di == 270:
+                        split_y = int(self.height() * t)
+                        p.setClipRect(QRect(0, 0, self.width(), split_y))
+                    else:
+                        split_x = int(self.width() * t)
+                        p.setClipRect(QRect(0, 0, split_x, self.height()))
+                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.restore()
+
+                elif style in ("Fade", "Dissolve"):
+                    p.setOpacity(max(0.0, 1.0 - t))
+                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.setOpacity(min(1.0, t))
+                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.setOpacity(1.0)
+
+                elif style == "Box":
+                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    bw = int(self.width() * t)
+                    bh = int(self.height() * t)
+                    bx = (self.width() - bw) // 2
+                    by = (self.height() - bh) // 2
+                    p.save()
+                    p.setClipRect(QRect(bx, by, bw, bh))
+                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.restore()
+
+                else:
+                    p.setOpacity(max(0.0, 1.0 - t))
+                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.setOpacity(min(1.0, t))
+                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.setOpacity(1.0)
+            else:
+                p.drawPixmap(int(x), int(y), self._pixmap)
         p.end()
 
     def keyPressEvent(self, e):
         key = e.key()
         modifiers = e.modifiers()
 
-        # Zoom shortcuts with Ctrl (+, -, 0)
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
                 self._zoom_in()
@@ -286,14 +436,12 @@ class PresentationWidget(QWidget):
                 e.accept()
                 return
 
-        # If an active text box exists, forward editing keystrokes to it
         if self._overlay._active_box is not None:
             self._overlay.keyPressEvent(e)
             self._sync_hud_text_options()
             if e.isAccepted():
                 return
 
-        # Global Undo/Redo shortcuts (Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z)
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             if key == Qt.Key.Key_Z:
                 if modifiers & Qt.KeyboardModifier.ShiftModifier:
@@ -309,14 +457,12 @@ class PresentationWidget(QWidget):
                 e.accept()
                 return
 
-        # Skip tool hotkeys when Control/Alt/Meta modifiers are held
         if modifiers & (Qt.KeyboardModifier.ControlModifier
                         | Qt.KeyboardModifier.AltModifier
                         | Qt.KeyboardModifier.MetaModifier):
             super().keyPressEvent(e)
             return
 
-        # Tool hotkeys
         if key == Qt.Key.Key_P:
             self._on_tool_selected(int(ToolMode.PEN))
             return
@@ -344,7 +490,6 @@ class PresentationWidget(QWidget):
                 self._show_hud()
                 return
 
-        # Up and Down arrows scroll the current presented page without changing pages
         if key == Qt.Key.Key_Up:
             self._scroll_page(up=True)
             e.accept()
@@ -357,32 +502,17 @@ class PresentationWidget(QWidget):
         if key == Qt.Key.Key_Escape:
             self.close()
         elif key in (Qt.Key.Key_Right, Qt.Key.Key_Space, Qt.Key.Key_PageDown):
-            # Advance to next page (maintains current zoom factor)
             if self._current < self._total - 1:
-                self._current += 1
-                self._pan_x = 0
-                self._pan_y = 0
-                self._render()
+                self._go_to_page(self._current + 1)
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
-            # Return to previous page (maintains current zoom factor)
             if self._current > 0:
-                self._current -= 1
-                self._pan_x = 0
-                self._pan_y = 0
-                self._render()
+                self._go_to_page(self._current - 1)
         elif key == Qt.Key.Key_Home:
-            self._current = 0
-            self._pan_x = 0
-            self._pan_y = 0
-            self._render()
+            self._go_to_page(0)
         elif key == Qt.Key.Key_End:
-            self._current = self._total - 1
-            self._pan_x = 0
-            self._pan_y = 0
-            self._render()
+            self._go_to_page(self._total - 1)
 
     def mousePressEvent(self, e):
-        # Pan with MiddleButton or with LeftButton when in Pointer mode and zoomed in
         if (e.button() == Qt.MouseButton.MiddleButton or
                 (e.button() == Qt.MouseButton.LeftButton and
                  self._overlay.tool() == int(ToolMode.POINTER) and self._zoom_factor > 1.0)):
@@ -427,13 +557,17 @@ class PresentationWidget(QWidget):
         if isValid(self._hud):
             self._hud.reposition()
         self._update_counter()
-        QTimer.singleShot(0, self._render)
+        QTimer.singleShot(0, lambda: self._render(transition=False))
 
     def closeEvent(self, event):
         if isValid(self._overlay):
             self._overlay.clear_all(record_undo=False)
-        for tmr in (getattr(self, "_hide_timer", None),
-                    getattr(self, "_hud_hide_timer", None)):
+        for tmr in (
+            getattr(self, "_hide_timer", None),
+            getattr(self, "_hud_hide_timer", None),
+            getattr(self, "_auto_advance_timer", None),
+            getattr(self, "_trans_timer", None),
+        ):
             if tmr is not None and isValid(tmr):
                 tmr.stop()
         if self._doc is not None:

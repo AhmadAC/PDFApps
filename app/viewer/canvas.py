@@ -55,6 +55,8 @@ class _SelectCanvas(QWidget):
         self._crop_drag_cur: QPoint | None = None
         self._crop_active_page = -1
 
+        self._numbers_preview: dict | None = None
+
         self._signals     = _RenderSignals()
         self._signals.page_ready.connect(self._on_page_ready)
         self._pool        = QThreadPool()
@@ -88,6 +90,7 @@ class _SelectCanvas(QWidget):
         self._page_order = None
         self._crop_mode = False
         self._crop_preview = None
+        self._numbers_preview = None
         self._gen     += 1
         self._pending.clear()
         self._interaction.clear_selection()
@@ -115,6 +118,10 @@ class _SelectCanvas(QWidget):
 
     def set_crop_preview(self, crop_data: dict | None):
         self._crop_preview = crop_data
+        self.update()
+
+    def set_numbers_preview(self, preview_data: dict | None):
+        self._numbers_preview = preview_data
         self.update()
 
     def on_scroll(self):
@@ -167,6 +174,7 @@ class _SelectCanvas(QWidget):
         self._page_order = None
         self._crop_mode = False
         self._crop_preview = None
+        self._numbers_preview = None
         if self._doc is not None:
             with contextlib.suppress(ValueError):
                 self._doc.close()
@@ -219,7 +227,7 @@ class _SelectCanvas(QWidget):
     def _clear_selection(self):
         self._interaction.clear_selection()
 
-    def _page_word_to_screen(self, y_off: int, x0, y0, x1, y1) -> QRect:
+    def _page_word_to_screen(self, y_off: int, x0: float, y0: float, x1: float, y1: float) -> QRect:
         return self._interaction.page_word_to_screen(y_off, x0, y0, x1, y1)
 
     def _find_closest_word(self, pos: QPoint) -> tuple[int, int]:

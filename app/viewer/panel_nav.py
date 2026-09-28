@@ -54,6 +54,11 @@ class PanelNavMixin:
         if hasattr(self, "_canvas"):
             self._canvas.set_crop_preview(crop_data)
 
+    def set_numbers_preview(self, preview_data: dict | None):
+        """Update live preview for page numbers on the continuous scroll canvas."""
+        if hasattr(self, "_canvas"):
+            self._canvas.set_numbers_preview(preview_data)
+
     def set_page_rotations(self, rotations: dict[int, int]):
         """Update live preview rotations across continuous scroll and thumbnail sidebar."""
         if hasattr(self, "_canvas"):
@@ -305,6 +310,7 @@ class PanelNavMixin:
         self._reset_search_state()
         self.set_crop_mode(False)
         self.set_crop_preview(None)
+        self.set_numbers_preview(None)
         self.set_page_crops({})
         self.set_page_order(None)
         self._placeholder.setVisible(True)
@@ -391,6 +397,7 @@ class PanelNavMixin:
         self._fitz_doc = doc
         self.set_page_rotations({})
         self.set_crop_preview(None)
+        self.set_numbers_preview(None)
         self.set_page_crops({})
         self.set_page_order(None)
         self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)

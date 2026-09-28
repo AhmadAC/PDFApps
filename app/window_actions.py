@@ -117,6 +117,7 @@ class WindowActionsMixin:
         rotate_idx = self._rotate_tool_idx()
         crop_idx = self._crop_tool_idx()
         reorder_idx = self._reorder_tool_idx()
+        page_numbers_idx = self._page_numbers_tool_idx()
 
         if row == self._current_tool:
             self.nav.clearSelection()
@@ -146,6 +147,7 @@ class WindowActionsMixin:
             self._viewer.set_page_rotations({})
             self._viewer.set_crop_mode(False)
             self._viewer.set_crop_preview(None)
+            self._viewer.set_numbers_preview(None)
             self._viewer.set_page_crops({})
             self._viewer.set_page_order(None)
         else:
@@ -185,6 +187,7 @@ class WindowActionsMixin:
                 self._viewer.set_page_rotations({})
                 self._viewer.set_crop_mode(False)
                 self._viewer.set_crop_preview(None)
+                self._viewer.set_numbers_preview(None)
                 self._viewer.set_page_crops({})
                 self._viewer.set_page_order(None)
             else:
@@ -230,8 +233,28 @@ class WindowActionsMixin:
                     self._viewer.set_crop_mode(False)
                     self._viewer.set_crop_preview(None)
                     self._viewer.set_page_crops({})
-                    self._undo_top_btn.setVisible(False)
-                    self._redo_top_btn.setVisible(False)
+
+                if row == page_numbers_idx:
+                    pn_w = self.stack.widget(page_numbers_idx)
+                    pn_w._emit_preview()
+                    pn_w._update_undo_redo_state()
+                    self._undo_top_btn.setVisible(True)
+                    self._redo_top_btn.setVisible(True)
+                    prev = getattr(self, "_undo_redo_handlers", None)
+                    if prev is not None:
+                        try:
+                            self._undo_top_btn.clicked.disconnect(prev[0])
+                        except (RuntimeError, TypeError):
+                            pass
+                        try:
+                            self._redo_top_btn.clicked.disconnect(prev[1])
+                        except (RuntimeError, TypeError):
+                            pass
+                    self._undo_top_btn.clicked.connect(pn_w._undo)
+                    self._redo_top_btn.clicked.connect(pn_w._redo)
+                    self._undo_redo_handlers = (pn_w._undo, pn_w._redo)
+                else:
+                    self._viewer.set_numbers_preview(None)
 
                 if row == reorder_idx:
                     reorder_w = self.stack.widget(reorder_idx)
@@ -240,6 +263,10 @@ class WindowActionsMixin:
                         self._viewer.set_page_order(order)
                 else:
                     self._viewer.set_page_order(None)
+
+                if row not in (crop_idx, page_numbers_idx):
+                    self._undo_top_btn.setVisible(False)
+                    self._redo_top_btn.setVisible(False)
 
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)

@@ -30,6 +30,7 @@ from app.base import BasePage
 from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
 from app.tools.reorder import TabReordenar
+from app.tools.page_numbers import TabPageNumbers
 from app.editor.tab import TabEditar
 from app.workspace_bar import WorkspaceBar
 from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
@@ -384,6 +385,8 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
                 w.crop_mode_toggled.connect(self._on_crop_mode_toggled)
             if isinstance(w, TabReordenar):
                 w.order_changed.connect(self._on_order_changed)
+            if isinstance(w, TabPageNumbers):
+                w.numbers_preview_changed.connect(self._on_numbers_preview_changed)
 
         self._pipeline_state: dict[int, dict] = {}
 
@@ -460,4 +463,3 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         except Exception:
             pass
         super().closeEvent(event)
-
