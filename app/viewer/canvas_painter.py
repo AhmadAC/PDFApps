@@ -1,8 +1,11 @@
-"""PDFApps – Painting subsystem for _SelectCanvas."""
+
+# app/viewer/canvas_painter.py
+
+"""PDFApps – Painting subsystem for _SelectCanvas (Pages, Notes, Crops, Signatures)."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 
 from app.constants import ACCENT, TEXT_SEC
@@ -14,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class CanvasPainter:
-    """Renders pages, annotations, search highlights, selection rects, crop, and page numbers overlay."""
+    """Renders pages, annotations, search highlights, selection rects, crop, page numbers, and signatures."""
 
     @staticmethod
     def draw_crop_box(p: QPainter, zoom: float, px: int, py: int, pw: int, ph: int,
@@ -94,6 +97,61 @@ class CanvasPainter:
             p.setPen(QPen(QColor("#151515"), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(x, e.y_off, e.w - 1, e.h - 1)
+
+        # ── Placed Active Signature with Resize Handles ────────────────
+        if canvas._active_sig:
+            sig = canvas._active_sig
+            pg = sig.get("page", 0)
+            if first <= pg <= last:
+                entry = canvas._entries[pg]
+                x_off = (max(canvas.width(), entry.w) - entry.w) // 2 if canvas.width() > entry.w else 0
+                z = canvas._zoom
+                r = sig["rect"]
+                sx0 = x_off + int(r.x0 * z)
+                sy0 = entry.y_off + int(r.y0 * z)
+                sw = max(1, int(r.width * z))
+                sh = max(1, int(r.height * z))
+                sig_rect = QRect(sx0, sy0, sw, sh)
+
+                pix = sig.get("pixmap")
+                if pix and not pix.isNull():
+                    p.drawPixmap(sig_rect, pix)
+
+                p.setPen(QPen(QColor(ACCENT), 2, Qt.PenStyle.DashLine))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(sig_rect)
+
+                hs = 8
+                handle_color = QColor("#FFFFFF")
+                border_color = QColor(ACCENT)
+                p.setBrush(handle_color)
+                p.setPen(QPen(border_color, 1.5))
+                for pt in [
+                    QPoint(sx0, sy0),
+                    QPoint(sx0 + sw, sy0),
+                    QPoint(sx0, sy0 + sh),
+                    QPoint(sx0 + sw, sy0 + sh),
+                ]:
+                    p.drawRect(QRect(pt.x() - hs // 2, pt.y() - hs // 2, hs, hs))
+
+        # ── Floating Signature Following Cursor ────────────────────────
+        if canvas._placing_signature and canvas._sig_cursor_pos and canvas._placing_sig_pixmap:
+            pos = canvas._sig_cursor_pos
+            pix = canvas._placing_sig_pixmap
+            if not pix.isNull():
+                aspect = (pix.height() / pix.width()) if pix.width() > 0 else 0.35
+                z = canvas._zoom
+                pw = max(40, int(160 * z))
+                ph = max(20, int(pw * aspect))
+                preview_r = QRect(pos.x() - pw // 2, pos.y() - ph // 2, pw, ph)
+
+                p.save()
+                p.setOpacity(0.75)
+                p.drawPixmap(preview_r, pix)
+                p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(preview_r)
+                p.restore()
 
         # Note icons
         z = canvas._zoom
@@ -242,4 +300,3 @@ class CanvasPainter:
 
                 p.setPen(QColor(ACCENT))
                 p.drawText(int(x), int(y_baseline), label)
-

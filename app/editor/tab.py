@@ -1,3 +1,4 @@
+
 # app/editor/tab.py
 
 """PDFApps – TabEditar: visual PDF editor tool tab."""
@@ -26,7 +27,7 @@ from app.utils import (
 from app.i18n import t
 from app.widgets import DropFileEdit, ColorPickerButton, FocusSpinBox
 from app.editor.canvas import PdfEditCanvas, _get_icon_cursor
-from app.editor.dialogs import _NoteDialog
+from app.editor.dialogs import _NoteDialog, _SignatureDialog, load_signature_pixmap
 from app.editor.apply_edits import apply_pending_edits
 from app.pdf_io import atomic_pdf_write
 from app.pdf_password import authenticate_fitz, decrypt_pypdf
@@ -117,6 +118,9 @@ class TabEditar(QWidget):
         self._canvas.note_deleted.connect(self._on_note_deleted)
         self._canvas.text_edit_committed.connect(self._on_text_edit_committed)
         self._canvas.text_inserted.connect(self._on_text_edit_committed)
+        self._canvas.signature_added.connect(self._on_signature_added)
+        self._canvas.overlay_changed.connect(lambda: self.update())
+
         from app.constants import BG_INNER
         canvas_scroll = QScrollArea()
         canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -274,8 +278,8 @@ class TabEditar(QWidget):
         w7 = QWidget(); v7s = QVBoxLayout(w7); v7s.setContentsMargins(0,4,0,0); v7s.setSpacing(6)
         self._sig_preview = QLabel(t("edit.signature.none"))
         self._sig_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sig_preview.setMinimumHeight(50)
-        self._sig_preview.setStyleSheet("background: white; border: 1px solid #ccc; border-radius: 4px;")
+        self._sig_preview.setMinimumHeight(60)
+        self._sig_preview.setStyleSheet("background: white; border: 1.5px dashed #ccc; border-radius: 6px;")
         v7s.addWidget(self._sig_preview)
         self._sig_choose = QPushButton(t("edit.signature.choose"))
         self._sig_choose.setIcon(qta.icon("fa5s.signature", color=TEXT_PRI))
@@ -291,16 +295,14 @@ class TabEditar(QWidget):
         v7s.addWidget(hint7s); v7s.addStretch()
         self._opt_stack.addWidget(w7)
         self._signature_path = None
+
         from app.i18n import get_saved_signature
         saved = get_saved_signature()
         if saved:
             self._signature_path = saved
-            from PySide6.QtGui import QPixmap
-            pix = QPixmap(saved)
+            pix = load_signature_pixmap(saved, max_size=(200, 50))
             if not pix.isNull():
-                self._sig_preview.setPixmap(pix.scaled(
-                    200, 50, Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation))
+                self._sig_preview.setPixmap(pix)
 
         # 7 - Draw (freehand ink)
         w_draw = QWidget(); v_d = QVBoxLayout(w_draw); v_d.setContentsMargins(0,4,0,0); v_d.setSpacing(4)
@@ -543,6 +545,8 @@ class TabEditar(QWidget):
         elif idx == _MODE_SIGNATURE:
             if not self._signature_path or not os.path.isfile(self._signature_path):
                 self._pick_signature()
+            elif os.path.isfile(self._signature_path):
+                self._canvas.begin_signature_placement(self._signature_path)
 
     def _pick_pdf(self):
         p, _ = QFileDialog.getOpenFileName(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
@@ -557,7 +561,6 @@ class TabEditar(QWidget):
             else:
                 return
         try:
-            import fitz
             probe = fitz.open(p)
             needs_pass = bool(probe.needs_pass)
             if needs_pass and self._pdf_password:
@@ -607,7 +610,6 @@ class TabEditar(QWidget):
             if not doc:
                 self._status(t("edit.status.no_doc"))
                 return
-            import fitz
             count = 0
             total_annots = 0
             for page_idx in range(doc.page_count):
@@ -679,19 +681,17 @@ class TabEditar(QWidget):
             pass
 
     def _pick_signature(self):
-        from app.editor.dialogs import _SignatureDialog
         dlg = _SignatureDialog(self)
         if dlg.exec() == _SignatureDialog.DialogCode.Accepted:
-            path = dlg.result_path()
+            path = dlg.selected_signature_path()
             if path and os.path.isfile(path):
                 self._cleanup_signature_temp()
                 self._signature_path = path
-                from PySide6.QtGui import QPixmap
-                pix = QPixmap(path)
+                pix = load_signature_pixmap(path, max_size=(200, 50))
                 if not pix.isNull():
-                    self._sig_preview.setPixmap(pix.scaled(
-                        200, 50, Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation))
+                    self._sig_preview.setPixmap(pix)
+                self._canvas.begin_signature_placement(path)
+                self._status(t("edit.signature.place_hint"))
 
     def _clear_signature(self):
         from PySide6.QtGui import QPixmap
@@ -699,6 +699,7 @@ class TabEditar(QWidget):
         self._signature_path = None
         self._sig_preview.setText(t("edit.signature.none"))
         self._sig_preview.setPixmap(QPixmap())
+        self._canvas.cancel_signature_placement()
         from app.i18n import clear_saved_signature
         clear_saved_signature()
 
@@ -763,7 +764,6 @@ class TabEditar(QWidget):
                 self._status(t("edit.status.no_text_in_selection"))
             return
         if mode in (1, 4):
-            import fitz
             center = fitz.Point((pdf_rect.x0 + pdf_rect.x1) / 2,
                                 (pdf_rect.y0 + pdf_rect.y1) / 2)
             self._on_point(page_idx, center); return
@@ -793,7 +793,6 @@ class TabEditar(QWidget):
         self._update_nav()
         doc = self._canvas._doc
         if doc:
-            import fitz
             page = doc[page_idx]
             for annot in page.annots():
                 if annot.type[0] == fitz.PDF_ANNOT_TEXT:
@@ -805,7 +804,6 @@ class TabEditar(QWidget):
                             return
         mode = self._mode_idx
         if mode == 1:
-            import fitz
             hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=3.0)
             if hit:
                 self._canvas.begin_inline_text_edit(hit, page_idx)
@@ -840,6 +838,9 @@ class TabEditar(QWidget):
 
     def _on_text_edit_committed(self, page_idx, edit):
         self._add(edit)
+
+    def _on_signature_added(self, page_idx: int, rect, path: str):
+        self._add({"type": "signature", "page": page_idx, "rect": rect, "path": path})
 
     def _add(self, edit: dict, *, _from_redo: bool = False):
         if not _from_redo:
@@ -999,7 +1000,6 @@ class TabEditar(QWidget):
         if not self._user_pending:
             QMessageBox.warning(self, t("msg.warning"), t("msg.no_pending")); return
         try:
-            import fitz
             peek = fitz.open(self._doc_path)
             was_encrypted = bool(peek.needs_pass)
             if was_encrypted and self._pdf_password:
@@ -1135,4 +1135,3 @@ class TabEditar(QWidget):
             QMessageBox.information(self, t("msg.done"), t("msg.form_saved", path=out))
         except Exception as e:
             show_error(self, e)
-

@@ -1,14 +1,87 @@
 # app/viewer/panel_search_print.py
 """PDFApps – In-document text search and print dialog routines."""
-import os
+from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QApplication, QProgressDialog
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+import contextlib
+import os
+import threading
+
 import fitz
+from PySide6.QtCore import QRectF, Qt, QThread, Signal
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+from PySide6.QtWidgets import QProgressDialog
 
 from app.i18n import t
+from app.utils import show_error
+
+
+class _PrintPageWorker(QThread):
+    """Background worker thread that rasterizes PDF pages into QImages without blocking the GUI."""
+
+    page_rendered = Signal(int, int, QImage)  # step_idx, page_idx, QImage
+    render_error = Signal(str)
+    finished_all = Signal()
+
+    def __init__(self, doc_path: str, password: str, job_pages: list[int], target_dpi: int, parent=None):
+        super().__init__(parent)
+        self.doc_path = doc_path
+        self.password = password
+        self.job_pages = job_pages
+        self.target_dpi = target_dpi
+        self._is_cancelled = False
+        self._next_event = threading.Event()
+        self._next_event.set()
+
+    def cancel(self):
+        self._is_cancelled = True
+        self._next_event.set()
+
+    def continue_next(self):
+        self._next_event.set()
+
+    def run(self):
+        doc = None
+        try:
+            doc = fitz.open(self.doc_path)
+            if self.password and doc.needs_pass:
+                doc.authenticate(self.password)
+
+            zoom = self.target_dpi / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+
+            for step, page_idx in enumerate(self.job_pages, start=1):
+                if self._is_cancelled:
+                    break
+
+                self._next_event.wait()
+                if self._is_cancelled:
+                    break
+                self._next_event.clear()
+
+                if page_idx < 0 or page_idx >= doc.page_count:
+                    continue
+
+                page = doc[page_idx]
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                if pix.n != 3:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+
+                img = QImage(pix.samples, pix.width, pix.height,
+                             pix.stride, QImage.Format.Format_RGB888).copy()
+                pix = None
+
+                self.page_rendered.emit(step, page_idx, img)
+
+            if not self._is_cancelled:
+                self.finished_all.emit()
+        except Exception as exc:
+            if not self._is_cancelled:
+                self.render_error.emit(str(exc))
+        finally:
+            if doc is not None:
+                with contextlib.suppress(Exception):
+                    doc.close()
 
 
 class PanelSearchPrintMixin:
@@ -120,9 +193,33 @@ class PanelSearchPrintMixin:
         self._pending_search_query = ""
         self._close_search()
 
+    def _cancel_print_job(self):
+        """Clean up any active background print worker and finish painter."""
+        if getattr(self, "_print_in_progress", False):
+            if hasattr(self, "_print_worker") and self._print_worker is not None:
+                self._print_worker.cancel()
+                self._print_worker.wait(1500)
+                self._print_worker.deleteLater()
+                self._print_worker = None
+            if hasattr(self, "_print_painter") and self._print_painter is not None:
+                with contextlib.suppress(Exception):
+                    self._print_painter.end()
+                self._print_painter = None
+            if hasattr(self, "_print_progress") and self._print_progress is not None:
+                with contextlib.suppress(Exception):
+                    self._print_progress.close()
+                    self._print_progress.deleteLater()
+                self._print_progress = None
+            self._print_in_progress = False
+
     def _print_pdf(self, page_indices: list[int] | None = None):
+        if getattr(self, "_print_in_progress", False):
+            return
+
         doc = self._fitz_doc
         if doc is None or getattr(doc, "is_closed", False):
+            return
+        if not self._current_path or not os.path.isfile(self._current_path):
             return
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
@@ -133,11 +230,7 @@ class PanelSearchPrintMixin:
         if dlg.exec() != QPrintDialog.DialogCode.Accepted:
             return
 
-        painter = QPainter()
-        if not painter.begin(printer):
-            return
-
-        page_count = len(self._fitz_doc)
+        page_count = doc.page_count
         if page_indices is not None and len(page_indices) > 0:
             pages = [p for p in page_indices if 0 <= p < page_count]
         else:
@@ -149,57 +242,114 @@ class PanelSearchPrintMixin:
                 start = max(0, from_page - 1)
                 end = min(page_count, to_page)
                 pages = list(range(start, end))
+
         try:
             reverse = (printer.pageOrder() == QPrinter.PageOrder.LastPageFirst)
         except AttributeError:
             reverse = False
         if reverse:
             pages = list(reversed(pages))
-        copies = max(1, printer.copyCount())
 
-        total_steps = max(1, copies * len(pages))
+        copies = 1 if printer.supportsMultipleCopies() else max(1, printer.copyCount())
+
+        job_pages: list[int] = []
+        for _ in range(copies):
+            job_pages.extend(pages)
+
+        total_steps = len(job_pages)
+        if total_steps == 0:
+            return
+
+        # Cap raster DPI to 300 to prevent multi-gigabyte memory allocations and UI freezing
+        target_dpi = min(300, max(150, printer.resolution()))
+
+        painter = QPainter()
+        if not painter.begin(printer):
+            return
+
+        self._print_in_progress = True
+        self._print_painter = painter
+        self._print_first_page = True
+
         progress = QProgressDialog(t("viewer.print"), t("btn.cancel"), 0, total_steps, self)
         progress.setWindowTitle(t("viewer.print"))
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setValue(0)
+        progress.setLabelText(f"{t('viewer.print')}: 1/{total_steps}…")
+        self._print_progress = progress
 
-        step = 0
-        first_page_printed = True
-        try:
-            for copy in range(copies):
-                for i in pages:
-                    if progress.wasCanceled():
-                        break
-                    step += 1
-                    progress.setValue(step)
-                    progress.setLabelText(f"{t('viewer.print')}: {step}/{total_steps}…")
-                    QApplication.processEvents()
+        worker = _PrintPageWorker(
+            self._current_path,
+            getattr(self, "_pdf_password", ""),
+            job_pages,
+            target_dpi,
+            parent=self,
+        )
+        self._print_worker = worker
 
-                    if not first_page_printed:
-                        printer.newPage()
-                    first_page_printed = False
-                    page = self._fitz_doc[i]
-                    dpi = printer.resolution()
-                    zoom = dpi / 72.0
-                    mat = fitz.Matrix(zoom, zoom)
-                    pix = page.get_pixmap(matrix=mat, alpha=False)
-                    if pix.n != 3:
-                        pix = fitz.Pixmap(fitz.csRGB, pix)
-                    img = QImage(pix.samples, pix.width, pix.height,
-                                 pix.stride, QImage.Format.Format_RGB888).copy()
-                    target = QRectF(painter.viewport())
-                    source = QRectF(0, 0, img.width(), img.height())
-                    scale = min(target.width() / source.width(),
-                                target.height() / source.height())
-                    w = source.width() * scale
-                    h = source.height() * scale
-                    x = (target.width() - w) / 2
-                    y = (target.height() - h) / 2
-                    painter.drawImage(QRectF(x, y, w, h), img, source)
-                    QApplication.processEvents()
-                if progress.wasCanceled():
-                    break
-        finally:
-            progress.close()
-            painter.end()
+        def finish_printing():
+            if not getattr(self, "_print_in_progress", False):
+                return
+            self._print_in_progress = False
+
+            w = getattr(self, "_print_worker", None)
+            if w is not None:
+                w.cancel()
+                w.wait(2000)
+                w.deleteLater()
+                self._print_worker = None
+
+            p = getattr(self, "_print_painter", None)
+            if p is not None:
+                with contextlib.suppress(Exception):
+                    p.end()
+                self._print_painter = None
+
+            prog = getattr(self, "_print_progress", None)
+            if prog is not None:
+                with contextlib.suppress(Exception):
+                    prog.close()
+                    prog.deleteLater()
+                self._print_progress = None
+
+        def on_page_rendered(step: int, page_idx: int, img: QImage):
+            if not getattr(self, "_print_in_progress", False) or progress.wasCanceled():
+                finish_printing()
+                return
+
+            if not self._print_first_page:
+                printer.newPage()
+            self._print_first_page = False
+
+            target = QRectF(painter.viewport())
+            source = QRectF(0, 0, img.width(), img.height())
+            scale = min(target.width() / source.width(), target.height() / source.height())
+            w = source.width() * scale
+            h = source.height() * scale
+            x = target.x() + (target.width() - w) / 2
+            y = target.y() + (target.height() - h) / 2
+            painter.drawImage(QRectF(x, y, w, h), img, source)
+
+            progress.setValue(step)
+            progress.setLabelText(f"{t('viewer.print')}: {step}/{total_steps}…")
+
+            # Signal worker to render next page in background
+            w_inst = getattr(self, "_print_worker", None)
+            if w_inst is not None:
+                w_inst.continue_next()
+
+        def on_worker_finished():
+            finish_printing()
+
+        def on_worker_error(err_msg: str):
+            finish_printing()
+            show_error(self, RuntimeError(err_msg))
+
+        progress.canceled.connect(finish_printing)
+        worker.page_rendered.connect(on_page_rendered, Qt.ConnectionType.QueuedConnection)
+        worker.finished_all.connect(on_worker_finished, Qt.ConnectionType.QueuedConnection)
+        worker.render_error.connect(on_worker_error, Qt.ConnectionType.QueuedConnection)
+
+        progress.show()
+        worker.start()

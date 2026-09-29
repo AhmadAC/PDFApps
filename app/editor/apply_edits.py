@@ -1,27 +1,7 @@
-"""PDFApps – pure edit-application dispatcher for the PDF editor.
 
-This module holds the pure PDF/``fitz`` logic that applies a list of pending
-edits to an already-open (and, if encrypted, already-authenticated)
-``fitz.Document``. It performs NO file I/O (it does not open, save or reload
-the document) and touches NO Qt / UI state (no ``QMessageBox``, no ``self``,
-no ``self._status`` and no password prompts), so it can be unit-tested
-headless. See ``TabEditar._run`` for the surrounding orchestration.
+# app/editor/apply_edits.py
 
-Extracted verbatim from ``TabEditar._run`` (R1 refactor). The per-edit branch
-logic is a faithful copy of the original ``for e in self._pending:`` loop; the
-only adaptations are:
-
-* ``self._pending`` became the ``pending`` parameter;
-* ``text_fit_warnings.append`` became result accumulation (plus an optional
-  ``warn_fn`` callback that preserves the previous semantics);
-* ``import fitz`` is done locally, mirroring how ``_run`` imported it.
-
-``subset_fonts()`` stays here (not in ``_run``): the original ran it
-unconditionally after the loop, gated on ``embedded_font``, operating solely
-on ``doc`` with no Qt involvement — so it belongs to the pure edit-application
-step. The order of operations therefore remains identical: apply edits ->
-``subset_fonts`` -> (back in ``_run``) atomic write -> save -> reload.
-"""
+"""PDFApps – pure edit-application dispatcher for the PDF editor."""
 
 import logging
 from dataclasses import dataclass, field
@@ -34,55 +14,27 @@ _log = logging.getLogger(__name__)
 
 @dataclass
 class ApplyResult:
-    """Outcome of :func:`apply_pending_edits`.
-
-    ``text_fit_warnings``: the edit dicts whose reinserted text could not keep
-    its original size and had to be scaled below the legibility floor (S1). A
-    non-empty list lets the caller raise a non-blocking heads-up after saving.
-
-    ``embedded_font``: whether any ``text_edit`` re-embedded the original span
-    font (i.e. whether ``subset_fonts`` was run). Exposed mainly for testing;
-    the caller no longer needs it because subsetting already happened here.
-    """
+    """Outcome of apply_pending_edits."""
 
     text_fit_warnings: list = field(default_factory=list)
     embedded_font: bool = False
 
 
 def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
-    """Apply ``pending`` edits to the already-open ``doc`` (pure; no I/O, no UI).
-
-    ``doc``: an open ``fitz.Document`` (already authenticated if it was
-    encrypted). This function mutates it in place and does NOT save or close it.
-
-    ``pending``: the list of edit dicts (``TabEditar._pending``). Each carries a
-    ``type`` and ``page`` plus type-specific keys.
-
-    ``warn_fn`` (optional): called with the offending edit dict when reinserted
-    text had to be shrunk below the legibility floor. This preserves the
-    previous ``warn_fn=text_fit_warnings.append`` behaviour for callers that
-    want a live callback; the same edits are always accumulated into the
-    returned :class:`ApplyResult` regardless.
-
-    Returns an :class:`ApplyResult` with the accumulated text-fit warnings and
-    the ``embedded_font`` flag.
-    """
+    """Apply pending edits to open doc, supporting transparent SVG and PNG signatures."""
     import fitz
 
     result = ApplyResult()
 
-    # Collector passed to ``_reinsert_edited_text``: always records into the
-    # result (so the caller can read result.text_fit_warnings) AND forwards to
-    # the caller's optional live callback, matching the old append semantics.
     def _collect_warning(edit):
         result.text_fit_warnings.append(edit)
         if warn_fn is not None:
             warn_fn(edit)
 
-    embedded_font = False  # any text_edit that re-embedded its font
+    embedded_font = False
     for e in pending:
         if e.get("_existing") and e.get("type") != "delete_annot":
-            continue  # already saved in the PDF
+            continue
         pg = doc[e["page"]]
         if e["type"] == "redact":
             pg.add_redact_annot(e["rect"], fill=e["fill"]); pg.apply_redactions()
@@ -97,16 +49,44 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
             pg.insert_text(e["point"], e["text"], fontsize=e["size"],
                            color=e["color"], fontname=fontname)
         elif e["type"] in ("image", "signature"):
-            pg.insert_image(e["rect"], filename=e["path"])
+            path = e["path"]
+            if path.lower().endswith((".svg", ".svgz")):
+                try:
+                    sdoc = fitz.open(path)
+                    spix = sdoc[0].get_pixmap(dpi=300, alpha=True)
+                    pg.insert_image(e["rect"], stream=spix.tobytes("png"))
+                    sdoc.close()
+                except Exception:
+                    try:
+                        from PySide6.QtSvg import QSvgRenderer
+                        from PySide6.QtGui import QImage, QPainter
+                        from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
+                        renderer = QSvgRenderer(path)
+                        if renderer.isValid():
+                            ds = renderer.defaultSize()
+                            w = 1200
+                            h = max(10, int(w * (ds.height() / ds.width()))) if ds.width() > 0 else 400
+                            qimg = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+                            qimg.fill(Qt.GlobalColor.transparent)
+                            qp = QPainter(qimg)
+                            renderer.render(qp)
+                            qp.end()
+                            ba = QByteArray()
+                            buf = QBuffer(ba)
+                            buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                            qimg.save(buf, "PNG")
+                            pg.insert_image(e["rect"], stream=bytes(ba))
+                        else:
+                            pg.insert_image(e["rect"], filename=path)
+                    except Exception:
+                        pg.insert_image(e["rect"], filename=path)
+            else:
+                pg.insert_image(e["rect"], filename=path)
         elif e["type"] == "highlight":
             a = pg.add_highlight_annot(e["rect"]); a.set_colors(stroke=e["color"]); a.update()
         elif e["type"] == "note":
             pg.add_text_annot(e["point"], e["text"])
         elif e["type"] == "draw":
-            # PyMuPDF's add_ink_annot expects a list of strokes, where
-            # each stroke is a list of (x, y) float pairs — NOT a list
-            # of fitz.Point. Passing Points raises
-            # `ValueError: arg must be seq of seq of float pairs`.
             stroke = [(float(x), float(y))
                       for x, y in e.get("points", [])]
             if len(stroke) >= 2:
@@ -115,8 +95,6 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                 annot.set_border(width=max(1, int(e.get("width", 2))))
                 annot.update()
         elif e["type"] == "delete_annot":
-            # Match by annot type + bbox (xref isn't stable across
-            # the canvas-release / fitz.open round-trip used here).
             target_type = e.get("annot_type")
             target_bbox = e.get("bbox")
             if target_bbox is not None:
@@ -128,17 +106,11 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                         pg.delete_annot(annot)
                         break
         elif e["type"] == "text_edit":
-            # High-fidelity reinsertion: transparent redaction (no white
-            # box) + insert_htmlbox preserving the original size, weight,
-            # colour and — when the source font is embeddable — the exact
-            # typeface, with a defensive base-14 fallback. See #147.
             if _reinsert_edited_text(fitz, doc, pg, e,
                                      warn_fn=_collect_warning):
                 embedded_font = True
     result.embedded_font = embedded_font
     if embedded_font:
-        # Subset the freshly embedded fonts to keep the file small.
-        # Best-effort: never let optimisation abort a valid save.
         try:
             doc.subset_fonts()
         except Exception:

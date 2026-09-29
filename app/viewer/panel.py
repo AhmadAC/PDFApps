@@ -1,15 +1,16 @@
 # app/viewer/panel.py
-"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, and thumbnail multi-page actions."""
+"""PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, signatures, and thumbnail multi-page actions."""
 import contextlib
 import json
 import logging
 import os
 
+import fitz
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QLineEdit, QSplitter, QTabWidget,
-    QTreeWidget
+    QTreeWidget, QDialog
 )
 from PySide6.QtGui import QKeySequence, QShortcut
 import qtawesome as qta
@@ -23,12 +24,13 @@ from app.viewer.panel_history import PanelHistoryMixin
 from app.viewer.panel_page_ops import PanelPageOpsMixin
 from app.viewer.panel_search_print import PanelSearchPrintMixin
 from app.viewer.panel_nav import PanelNavMixin
+from app.utils import show_error
 
 _log = logging.getLogger(__name__)
 
 
 class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin, PanelNavMixin, QWidget):
-    """PDF viewer with drag & drop, native text selection and navigation."""
+    """PDF viewer with drag & drop, native text selection, signature placement, and navigation."""
 
     crop_selected         = Signal(int, object)
     crop_applied          = Signal()
@@ -232,6 +234,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._canvas.crop_undo_requested.connect(self.crop_undo_requested.emit)
         self._canvas.crop_redo_requested.connect(self.crop_redo_requested.emit)
         self._canvas.page_action_requested.connect(self._on_thumbnail_action)
+        self._canvas.signature_committed.connect(self._on_signature_committed)
 
         self._canvas_scroll = QScrollArea()
         self._canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -318,6 +321,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
 
     def close_doc(self) -> None:
         """Close document, release file handles, stop workers, and clear cached state."""
+        self._cancel_print_job()
         if hasattr(self, "_canvas"):
             self._canvas.close_doc()
         if self._fitz_doc is not None:
@@ -342,3 +346,40 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         if index == 1 and pos >= 70 and not self._pages_sidebar_collapsed:
             self._saved_sidebar_width = pos
             PdfViewerPanel._saved_sidebar_width_pref = pos
+
+    def _on_signature_committed(self, page_idx: int, rect, path: str) -> None:
+        """Burn placed signature into the PDF document with undo/redo pipeline persistence."""
+        if not self._current_path or not os.path.isfile(self._current_path):
+            return
+        try:
+            doc = fitz.open(self._current_path)
+            if self._pdf_password and doc.needs_pass:
+                doc.authenticate(self._pdf_password)
+            if 0 <= page_idx < doc.page_count:
+                page = doc[page_idx]
+                if path.lower().endswith((".svg", ".svgz")):
+                    try:
+                        sdoc = fitz.open(path)
+                        spix = sdoc[0].get_pixmap(dpi=300, alpha=True)
+                        page.insert_image(rect, stream=spix.tobytes("png"))
+                        sdoc.close()
+                    except Exception:
+                        page.insert_image(rect, filename=path)
+                else:
+                    page.insert_image(rect, filename=path)
+                self._save_and_reload(doc, target_page=page_idx)
+                win = self.window()
+                if hasattr(win, "_set_status"):
+                    win._set_status(t("viewer.sig_placed"))
+        except Exception as exc:
+            show_error(self, exc)
+
+    def closeEvent(self, event):
+        self._cancel_print_job()
+        self._clear_pdf_password()
+        self._cleanup_history_files()
+        try:
+            self._thumbnails.clear()
+        except Exception:
+            pass
+        super().closeEvent(event)

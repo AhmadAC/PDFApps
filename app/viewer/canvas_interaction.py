@@ -1,4 +1,8 @@
-"""PDFApps – Interaction handler for _SelectCanvas (Mouse, Keyboard, Context Menus)."""
+
+
+# app/viewer/canvas_interaction.py
+
+"""PDFApps – Interaction handler for _SelectCanvas (Mouse, Keyboard, Context Menus, Signatures)."""
 from __future__ import annotations
 
 import contextlib
@@ -7,11 +11,12 @@ import shutil
 import tempfile
 from typing import TYPE_CHECKING
 
+import fitz
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
 import qtawesome as qta
 
-from app.constants import TEXT_SEC
+from app.constants import ACCENT, TEXT_SEC
 from app.i18n import t
 from app.viewer.canvas_worker import _NOTE_ICON_SIZE
 
@@ -20,7 +25,7 @@ if TYPE_CHECKING:
 
 
 class CanvasInteractionHandler:
-    """Handles text selection, note balloon interaction, shortcuts, and context actions."""
+    """Handles text selection, note balloon interaction, shortcuts, signatures, and context actions."""
 
     def __init__(self, canvas: _SelectCanvas):
         self.canvas = canvas
@@ -106,10 +111,115 @@ class CanvasInteractionHandler:
                     return (page_idx, annot_idx)
         return None
 
+    def get_sig_handle_at(self, pos: QPoint) -> int:
+        c = self.canvas
+        if not c._active_sig:
+            return c.HANDLE_NONE
+        page_idx = c._active_sig["page"]
+        if not (0 <= page_idx < len(c._entries)):
+            return c.HANDLE_NONE
+        entry = c._entries[page_idx]
+        x_off = (max(c.width(), entry.w) - entry.w) // 2 if c.width() > entry.w else 0
+        z = c._zoom
+        r = c._active_sig["rect"]
+        sx0 = x_off + int(r.x0 * z)
+        sy0 = entry.y_off + int(r.y0 * z)
+        sx1 = x_off + int(r.x1 * z)
+        sy1 = entry.y_off + int(r.y1 * z)
+        hs = 10
+        if QRect(sx0 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return c.HANDLE_TL
+        if QRect(sx1 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return c.HANDLE_TR
+        if QRect(sx0 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return c.HANDLE_BL
+        if QRect(sx1 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return c.HANDLE_BR
+        return c.HANDLE_NONE
+
+    def is_pos_inside_active_sig(self, pos: QPoint) -> bool:
+        c = self.canvas
+        if not c._active_sig:
+            return False
+        page_idx = c._active_sig["page"]
+        if not (0 <= page_idx < len(c._entries)):
+            return False
+        entry = c._entries[page_idx]
+        x_off = (max(c.width(), entry.w) - entry.w) // 2 if c.width() > entry.w else 0
+        z = c._zoom
+        r = c._active_sig["rect"]
+        sx0 = x_off + int(r.x0 * z)
+        sy0 = entry.y_off + int(r.y0 * z)
+        sx1 = x_off + int(r.x1 * z)
+        sy1 = entry.y_off + int(r.y1 * z)
+        return QRect(sx0, sy0, max(1, sx1 - sx0), max(1, sy1 - sy0)).contains(pos)
+
     def mouse_press(self, e):
         c = self.canvas
+        pos = e.position().toPoint()
+
+        # ── 1. Placing Signature from cursor ──────────────────────────
+        if c._placing_signature:
+            if e.button() == Qt.MouseButton.RightButton:
+                c.cancel_signature_placement()
+                e.accept()
+                return
+            if e.button() == Qt.MouseButton.LeftButton:
+                page_idx = c.page_at_y(pos.y())
+                if 0 <= page_idx < len(c._entries):
+                    entry = c._entries[page_idx]
+                    x_off = (max(c.width(), entry.w) - entry.w) // 2 if c.width() > entry.w else 0
+                    z = c._zoom
+                    px = (pos.x() - x_off) / z
+                    py = (pos.y() - entry.y_off) / z
+                    pix = c._placing_sig_pixmap
+                    aspect = (pix.height() / pix.width()) if pix and pix.width() > 0 else 0.35
+                    sig_w = min(180.0, (entry.w / z) * 0.6)
+                    sig_h = sig_w * aspect
+                    x0 = max(0.0, min(entry.w / z - sig_w, px - sig_w / 2.0))
+                    y0 = max(0.0, min(entry.h / z - sig_h, py - sig_h / 2.0))
+                    rect = fitz.Rect(x0, y0, x0 + sig_w, y0 + sig_h)
+                    c._active_sig = {
+                        "page": page_idx,
+                        "rect": rect,
+                        "path": c._placing_sig_path,
+                        "pixmap": c._placing_sig_pixmap,
+                        "resizing": False,
+                        "moving": False,
+                        "handle": c.HANDLE_NONE,
+                        "drag_start": pos,
+                        "orig_rect": fitz.Rect(rect),
+                    }
+                    c._placing_signature = False
+                    c._placing_sig_path = ""
+                    c._sig_cursor_pos = None
+                    c.setCursor(Qt.CursorShape.ArrowCursor)
+                    c.update()
+                e.accept()
+                return
+
+        # ── 2. Interacting with placed Active Signature ────────────────
+        if c._active_sig is not None:
+            handle = self.get_sig_handle_at(pos)
+            if handle != c.HANDLE_NONE and e.button() == Qt.MouseButton.LeftButton:
+                c._active_sig["resizing"] = True
+                c._active_sig["handle"] = handle
+                c._active_sig["drag_start"] = pos
+                c._active_sig["orig_rect"] = fitz.Rect(c._active_sig["rect"])
+                e.accept()
+                return
+            if self.is_pos_inside_active_sig(pos) and e.button() == Qt.MouseButton.LeftButton:
+                c._active_sig["moving"] = True
+                c._active_sig["drag_start"] = pos
+                c._active_sig["orig_rect"] = fitz.Rect(c._active_sig["rect"])
+                e.accept()
+                return
+            # Clicked outside active signature: commit it!
+            if e.button() == Qt.MouseButton.LeftButton:
+                c.commit_active_signature()
+
+        # ── 3. Crop mode ──────────────────────────────────────────────
         if c._crop_mode and e.button() == Qt.MouseButton.LeftButton:
-            pos = e.position().toPoint()
             c.setFocus()
             c._crop_active_page = c.page_at_y(pos.y())
             c._crop_drag_start = pos
@@ -118,10 +228,11 @@ class CanvasInteractionHandler:
             e.accept()
             return
 
+        # ── 4. Standard text selection drag ───────────────────────────
         if e.button() == Qt.MouseButton.LeftButton:
             c.setFocus()
-            c._drag_start = e.position().toPoint()
-            c._drag_end   = c._drag_start
+            c._drag_start = pos
+            c._drag_end   = pos
             c._sel_rects  = []
             c._sel_text   = ""
             c.update()
@@ -129,20 +240,93 @@ class CanvasInteractionHandler:
 
     def mouse_move(self, e):
         c = self.canvas
+        pos = e.position().toPoint()
+
+        # Signature on cursor: follows mouse
+        if c._placing_signature:
+            c._sig_cursor_pos = pos
+            c.update()
+            e.accept()
+            return
+
+        # Active signature resizing & moving
+        if c._active_sig is not None:
+            z = c._zoom
+            orig = c._active_sig.get("orig_rect")
+            start = c._active_sig.get("drag_start", pos)
+            page_idx = c._active_sig["page"]
+            entry = c._entries[page_idx] if 0 <= page_idx < len(c._entries) else None
+            max_w = entry.w / z if entry else 1000.0
+            max_h = entry.h / z if entry else 1000.0
+
+            if c._active_sig.get("resizing") and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                handle = c._active_sig["handle"]
+                r = fitz.Rect(orig)
+                min_s = 20.0
+
+                if handle == c.HANDLE_BR:
+                    r.x1 = max(r.x0 + min_s, min(max_w, orig.x1 + dx))
+                    r.y1 = max(r.y0 + min_s, min(max_h, orig.y1 + dy))
+                elif handle == c.HANDLE_BL:
+                    r.x0 = min(r.x1 - min_s, max(0.0, orig.x0 + dx))
+                    r.y1 = max(r.y0 + min_s, min(max_h, orig.y1 + dy))
+                elif handle == c.HANDLE_TR:
+                    r.x1 = max(r.x0 + min_s, min(max_w, orig.x1 + dx))
+                    r.y0 = min(r.y1 - min_s, max(0.0, orig.y0 + dy))
+                elif handle == c.HANDLE_TL:
+                    r.x0 = min(r.x1 - min_s, max(0.0, orig.x0 + dx))
+                    r.y0 = min(r.y1 - min_s, max(0.0, orig.y0 + dy))
+
+                c._active_sig["rect"] = r
+                c.update()
+                e.accept()
+                return
+
+            if c._active_sig.get("moving") and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                w = orig.width
+                h = orig.height
+                new_x0 = max(0.0, min(max_w - w, orig.x0 + dx))
+                new_y0 = max(0.0, min(max_h - h, orig.y0 + dy))
+                c._active_sig["rect"] = fitz.Rect(new_x0, new_y0, new_x0 + w, new_y0 + h)
+                c.update()
+                e.accept()
+                return
+
+            # Handle hover cursors for active signature
+            h_id = self.get_sig_handle_at(pos)
+            if h_id in (c.HANDLE_TL, c.HANDLE_BR):
+                c.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                return
+            if h_id in (c.HANDLE_TR, c.HANDLE_BL):
+                c.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                return
+            if self.is_pos_inside_active_sig(pos):
+                c.setCursor(Qt.CursorShape.SizeAllCursor)
+                return
+            c.setCursor(Qt.CursorShape.ArrowCursor)
+
         if c._crop_mode and c._crop_drag_start:
-            c._crop_drag_cur = e.position().toPoint()
+            c._crop_drag_cur = pos
             c.update()
             e.accept()
             return
 
         if c._drag_start and (e.buttons() & Qt.MouseButton.LeftButton):
-            c._drag_end = e.position().toPoint()
+            c._drag_end = pos
             self.compute_selection()
             c.update()
             e.accept()
 
     def mouse_double_click(self, e):
         c = self.canvas
+        if c._active_sig is not None and e.button() == Qt.MouseButton.LeftButton:
+            c.commit_active_signature()
+            e.accept()
+            return
         if c._crop_mode and e.button() == Qt.MouseButton.LeftButton:
             c.crop_applied.emit()
             e.accept()
@@ -150,6 +334,16 @@ class CanvasInteractionHandler:
 
     def mouse_release(self, e):
         c = self.canvas
+
+        if c._active_sig is not None:
+            if c._active_sig.get("resizing") or c._active_sig.get("moving"):
+                c._active_sig["resizing"] = False
+                c._active_sig["moving"] = False
+                c._active_sig["handle"] = c.HANDLE_NONE
+                c.update()
+                e.accept()
+                return
+
         if c._crop_mode and c._crop_drag_start:
             start = c._crop_drag_start
             end = e.position().toPoint()
@@ -200,6 +394,21 @@ class CanvasInteractionHandler:
 
     def key_press(self, e) -> bool:
         c = self.canvas
+
+        # Signature placement & resizing shortcuts
+        if c._placing_signature:
+            if e.key() == Qt.Key.Key_Escape:
+                c.cancel_signature_placement()
+                return True
+
+        if c._active_sig is not None:
+            if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
+                c.commit_active_signature()
+                return True
+            if e.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                c.delete_active_signature()
+                return True
+
         if c._crop_mode and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             c.crop_applied.emit()
             return True
@@ -214,7 +423,6 @@ class CanvasInteractionHandler:
                 c.crop_redo_requested.emit()
                 return True
 
-        # Canvas-focused keyboard events routed to appropriate global actions
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             sb_val = c.parent().parent().verticalScrollBar().value() if c.parent() and c.parent().parent() else 0
             idx = c.page_at_y(sb_val)
@@ -246,6 +454,22 @@ class CanvasInteractionHandler:
     def context_menu(self, e):
         c = self.canvas
         pos = e.pos()
+
+        # If placing signature: right-click cancels placement
+        if c._placing_signature:
+            c.cancel_signature_placement()
+            return
+
+        # If right clicking on active placed signature: options to commit / delete
+        if c._active_sig is not None and self.is_pos_inside_active_sig(pos):
+            menu = QMenu(c)
+            act_apply = menu.addAction(qta.icon("fa5s.check", color=ACCENT), t("btn.apply"))
+            act_apply.triggered.connect(c.commit_active_signature)
+            act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
+            act_del.triggered.connect(c.delete_active_signature)
+            menu.exec(e.globalPos())
+            return
+
         hit = self.note_icon_at(pos)
         if hit is not None:
             menu = QMenu(c)
@@ -265,8 +489,6 @@ class CanvasInteractionHandler:
                     if reply != QMessageBox.StandardButton.Yes:
                         return
                     if c._doc:
-                        import fitz
-                        from app.utils import show_error
                         backup_path = None
                         if c._path and os.path.isfile(c._path):
                             try:
@@ -283,7 +505,6 @@ class CanvasInteractionHandler:
                                     with contextlib.suppress(Exception):
                                         os.unlink(backup_path)
                                     backup_path = None
-                                show_error(c, exc)
                                 return
                         target_annot = None
                         try:
@@ -314,17 +535,16 @@ class CanvasInteractionHandler:
                                         os.unlink(backup_path)
                                 QMessageBox.warning(c, t("msg.warning"), t("viewer.delete_no_match"))
                                 return
-                        except Exception as exc:
+                        except Exception:
                             if backup_path:
                                 with contextlib.suppress(Exception):
                                     os.unlink(backup_path)
-                            show_error(c, exc)
                             return
                         if c._path:
                             c._prepare_for_save()
                             try:
                                 c._doc.saveIncr()
-                            except Exception as exc:
+                            except Exception:
                                 if backup_path:
                                     with contextlib.suppress(Exception):
                                         shutil.move(backup_path, c._path)
@@ -332,7 +552,6 @@ class CanvasInteractionHandler:
                                 new_doc = c._reopen_document()
                                 if new_doc is not None:
                                     c._schedule_visible()
-                                show_error(c, exc)
                                 return
                         if backup_path:
                             with contextlib.suppress(Exception):
@@ -348,12 +567,22 @@ class CanvasInteractionHandler:
                     c._schedule_visible()
                     c.update()
             return
-        if not c._sel_text:
-            return
+
+        # ── Page Right-Click Menu: Add Signature & Copy ────────────────
         menu = QMenu(c)
-        act = menu.addAction(
-            qta.icon("fa5s.copy", color=TEXT_SEC),
-            t("viewer.copy_chars", n=len(c._sel_text)),
+
+        if c._sel_text:
+            act_copy = menu.addAction(
+                qta.icon("fa5s.copy", color=TEXT_SEC),
+                t("viewer.copy_chars", n=len(c._sel_text)),
+            )
+            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(c._sel_text))
+            menu.addSeparator()
+
+        act_sig = menu.addAction(
+            qta.icon("fa5s.signature", color=ACCENT),
+            t("viewer.add_signature"),
         )
-        act.triggered.connect(lambda: QApplication.clipboard().setText(c._sel_text))
+        act_sig.triggered.connect(lambda: c.start_add_signature_flow(pos))
+
         menu.exec(e.globalPos())

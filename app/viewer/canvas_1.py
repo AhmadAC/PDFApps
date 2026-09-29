@@ -1,16 +1,20 @@
-#################### START OF FILE: app\viewer\canvas_1.py ####################
+
+
+# app/viewer/canvas_1.py
 
 """PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas."""
 
 from __future__ import annotations
 
 import contextlib
+import os
 
 import fitz
 from PySide6.QtCore import QPoint, QRect, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from app.constants import BG_INNER, _LN
+from app.editor.dialogs import _SignatureDialog, load_signature_pixmap
 from app.viewer.canvas_interaction import CanvasInteractionHandler
 from app.viewer.canvas_painter import CanvasPainter
 from app.viewer.canvas_worker import (
@@ -25,7 +29,7 @@ from app.viewer.canvas_worker import (
 
 class _SelectCanvas(QWidget):
     """Continuous-scroll PDF viewer canvas supporting text selection, search highlights,
-    page notes, cropping, and live preview overlays."""
+    page notes, cropping, and live signature placement and resizing."""
 
     zoom_changed = Signal(int)
     doc_replaced = Signal(object)
@@ -35,6 +39,14 @@ class _SelectCanvas(QWidget):
     crop_redo_requested = Signal()
     page_action_requested = Signal(str, object)
     text_copied = Signal(str)
+    signature_committed = Signal(int, object, str)  # (page_idx, fitz.Rect, sig_path)
+
+    # Resize handles identifiers
+    HANDLE_NONE = 0
+    HANDLE_TL = 1
+    HANDLE_TR = 2
+    HANDLE_BL = 3
+    HANDLE_BR = 4
 
     def __init__(self):
         super().__init__()
@@ -66,6 +78,13 @@ class _SelectCanvas(QWidget):
         self._crop_drag_cur: QPoint | None = None
         self._numbers_preview: dict | None = None
         self._screen_signal_window = None
+
+        # Signature Placement & Resizing State
+        self._placing_signature: bool = False
+        self._placing_sig_path: str = ""
+        self._placing_sig_pixmap = None
+        self._sig_cursor_pos: QPoint | None = None
+        self._active_sig: dict | None = None
 
         self._render_signals = _RenderSignals()
         self._render_signals.page_ready.connect(self._on_page_ready)
@@ -124,6 +143,54 @@ class _SelectCanvas(QWidget):
         self._search_current = current
         self.update()
 
+    # ── Signature Flow & Placement Methods ────────────────────────────────
+
+    def start_add_signature_flow(self, pos: QPoint | None = None):
+        """Open the signature selection dialog and enter cursor placement mode."""
+        dlg = _SignatureDialog(self)
+        if dlg.exec() == _SignatureDialog.DialogCode.Accepted:
+            path = dlg.selected_signature_path()
+            if path and os.path.isfile(path):
+                self.begin_signature_placement(path)
+
+    def begin_signature_placement(self, sig_path: str):
+        """Enter cursor placement mode where the signature follows the mouse."""
+        if self._active_sig is not None:
+            self.commit_active_signature()
+        self._placing_signature = True
+        self._placing_sig_path = sig_path
+        self._placing_sig_pixmap = load_signature_pixmap(sig_path, max_size=(320, 140))
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.update()
+
+    def cancel_signature_placement(self):
+        """Remove signature from cursor (cancel placement)."""
+        self._placing_signature = False
+        self._placing_sig_path = ""
+        self._placing_sig_pixmap = None
+        self._sig_cursor_pos = None
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.update()
+
+    def commit_active_signature(self):
+        """Commit the placed/resized signature into the PDF document."""
+        if not self._active_sig:
+            return
+        sig = dict(self._active_sig)
+        self._active_sig = None
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.update()
+        page_idx = sig["page"]
+        rect = sig["rect"]
+        path = sig["path"]
+        self.signature_committed.emit(page_idx, rect, path)
+
+    def delete_active_signature(self):
+        """Discard the currently placed active signature."""
+        self._active_sig = None
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.update()
+
     # ── Document Lifecycle ────────────────────────────────────────────────
 
     def load(self, doc, target_page: int = 0, path: str = "", password: str = "", target_scroll: int = -1):
@@ -136,12 +203,16 @@ class _SelectCanvas(QWidget):
         self._open_note = None
         self._search_highlights.clear()
         self._search_current = -1
+        self.cancel_signature_placement()
+        self._active_sig = None
         self._interaction.clear_selection()
         self._layout_and_schedule()
 
     def close_doc(self):
         self._gen += 1
         self._pending.clear()
+        self.cancel_signature_placement()
+        self._active_sig = None
         if self._doc:
             with contextlib.suppress(Exception):
                 self._doc.close()

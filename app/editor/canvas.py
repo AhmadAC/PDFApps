@@ -1,14 +1,23 @@
-"""PDFApps – PdfEditCanvas: continuous-scroll visual PDF edit canvas."""
+
+
+# app/editor/canvas.py
+
+"""PDFApps – PdfEditCanvas: continuous-scroll visual PDF edit canvas with interactive signature placement & resizing."""
+
+from __future__ import annotations
 
 import contextlib
 import os
 
+import fitz
 from PySide6.QtCore import Qt, Signal, QRect, QPoint, QObject, QRunnable, QThreadPool, QEvent
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QWidget, QSizePolicy, QLineEdit
+from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QFont
+from PySide6.QtWidgets import QWidget, QSizePolicy, QLineEdit, QMenu, QMessageBox
+import qtawesome as qta
 
 from app.constants import ACCENT, BG_INNER, TEXT_SEC, _LN, _LI
 from app.i18n import t
+from app.editor.dialogs import _SignatureDialog, load_signature_pixmap
 
 _NOTE_ICON_SIZE = 22
 _PAGE_GAP = 4
@@ -17,62 +26,47 @@ _MAX_THREADS = 2
 
 _ICON_CURSORS: dict = {}
 
-# Manual FIFO cache for overlay QPixmaps (R10 #3).
-# The previous ``@lru_cache(maxsize=64)`` had no clear() hook the tab
-# close path could call — across long-running sessions with several
-# tabs each cache slot may hold a multi-MB QPixmap, leaking until
-# process exit. The explicit dict gives us:
-# - eviction by FIFO insertion order (next(iter(dict)) is O(1));
-# - a clear_overlay_pixmap_cache() public helper for tab teardown;
-# - an "uncached" code path for mtime lookup failures (R10 #11) so an
-#   OSError doesn't poison the cache with a null QPixmap that stays
-#   forever even after the file reappears on disk.
-_OVERLAY_PIXMAP_CACHE: "dict[tuple[str, float], QPixmap]" = {}
+_OVERLAY_PIXMAP_CACHE: dict[tuple[str, float], QPixmap] = {}
 _OVERLAY_PIXMAP_CACHE_MAX = 64
 
 
 def _load_overlay_pixmap(path: str, mtime: float) -> QPixmap:
-    """Explicit FIFO-cached QPixmap loader for overlay image/signature stamps.
-
-    The previous implementation built a fresh ``QPixmap(path)`` on every
-    ``paintEvent`` — once per overlay — which became the dominant cost
-    of scrolling a document containing dozens of inserted images. The
-    ``mtime`` parameter participates in the cache key so the cache
-    auto-invalidates when the underlying file is rewritten (e.g.
-    signature regenerated on disk).
-    """
     key = (path, mtime)
     pix = _OVERLAY_PIXMAP_CACHE.get(key)
     if pix is None:
-        pix = QPixmap(path)
+        if path.lower().endswith((".svg", ".svgz")):
+            from PySide6.QtSvg import QSvgRenderer
+            renderer = QSvgRenderer(path)
+            if renderer.isValid():
+                ds = renderer.defaultSize()
+                w = max(ds.width(), 320)
+                h = max(ds.height(), 120)
+                pix = QPixmap(w, h)
+                pix.fill(Qt.GlobalColor.transparent)
+                p = QPainter(pix)
+                renderer.render(p)
+                p.end()
+            else:
+                pix = QPixmap(path)
+        else:
+            pix = QPixmap(path)
         if len(_OVERLAY_PIXMAP_CACHE) >= _OVERLAY_PIXMAP_CACHE_MAX:
-            # Evict the oldest entry (insertion order is preserved
-            # from Python 3.7+).
             _OVERLAY_PIXMAP_CACHE.pop(next(iter(_OVERLAY_PIXMAP_CACHE)))
         _OVERLAY_PIXMAP_CACHE[key] = pix
     return pix
 
 
 def clear_overlay_pixmap_cache() -> None:
-    """Drop every cached overlay QPixmap.
-
-    Called from :meth:`PdfEditCanvas.close_doc` so closing a tab
-    releases the (potentially many MB worth of) pixmaps held by the
-    module-level cache. Safe to call multiple times.
-    """
     _OVERLAY_PIXMAP_CACHE.clear()
 
 
 def _get_icon_cursor(icon_name: str, hx: int, hy: int,
                      size: int = 28, rotate: float = 0.0):
-    """Cached QCursor built from a qtawesome icon with a white halo so the
-    cursor stays visible on both light and dark PDF backgrounds."""
     key = (icon_name, hx, hy, size, rotate)
     cur = _ICON_CURSORS.get(key)
     if cur is not None:
         return cur
-    from PySide6.QtGui import QCursor, QPixmap, QPainter
-    import qtawesome as qta
+    from PySide6.QtGui import QCursor
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
@@ -111,7 +105,6 @@ class _EditPageJob(QRunnable):
     def run(self):
         doc = None
         try:
-            import fitz
             from PySide6.QtGui import QPixmap as QP, QImage
             doc = fitz.open(self._path)
             if doc.needs_pass and self._password:
@@ -122,11 +115,6 @@ class _EditPageJob(QRunnable):
             img = pix.tobytes("png")
             qp = QP()
             if not qp.loadFromData(img):
-                # samples_mv is a memoryview backed by the fitz Pixmap,
-                # which is backed by the open Document. Force an eager
-                # copy via QImage.copy() before letting the doc fall
-                # out of scope in the finally clause — otherwise the
-                # underlying buffer can be freed mid-QImage-blit.
                 qi = QImage(pix.samples_mv, pix.width, pix.height,
                             pix.stride, QImage.Format.Format_RGB888)
                 qp = QP.fromImage(qi.copy())
@@ -150,45 +138,60 @@ class PdfEditCanvas(QWidget):
     zoom_changed    = Signal(int)
     text_edit_committed = Signal(int, dict)      # (page_idx, edit_dict)
     text_inserted       = Signal(int, dict)      # (page_idx, edit_dict)
+    signature_added     = Signal(int, object, str)  # (page_idx, fitz.Rect, sig_path)
+    overlay_changed     = Signal()
+
+    HANDLE_NONE = 0
+    HANDLE_TL   = 1
+    HANDLE_TR   = 2
+    HANDLE_BL   = 3
+    HANDLE_BR   = 4
 
     def __init__(self):
         super().__init__()
         self._doc         = None
         self._path        = ""
         self._password    = ""
-        self._page_idx    = 0   # kept for compatibility (current page indicator)
+        self._page_idx    = 0
         self._zoom        = 1.0
         self._zoom_factor = 1.0
         self._base_avail  = 300
-        self._page_pixmaps: list = []   # list of QPixmap|None, one per page
-        self._page_offsets = []   # list of (y_offset, width, height) per page
+        self._page_pixmaps: list = []
+        self._page_offsets = []
         self._gen         = 0
         self._pending: set[int] = set()
         self._render_signals = _EditRenderSignals()
         self._render_signals.page_ready.connect(self._on_page_ready)
         self._drag_start  = None
         self._drag_rect   = None
-        self._overlays    = []    # ALL overlays (all pages)
+        self._overlays    = []
         self._select_mode = False
         self._draw_mode   = False
         self._text_mode   = False
         self._draw_color  = (1.0, 0.0, 0.0)
         self._draw_width  = 2
-        self._current_stroke = None   # list of (sx, sy) screen coords while drawing
+        self._current_stroke = None
         self._stroke_page = -1
         self._open_note   = None
-        # Tracks the QWindow whose screenChanged signal we're currently
-        # connected to (see showEvent). Avoids calling disconnect() on
-        # a signal that was never connected — which raises a PySide6
-        # RuntimeWarning under 6.11 instead of an exception, so it
-        # can't be caught with contextlib.suppress.
         self._screen_signal_window = None
+
+        # Signature Placement and Resizing State
+        self._placing_signature: bool = False
+        self._placing_sig_path: str = ""
+        self._placing_sig_pixmap: QPixmap | None = None
+        self._sig_cursor_pos: QPoint | None = None
+        self._selected_overlay_idx: int = -1
+        self._drag_handle: int = self.HANDLE_NONE
+        self._drag_start_pos: QPoint = QPoint()
+        self._drag_start_rect: fitz.Rect | None = None
+        self._moving_overlay: bool = False
+
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMinimumSize(300, 400)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._bg_color = BG_INNER
-        # Inline text editor (overlayed on span for real-time edit)
+
         self._inline_edit = QLineEdit(self)
         self._inline_edit.hide()
         self._inline_edit.installEventFilter(self)
@@ -196,8 +199,8 @@ class PdfEditCanvas(QWidget):
         self._inline_span = None
         self._inline_page_idx = -1
         self._inline_original = ""
-        self._inline_mode = None  # "edit" | "insert"
-        self._inline_insert_point = None  # (pdf_x, pdf_y) for insert mode
+        self._inline_mode = None
+        self._inline_insert_point = None
         self._inline_insert_size = 12
         self._inline_insert_color = (0, 0, 0)
         self._inline_insert_font = ""
@@ -210,7 +213,6 @@ class PdfEditCanvas(QWidget):
         self._select_mode = active
 
     def set_text_mode(self, active: bool):
-        """Text mode uses IBeamCursor consistently (edit existing or add new)."""
         self._text_mode = active
         if active:
             self.setCursor(Qt.CursorShape.IBeamCursor)
@@ -231,15 +233,87 @@ class PdfEditCanvas(QWidget):
     def set_overlays(self, overlays: list):
         self._overlays = overlays
         self._open_note = None
+        self._selected_overlay_idx = -1
         self.update()
 
+    # ── Signature Flow Methods ────────────────────────────────────────────
+
+    def start_add_signature_flow(self, pos: QPoint | None = None):
+        """Open signature selection dialog and enter cursor-follow placement mode."""
+        dlg = _SignatureDialog(self)
+        if dlg.exec() == _SignatureDialog.DialogCode.Accepted:
+            path = dlg.selected_signature_path()
+            if path and os.path.isfile(path):
+                self.begin_signature_placement(path)
+
+    def begin_signature_placement(self, sig_path: str):
+        """Make signature appear on cursor."""
+        self._selected_overlay_idx = -1
+        self._placing_signature = True
+        self._placing_sig_path = sig_path
+        self._placing_sig_pixmap = load_signature_pixmap(sig_path, max_size=(320, 140))
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.update()
+
+    def cancel_signature_placement(self):
+        """Right click removes signature from cursor."""
+        self._placing_signature = False
+        self._placing_sig_path = ""
+        self._placing_sig_pixmap = None
+        self._sig_cursor_pos = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
+
+    def _get_overlay_handle_at(self, idx: int, pos: QPoint) -> int:
+        if idx < 0 or idx >= len(self._overlays):
+            return self.HANDLE_NONE
+        e = self._overlays[idx]
+        if e.get("type") not in ("signature", "image"):
+            return self.HANDLE_NONE
+        pg = e.get("page", 0)
+        if pg >= len(self._page_offsets):
+            return self.HANDLE_NONE
+        yo = self._page_offsets[pg][0]
+        z = self._zoom
+        r = e["rect"]
+        sx0 = int(r.x0 * z)
+        sy0 = yo + int(r.y0 * z)
+        sx1 = int(r.x1 * z)
+        sy1 = yo + int(r.y1 * z)
+        hs = 10
+        if QRect(sx0 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return self.HANDLE_TL
+        if QRect(sx1 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return self.HANDLE_TR
+        if QRect(sx0 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return self.HANDLE_BL
+        if QRect(sx1 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return self.HANDLE_BR
+        return self.HANDLE_NONE
+
+    def _is_pos_inside_overlay(self, idx: int, pos: QPoint) -> bool:
+        if idx < 0 or idx >= len(self._overlays):
+            return False
+        e = self._overlays[idx]
+        if e.get("type") not in ("signature", "image"):
+            return False
+        pg = e.get("page", 0)
+        if pg >= len(self._page_offsets):
+            return False
+        yo = self._page_offsets[pg][0]
+        z = self._zoom
+        r = e["rect"]
+        sx0 = int(r.x0 * z)
+        sy0 = yo + int(r.y0 * z)
+        sx1 = int(r.x1 * z)
+        sy1 = yo + int(r.y1 * z)
+        return QRect(sx0, sy0, max(1, sx1 - sx0), max(1, sy1 - sy0)).contains(pos)
+
+    # ── Standard Load & Navigation ────────────────────────────────────────
+
     def load(self, path: str, password: str = ""):
-        import fitz
         if self._doc:
             self._doc.close()
-        # Clear the reference *before* fitz.open so a corrupt PDF that
-        # raises never leaves ``self._doc`` pointing at an already-closed
-        # Document (use-after-close). Only publish on success.
         self._doc = None
         doc = fitz.open(path)
         if doc.needs_pass and password:
@@ -251,6 +325,8 @@ class PdfEditCanvas(QWidget):
         self._zoom_factor = 1.0
         self._gen += 1
         self._pending.clear()
+        self.cancel_signature_placement()
+        self._selected_overlay_idx = -1
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._layout_and_schedule)
 
@@ -278,31 +354,22 @@ class PdfEditCanvas(QWidget):
         return self._doc.page_count if self._doc else 0
 
     def set_page(self, idx: int):
-        """Scroll to page (called by tab navigation arrows)."""
         if self._doc and 0 <= idx < self._doc.page_count:
             self._page_idx = idx
 
     def scroll_to_page(self, idx: int) -> int:
-        """Return Y offset for a given page index."""
         if 0 <= idx < len(self._page_offsets):
             return self._page_offsets[idx][0]
         return 0
 
     def page_at_y(self, y: int) -> int:
-        """Return which page index is at scroll position y."""
         for i, (yo, w, h) in enumerate(self._page_offsets):
             if y < yo + h + _PAGE_GAP:
                 return i
         return max(0, len(self._page_offsets) - 1)
 
     def get_span_at(self, page_idx, pdf_pt, max_dist: float = 30.0):
-        """Returns the closest fitz span to pdf_pt on the given page.
-
-        `max_dist` is in PDF points. A hit inside a bbox returns immediately;
-        otherwise the closest span within `max_dist` (if any) is returned.
-        """
         if not self._doc: return None
-        import fitz
         page = self._doc[page_idx]
         click = fitz.Point(pdf_pt.x, pdf_pt.y)
         found, best_dist = None, float(max_dist)
@@ -320,10 +387,9 @@ class PdfEditCanvas(QWidget):
                         best_dist = dist; found = span
         return found
 
-    # ── inline text edit ────────────────────────────────────────────────
+    # ── Inline Text Edit ──────────────────────────────────────────────────
 
     def begin_inline_text_edit(self, span: dict, page_idx: int):
-        """Show a QLineEdit positioned over the span, pre-filled and focused."""
         if self._inline_edit.isVisible():
             self._commit_inline()
         self._inline_mode = "edit"
@@ -339,7 +405,6 @@ class PdfEditCanvas(QWidget):
         self._inline_edit.selectAll()
 
     def begin_inline_text_insert(self, page_idx: int, pdf_point, size: float, color: tuple, font: str = ""):
-        """Show an empty QLineEdit at the click point for real-time text insertion."""
         if self._inline_edit.isVisible():
             self._commit_inline()
         self._inline_mode = "insert"
@@ -358,7 +423,6 @@ class PdfEditCanvas(QWidget):
         self._inline_edit.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _style_inline_insert(self):
-        from PySide6.QtGui import QFont
         fname = (self._inline_insert_font or "").lower()
         if "times" in fname or "serif" in fname or "roman" in fname:
             family = "Times New Roman"
@@ -381,7 +445,6 @@ class PdfEditCanvas(QWidget):
             f" border: none; border-bottom: 1px dashed {ACCENT}; padding: 0; }}")
 
     def _style_inline_edit(self, span: dict):
-        from PySide6.QtGui import QFont
         bb = span["bbox"]
         visual_size = max(float(span.get("size") or 0), float(bb[3] - bb[1]))
         fname = (span.get("font", "") or "").lower()
@@ -406,9 +469,6 @@ class PdfEditCanvas(QWidget):
         else:
             r, g, b = 0, 0, 0
         hex_color = f"#{r:02x}{g:02x}{b:02x}"
-        # Background uses a theme-aware near-page colour with high alpha
-        # so the edit doesn't visually clash with the rendered page
-        # (was hardcoded #FFFFFFE6 — fine on light pages, poor on dark).
         bg_hex = _LI if self._bg_color == _LN else "#FFFFFF"
         self._inline_edit.setStyleSheet(
             f"QLineEdit {{ background: {bg_hex}; color: {hex_color};"
@@ -432,8 +492,6 @@ class PdfEditCanvas(QWidget):
         elif self._inline_mode == "insert" and self._inline_insert_point is not None:
             px, py = self._inline_insert_point
             size = self._inline_insert_size
-            # PyMuPDF's insert_text treats point as the baseline; place editor so
-            # its baseline roughly matches py. Approximate: top = py - size*0.8.
             x = int(px * z) - 2
             y = yo + int((py - size * 0.85) * z) - 2
             w = max(120, int(size * z * 8))
@@ -458,10 +516,6 @@ class PdfEditCanvas(QWidget):
         self._inline_span = None
         self._inline_page_idx = -1
         self._inline_insert_point = None
-        # LOW: reset insert-mode style state on commit so the next
-        # insert (which begins fresh) doesn't inherit the previous
-        # font/size/colour if begin_inline_text_insert is somehow
-        # called without re-setting them.
         self._inline_insert_font = ""
         self._inline_insert_size = 12
         self._inline_insert_color = (0, 0, 0)
@@ -470,9 +524,6 @@ class PdfEditCanvas(QWidget):
             if new_text == original:
                 return
             bb = span["bbox"]
-            # ``visual_size`` (inflated to the bbox height) styles the inline
-            # QLineEdit only. ``font_size`` is the TRUE span size the save path
-            # must reinsert at — using the inflated size was the #147 size bug.
             visual_size = max(float(span.get("size") or 0), float(bb[3] - bb[1]))
             edit = {
                 "type": "text_edit", "page": page_idx,
@@ -481,9 +532,6 @@ class PdfEditCanvas(QWidget):
                 "font_size": float(span.get("size") or 0),
                 "color": span.get("color", 0),
                 "font": span.get("font", ""),
-                # PyMuPDF span flags (bold=16, italic=2, serif=4, mono=8) and
-                # font metrics let the save path reproduce weight/style and
-                # place the new baseline near the original. See #147.
                 "flags": int(span.get("flags", 0) or 0),
                 "ascender": float(span.get("ascender") or 0),
                 "descender": float(span.get("descender") or 0),
@@ -493,7 +541,6 @@ class PdfEditCanvas(QWidget):
         elif mode == "insert" and ipoint is not None:
             if not new_text.strip():
                 return
-            import fitz
             edit = {
                 "type": "text", "page": page_idx,
                 "point": fitz.Point(ipoint[0], ipoint[1]),
@@ -523,15 +570,6 @@ class PdfEditCanvas(QWidget):
                     self._commit_inline()
                     return True
             elif event.type() == QEvent.Type.FocusOut:
-                # Clicking outside (or Alt-Tab / opening a dialog) COMMITS
-                # the edit, Word-style — see #147. Enter/Tab already commit;
-                # Escape still discards. _commit_inline's guards keep this
-                # safe: it resets its own state and early-returns once
-                # ``_inline_mode is None`` (so the focus-out that ``hide()``
-                # itself may trigger cannot double-commit), and it skips
-                # unchanged edits (``new_text == original``) and empty
-                # inserts (``not new_text.strip()``), so no spurious pending
-                # edit is ever created.
                 self._commit_inline()
                 return False
         return super().eventFilter(obj, event)
@@ -541,36 +579,23 @@ class PdfEditCanvas(QWidget):
 
     def close_doc(self):
         self._cancel_inline()
+        self.cancel_signature_placement()
+        self._selected_overlay_idx = -1
         self._gen += 1
         self._pending.clear()
         self.release_doc()
         self._page_pixmaps.clear()
         self._page_offsets.clear()
         self._overlays = []; self._open_note = None
-        # R10 #3: drop module-level overlay QPixmap cache so closing
-        # a tab actually releases the (potentially many MB) of cached
-        # image/signature pixmaps. The previous lru_cache had no
-        # clear hook and grew unboundedly across long sessions.
         clear_overlay_pixmap_cache()
         self.setMinimumSize(300, 400)
         self.setMaximumSize(16777215, 16777215)
         self.update()
 
-    # ── DPR change handling (R8/D1) ──────────────────────────────────────
     def showEvent(self, event):
-        """Re-render pages when the top-level window crosses a screen
-        with a different devicePixelRatio. ``_schedule_visible`` only
-        sampled the DPR at scroll/zoom time, so dragging the window from
-        a 100 % monitor to a 200 % monitor left previously rendered
-        pages blurry until the user changed zoom (R8/D1)."""
         super().showEvent(event)
         win = self.window().windowHandle() if self.window() else None
         prev_win = self._screen_signal_window
-        # Same top-level QWindow as last showEvent → still connected,
-        # nothing to do. Prevents both double-connect and the PySide6
-        # 6.11 RuntimeWarning that fires when disconnect() runs on a
-        # never-connected signal (RuntimeWarning bypasses
-        # contextlib.suppress, which only catches exceptions).
         if win is prev_win:
             return
         if prev_win is not None:
@@ -581,7 +606,6 @@ class PdfEditCanvas(QWidget):
         self._screen_signal_window = win
 
     def _on_screen_changed(self, _screen):
-        """Drop cached pixmaps and re-queue visible pages at the new DPR."""
         self._gen += 1
         self._pending.clear()
         self._page_pixmaps = [None] * len(self._page_pixmaps)
@@ -589,7 +613,6 @@ class PdfEditCanvas(QWidget):
         self.update()
 
     def on_scroll(self):
-        """Called when scroll position changes — renders newly visible pages."""
         self._schedule_visible()
 
     def _invalidate_and_relayout(self):
@@ -599,8 +622,6 @@ class PdfEditCanvas(QWidget):
         self._layout_and_schedule()
 
     def _layout_and_schedule(self):
-        """Fast layout pass — compute page dimensions only, then schedule
-        background rendering for visible pages."""
         if not self._doc:
             return
 
@@ -677,34 +698,26 @@ class PdfEditCanvas(QWidget):
             self.update()
 
     def _page_and_local(self, sx, sy):
-        """Convert screen coords to (page_index, local_x, local_y)."""
         for i, (yo, w, h) in enumerate(self._page_offsets):
             if sy < yo + h + _PAGE_GAP // 2 or i == len(self._page_offsets) - 1:
                 return i, sx, sy - yo
         return 0, sx, sy
 
     def _to_pdf(self, page_idx, sx, sy):
-        import fitz
         return fitz.Point(sx / self._zoom, sy / self._zoom)
 
     def _rect_to_pdf(self, page_idx, local_rect):
-        import fitz
         z = self._zoom
         r = fitz.Rect(local_rect.left()/z, local_rect.top()/z,
                       local_rect.right()/z, local_rect.bottom()/z)
-        # Clamp to the page bbox: cross-page drags previously mapped the
-        # rect to the start page only and PyMuPDF then silently truncated
-        # the off-page portion. Returning ``None`` for a degenerate
-        # (zero-area / fully off-page) rect lets the caller skip it.
         if self._doc and 0 <= page_idx < self._doc.page_count:
             page_rect = self._doc[page_idx].rect
-            r = r & page_rect  # intersection
+            r = r & page_rect
             if r.is_empty or r.width < 1 or r.height < 1:
                 return None
         return r
 
     def paintEvent(self, _):
-        from PySide6.QtGui import QPainter, QColor, QPen, QFont
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(self._bg_color))
 
@@ -715,7 +728,7 @@ class PdfEditCanvas(QWidget):
             p.end()
             return
 
-        # Draw pages (or placeholder if not yet rendered)
+        # Draw pages
         for i, qpix in enumerate(self._page_pixmaps):
             yo, pw, ph = self._page_offsets[i]
             if qpix is not None:
@@ -756,11 +769,6 @@ class PdfEditCanvas(QWidget):
                 r = e["rect"]
                 qr = QRect(int(r.x0*z), yo+int(r.y0*z), max(1,int(r.width*z)), max(1,int(r.height*z)))
                 path = e["path"]
-                # R10 #11: if getmtime fails (file removed, permission
-                # error, transient FS issue) we MUST NOT cache the
-                # resulting null QPixmap — otherwise the cache would
-                # keep returning the empty pixmap even after the file
-                # comes back. Load uncached in that case.
                 try:
                     mtime = os.path.getmtime(path)
                     img_px = _load_overlay_pixmap(path, mtime)
@@ -771,12 +779,23 @@ class PdfEditCanvas(QWidget):
                 border = "#22C55E" if etype == "signature" else ACCENT
                 p.setPen(QPen(QColor(border), 2, Qt.PenStyle.DashLine))
                 p.setBrush(Qt.BrushStyle.NoBrush); p.drawRect(qr)
+
+                # Resize handles if selected
+                if ov_idx == self._selected_overlay_idx:
+                    hs = 8
+                    p.setBrush(QColor("#FFFFFF"))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
+                    for hpt in [
+                        QPoint(qr.left(), qr.top()),
+                        QPoint(qr.right(), qr.top()),
+                        QPoint(qr.left(), qr.bottom()),
+                        QPoint(qr.right(), qr.bottom()),
+                    ]:
+                        p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))
+
             elif etype == "note":
                 pt = e["point"]
                 px, py = int(pt.x*z), yo+int(pt.y*z)
-                # LOW polish: prefer the enumerate index over an O(n)
-                # list.index lookup (which scaled as O(n²) when there
-                # are many overlays).
                 note_idx = ov_idx
                 icon_r = QRect(px, py - _NOTE_ICON_SIZE, _NOTE_ICON_SIZE, _NOTE_ICON_SIZE)
                 p.setBrush(QColor("#FBBF24")); p.setPen(QPen(QColor("#D97706"), 1))
@@ -831,6 +850,23 @@ class PdfEditCanvas(QWidget):
                     fn = QFont(); fn.setPointSize(max(4, int(e["size"] * z * 0.75))); p.setFont(fn)
                     p.drawText(int(r[0]*z), yo+int(r[3]*z) + max(10, int(e["size"]*z*0.85)), new_txt)
 
+        # Floating signature following cursor preview
+        if self._placing_signature and self._sig_cursor_pos and self._placing_sig_pixmap:
+            pos = self._sig_cursor_pos
+            pix = self._placing_sig_pixmap
+            if not pix.isNull():
+                aspect = (pix.height() / pix.width()) if pix.width() > 0 else 0.35
+                pw = max(40, int(160 * z))
+                ph = max(20, int(pw * aspect))
+                preview_r = QRect(pos.x() - pw//2, pos.y() - ph//2, pw, ph)
+                p.save()
+                p.setOpacity(0.75)
+                p.drawPixmap(preview_r, pix)
+                p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(preview_r)
+                p.restore()
+
         # In-progress freehand stroke preview
         if self._draw_mode and self._current_stroke and len(self._current_stroke) >= 2:
             col = self._draw_color
@@ -856,9 +892,76 @@ class PdfEditCanvas(QWidget):
         p.end()
 
     def mousePressEvent(self, e):
+        pos = e.position().toPoint()
+
+        # ── 1. Placing signature from cursor ──────────────────────────
+        if self._placing_signature:
+            if e.button() == Qt.MouseButton.RightButton:
+                self.cancel_signature_placement()
+                e.accept()
+                return
+            if e.button() == Qt.MouseButton.LeftButton:
+                page_idx, lx, ly = self._page_and_local(pos.x(), pos.y())
+                z = self._zoom or 1.0
+                px = lx / z
+                py = ly / z
+                pix = self._placing_sig_pixmap
+                aspect = (pix.height() / pix.width()) if pix and pix.width() > 0 else 0.35
+                sig_w = 160.0
+                sig_h = sig_w * aspect
+                r = fitz.Rect(max(0.0, px - sig_w / 2), max(0.0, py - sig_h / 2),
+                              px + sig_w / 2, py + sig_h / 2)
+                edit = {
+                    "type": "signature",
+                    "page": page_idx,
+                    "rect": r,
+                    "path": self._placing_sig_path,
+                }
+                self._overlays.append(edit)
+                self._selected_overlay_idx = len(self._overlays) - 1
+                self._placing_signature = False
+                self._placing_sig_path = ""
+                self._sig_cursor_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                self.signature_added.emit(page_idx, r, edit["path"])
+                self.update()
+                e.accept()
+                return
+
+        # ── 2. Interacting with selected signature / image overlay ─────
+        if self._selected_overlay_idx >= 0 and e.button() == Qt.MouseButton.LeftButton:
+            handle = self._get_overlay_handle_at(self._selected_overlay_idx, pos)
+            if handle != self.HANDLE_NONE:
+                self._drag_handle = handle
+                self._drag_start_pos = pos
+                self._drag_start_rect = fitz.Rect(self._overlays[self._selected_overlay_idx]["rect"])
+                e.accept()
+                return
+            if self._is_pos_inside_overlay(self._selected_overlay_idx, pos):
+                self._moving_overlay = True
+                self._drag_start_pos = pos
+                self._drag_start_rect = fitz.Rect(self._overlays[self._selected_overlay_idx]["rect"])
+                e.accept()
+                return
+            # Clicked outside: deselect!
+            self._selected_overlay_idx = -1
+            self.update()
+
+        # Check if clicked on another signature overlay to select it
+        if e.button() == Qt.MouseButton.LeftButton:
+            for idx in reversed(range(len(self._overlays))):
+                if self._is_pos_inside_overlay(idx, pos):
+                    self._selected_overlay_idx = idx
+                    self._moving_overlay = True
+                    self._drag_start_pos = pos
+                    self._drag_start_rect = fitz.Rect(self._overlays[idx]["rect"])
+                    self.update()
+                    e.accept()
+                    return
+
         if e.button() != Qt.MouseButton.LeftButton:
             return
-        pos = e.position().toPoint()
+
         if self._draw_mode and self._page_offsets:
             page_idx, _lx, _ly = self._page_and_local(pos.x(), pos.y())
             self._stroke_page = page_idx
@@ -869,8 +972,73 @@ class PdfEditCanvas(QWidget):
         self._drag_rect = None
 
     def mouseMoveEvent(self, e):
+        pos = e.position().toPoint()
+
+        # Follow cursor while placing signature
+        if self._placing_signature:
+            self._sig_cursor_pos = pos
+            self.update()
+            e.accept()
+            return
+
+        # Resize / Move selected overlay
+        if self._selected_overlay_idx >= 0:
+            z = self._zoom
+            orig = self._drag_start_rect
+            start = self._drag_start_pos
+
+            if self._drag_handle != self.HANDLE_NONE and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                handle = self._drag_handle
+                r = fitz.Rect(orig)
+                min_s = 20.0
+
+                if handle == self.HANDLE_BR:
+                    r.x1 = max(r.x0 + min_s, orig.x1 + dx)
+                    r.y1 = max(r.y0 + min_s, orig.y1 + dy)
+                elif handle == self.HANDLE_BL:
+                    r.x0 = min(r.x1 - min_s, orig.x0 + dx)
+                    r.y1 = max(r.y0 + min_s, orig.y1 + dy)
+                elif handle == self.HANDLE_TR:
+                    r.x1 = max(r.x0 + min_s, orig.x1 + dx)
+                    r.y0 = min(r.y1 - min_s, orig.y0 + dy)
+                elif handle == self.HANDLE_TL:
+                    r.x0 = min(r.x1 - min_s, orig.x0 + dx)
+                    r.y0 = min(r.y1 - min_s, orig.y0 + dy)
+
+                self._overlays[self._selected_overlay_idx]["rect"] = r
+                self.overlay_changed.emit()
+                self.update()
+                e.accept()
+                return
+
+            if self._moving_overlay and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                w = orig.width
+                h = orig.height
+                self._overlays[self._selected_overlay_idx]["rect"] = fitz.Rect(
+                    orig.x0 + dx, orig.y0 + dy, orig.x0 + dx + w, orig.y0 + dy + h)
+                self.overlay_changed.emit()
+                self.update()
+                e.accept()
+                return
+
+            # Cursors for handles and drag
+            h_id = self._get_overlay_handle_at(self._selected_overlay_idx, pos)
+            if h_id in (self.HANDLE_TL, self.HANDLE_BR):
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                return
+            if h_id in (self.HANDLE_TR, self.HANDLE_BL):
+                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                return
+            if self._is_pos_inside_overlay(self._selected_overlay_idx, pos):
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                return
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
         if self._draw_mode and self._current_stroke is not None and (e.buttons() & Qt.MouseButton.LeftButton):
-            pos = e.position().toPoint()
             if self._stroke_page < 0 or self._stroke_page >= len(self._page_offsets):
                 return
             yo, pw, ph = self._page_offsets[self._stroke_page]
@@ -882,10 +1050,9 @@ class PdfEditCanvas(QWidget):
                 self.update()
             return
         if self._drag_start and (e.buttons() & Qt.MouseButton.LeftButton):
-            self._drag_rect = QRect(self._drag_start, e.position().toPoint()).normalized()
+            self._drag_rect = QRect(self._drag_start, pos).normalized()
             self.update()
             return
-        # Text mode keeps a constant IBeam cursor (set once in set_text_mode).
 
     def _note_icon_at(self, pos: QPoint) -> int:
         z = self._zoom
@@ -906,7 +1073,6 @@ class PdfEditCanvas(QWidget):
     def _annot_note_at(self, pos: QPoint):
         if not self._doc:
             return -1, None
-        import fitz
         page_idx, lx, ly = self._page_and_local(pos.x(), pos.y())
         pdf_pt = self._to_pdf(page_idx, lx, ly)
         page = self._doc[page_idx]
@@ -933,19 +1099,20 @@ class PdfEditCanvas(QWidget):
 
     def contextMenuEvent(self, e):
         pos = e.pos()
+
+        # Right click cancels signature placement
+        if self._placing_signature:
+            self.cancel_signature_placement()
+            return
+
         hit = self._note_icon_at(pos)
         if hit < 0:
             hit, _ = self._annot_note_at(pos)
         if hit >= 0:
-            from PySide6.QtWidgets import QMenu, QMessageBox
             menu = QMenu(self)
             delete_action = menu.addAction(t("viewer.delete_comment"))
             action = menu.exec(e.globalPos())
             if action == delete_action:
-                # R10 #8: match the viewer's UX — delete is destructive
-                # (especially for _existing notes which persist on save),
-                # so confirm before pulling the trigger. defaultButton
-                # is No so a stray Enter cannot wipe a note.
                 reply = QMessageBox.question(
                     self, t("msg.confirm"),
                     t("viewer.confirm_delete_comment"),
@@ -957,7 +1124,6 @@ class PdfEditCanvas(QWidget):
                     return
                 overlay = self._overlays[hit]
                 if self._doc and overlay.get("_existing"):
-                    import fitz
                     page = self._doc[overlay.get("page", 0)]
                     for annot in page.annots() or []:
                         if annot.type[0] == fitz.PDF_ANNOT_TEXT:
@@ -974,9 +1140,22 @@ class PdfEditCanvas(QWidget):
                     self._open_note -= 1
                 self.update()
             return
-        super().contextMenuEvent(e)
+
+        # Context menu with Add Signature
+        menu = QMenu(self)
+        act_add_sig = menu.addAction(qta.icon("fa5s.signature", color=ACCENT), t("viewer.add_signature"))
+        act_add_sig.triggered.connect(lambda: self.start_add_signature_flow(pos))
+        menu.exec(e.globalPos())
 
     def mouseReleaseEvent(self, e):
+        if self._selected_overlay_idx >= 0:
+            if self._drag_handle != self.HANDLE_NONE or self._moving_overlay:
+                self._drag_handle = self.HANDLE_NONE
+                self._moving_overlay = False
+                self.update()
+                e.accept()
+                return
+
         if e.button() != Qt.MouseButton.LeftButton: return
         pos = e.position().toPoint()
         if self._draw_mode and self._current_stroke is not None:
@@ -992,7 +1171,6 @@ class PdfEditCanvas(QWidget):
             self.update()
             return
         if self._drag_rect and self._drag_rect.width() > 3 and self._drag_rect.height() > 3:
-            # Convert drag rect to page-local PDF coords
             page_idx, lx, ly = self._page_and_local(
                 self._drag_rect.left(), self._drag_rect.top())
             yo = self._page_offsets[page_idx][0] if page_idx < len(self._page_offsets) else 0
