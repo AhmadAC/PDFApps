@@ -1,4 +1,4 @@
-
+#################### START OF FILE: app/viewer/panel_page_ops.py ####################
 
 # app/viewer/panel_page_ops.py
 """PDFApps – Multi-page operations, drag/drop reordering, and thumbnail action handlers."""
@@ -216,12 +216,19 @@ class PanelPageOpsMixin:
     def _set_sidebar_width(self, target_w: int) -> None:
         target_w = max(70, min(600, target_w))
         self._saved_sidebar_width = target_w
+        from app.viewer.panel import PdfViewerPanel
+        PdfViewerPanel._saved_sidebar_width_pref = target_w
         if not getattr(self, "_pages_sidebar_collapsed", False) and hasattr(self, "_viewer_splitter"):
             sizes = self._viewer_splitter.sizes()
             if len(sizes) >= 2:
                 total = sum(sizes)
                 canvas_w = max(200, total - target_w)
                 self._viewer_splitter.setSizes([target_w, canvas_w])
+        try:
+            from app.i18n import _update_config
+            _update_config(lambda cfg: cfg.__setitem__("sidebar_panel_width", target_w))
+        except Exception:
+            pass
 
     def _on_thumbnail_action(self, action: str, pages_arg: object) -> None:
         if action == "fit_sidebar_width":
@@ -764,4 +771,3 @@ class PanelPageOpsMixin:
         win = self.window()
         if hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.split"))
-

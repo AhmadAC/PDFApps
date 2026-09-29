@@ -25,6 +25,8 @@ class PanelNavMixin:
     def _toggle_pages_sidebar(self):
         if not self._pages_sidebar_collapsed:
             self._saved_sidebar_width = max(70, self._sidebar_panel.width())
+            from app.viewer.panel import PdfViewerPanel
+            PdfViewerPanel._saved_sidebar_width_pref = self._saved_sidebar_width
             self._pages_sidebar_collapsed = True
             self._sidebar_panel.setVisible(False)
             total = self._viewer_splitter.width() or 1020
@@ -42,7 +44,11 @@ class PanelNavMixin:
         try:
             from app.i18n import _update_config
             pref = not self._pages_sidebar_collapsed
-            _update_config(lambda cfg: cfg.__setitem__("pages_sidebar_open", pref))
+            saved_w = self._saved_sidebar_width
+            def _save_nav_pref(cfg: dict) -> None:
+                cfg["pages_sidebar_open"] = pref
+                cfg["sidebar_panel_width"] = saved_w
+            _update_config(_save_nav_pref)
         except Exception:
             pass
 

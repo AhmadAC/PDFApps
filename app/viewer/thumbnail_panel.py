@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import os
 
 from PySide6.QtCore import (
     QItemSelection,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 
 from app.constants import TEXT_PRI, _LQ
+from app.i18n import _CONFIG_PATH, _update_config
 from app.viewer.thumbnail_model import ThumbnailDelegate, ThumbnailModel
 from app.viewer.thumbnail_view import _ThumbnailListView
 from app.viewer.thumbnail_worker import (
@@ -48,6 +51,8 @@ class ThumbnailPanel(QWidget):
     page_requested = Signal(int)
     action_requested = Signal(str, object)  # (action_name, list[int] | tuple)
 
+    _thumb_scale_pref: float | None = None
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         _install_debug_log()
@@ -62,7 +67,20 @@ class ThumbnailPanel(QWidget):
         self._inflight: set[int] = set()
         self._anchor = 0
         self._epoch = 0
-        self._thumb_scale = 1.0
+
+        if ThumbnailPanel._thumb_scale_pref is None:
+            try:
+                if os.path.isfile(_CONFIG_PATH):
+                    with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
+                        cfg = json.load(_f)
+                        val = cfg.get("thumbnail_scale", 1.0)
+                        ThumbnailPanel._thumb_scale_pref = max(0.5, min(2.5, float(val)))
+                else:
+                    ThumbnailPanel._thumb_scale_pref = 1.0
+            except Exception:
+                ThumbnailPanel._thumb_scale_pref = 1.0
+
+        self._thumb_scale = ThumbnailPanel._thumb_scale_pref or 1.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -70,6 +88,9 @@ class ThumbnailPanel(QWidget):
 
         self._model = ThumbnailModel(self)
         self._delegate = ThumbnailDelegate(self)
+        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
+        th = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
+        self._delegate.set_thumb_size(tw, th)
 
         self._view = _ThumbnailListView(self)
         self._view.setModel(self._model)
@@ -308,6 +329,14 @@ class ThumbnailPanel(QWidget):
         elif selected_action == act_props:
             self.action_requested.emit("properties", selected_pages)
 
+    def _save_thumb_scale_pref(self) -> None:
+        ThumbnailPanel._thumb_scale_pref = self._thumb_scale
+        try:
+            scale = self._thumb_scale
+            _update_config(lambda cfg: cfg.__setitem__("thumbnail_scale", scale))
+        except Exception:
+            pass
+
     def fit_window_to_thumbnails(self) -> None:
         """Resize the parent sidebar panel in the splitter to snugly fit the thumbnails."""
         tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
@@ -329,6 +358,7 @@ class ThumbnailPanel(QWidget):
         self._inflight.clear()
         self._render_visible()
         self._view.viewport().update()
+        self._save_thumb_scale_pref()
 
     def _enlarge_thumbnails(self) -> None:
         self._thumb_scale = min(2.5, round(self._thumb_scale * 1.25, 2))
@@ -341,6 +371,7 @@ class ThumbnailPanel(QWidget):
         self._render_visible()
         self._view.viewport().update()
         self.fit_window_to_thumbnails()
+        self._save_thumb_scale_pref()
 
     def _reduce_thumbnails(self) -> None:
         self._thumb_scale = max(0.5, round(self._thumb_scale / 1.25, 2))
@@ -353,6 +384,7 @@ class ThumbnailPanel(QWidget):
         self._render_visible()
         self._view.viewport().update()
         self.fit_window_to_thumbnails()
+        self._save_thumb_scale_pref()
 
     # ── Public API ────────────────────────────────────────────────
 

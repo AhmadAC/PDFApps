@@ -1,5 +1,6 @@
 # app/viewer/panel.py
 """PDFApps – PdfViewerPanel: PDF viewer with drag & drop, text selection, and thumbnail multi-page actions."""
+import contextlib
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ import qtawesome as qta
 from app.constants import TEXT_SEC, DESKTOP
 from app.i18n import t, _CONFIG_PATH
 from app.viewer.canvas_1 import _SelectCanvas
-from app.viewer.thumbnails import ThumbnailPanel
+from app.viewer.thumbnails import ThumbnailPanel, DEFAULT_THUMB_WIDTH
 
 from app.viewer.panel_history import PanelHistoryMixin
 from app.viewer.panel_page_ops import PanelPageOpsMixin
@@ -36,6 +37,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
     page_action_requested = Signal(str, object)
 
     _pages_sidebar_visible_pref: bool | None = None
+    _saved_sidebar_width_pref: int | None = None
 
     def __init__(self):
         super().__init__()
@@ -50,18 +52,26 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._redo_stack: list[dict] = []
         self._history_temp_files: set[str] = set()
 
-        if PdfViewerPanel._pages_sidebar_visible_pref is None:
+        if PdfViewerPanel._pages_sidebar_visible_pref is None or PdfViewerPanel._saved_sidebar_width_pref is None:
             try:
                 if os.path.isfile(_CONFIG_PATH):
                     with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
                         cfg = json.load(_f)
-                        PdfViewerPanel._pages_sidebar_visible_pref = bool(
-                            cfg.get("pages_sidebar_open", True)
-                        )
-                else:
-                    PdfViewerPanel._pages_sidebar_visible_pref = True
+                        if PdfViewerPanel._pages_sidebar_visible_pref is None:
+                            PdfViewerPanel._pages_sidebar_visible_pref = bool(
+                                cfg.get("pages_sidebar_open", True)
+                            )
+                        if PdfViewerPanel._saved_sidebar_width_pref is None:
+                            val = cfg.get("sidebar_panel_width")
+                            if val is not None:
+                                PdfViewerPanel._saved_sidebar_width_pref = max(70, min(600, int(val)))
             except Exception:
+                pass
+            if PdfViewerPanel._pages_sidebar_visible_pref is None:
                 PdfViewerPanel._pages_sidebar_visible_pref = True
+            if PdfViewerPanel._saved_sidebar_width_pref is None:
+                scale = getattr(ThumbnailPanel, "_thumb_scale_pref", 1.0) or 1.0
+                PdfViewerPanel._saved_sidebar_width_pref = int(DEFAULT_THUMB_WIDTH * scale) + 40
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -211,7 +221,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
 
         initial_open = bool(PdfViewerPanel._pages_sidebar_visible_pref)
         self._pages_sidebar_collapsed = not initial_open
-        self._saved_sidebar_width = 220
+        self._saved_sidebar_width = PdfViewerPanel._saved_sidebar_width_pref or 220
 
         # ── Canvas with continuous scroll of all pages ──────────────────
         self._canvas = _SelectCanvas()
@@ -238,11 +248,12 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._viewer_splitter.addWidget(self._canvas_scroll)
         self._viewer_splitter.setStretchFactor(0, 0)
         self._viewer_splitter.setStretchFactor(1, 1)
-        self._viewer_splitter.setSizes([220, 800])
+        self._viewer_splitter.setSizes([self._saved_sidebar_width, 800])
         self._viewer_splitter.setCollapsible(0, True)
         self._viewer_splitter.setCollapsible(1, False)
         self._viewer_splitter.setVisible(False)
         self._sidebar_panel.setVisible(False)
+        self._viewer_splitter.splitterMoved.connect(self._on_viewer_splitter_moved)
         layout.addWidget(self._viewer_splitter, 1)
 
         handle = self._viewer_splitter.handle(1)
@@ -304,3 +315,30 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         sc_find.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_esc = QShortcut(QKeySequence("Escape"), self._search_input, self._close_search)
         sc_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+    def close_doc(self) -> None:
+        """Close document, release file handles, stop workers, and clear cached state."""
+        if hasattr(self, "_canvas"):
+            self._canvas.close_doc()
+        if self._fitz_doc is not None:
+            with contextlib.suppress(Exception):
+                self._fitz_doc.close()
+            self._fitz_doc = None
+        if hasattr(self, "_thumbnails"):
+            try:
+                self._thumbnails.clear()
+            except Exception:
+                pass
+        self._cleanup_history_files()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._reset_search_state()
+        self._clear_pdf_password()
+        self._current_path = ""
+        self._original_doc_path = ""
+        self._reset_to_placeholder()
+
+    def _on_viewer_splitter_moved(self, pos: int, index: int) -> None:
+        if index == 1 and pos >= 70 and not self._pages_sidebar_collapsed:
+            self._saved_sidebar_width = pos
+            PdfViewerPanel._saved_sidebar_width_pref = pos

@@ -1,3 +1,4 @@
+
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -25,6 +26,7 @@ from app.widgets import DropFileEdit
 from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
 from app.viewer.panel import PdfViewerPanel
+from app.viewer.thumbnails import ThumbnailPanel
 from app.base import BasePage
 from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
@@ -437,6 +439,12 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
             pages_pref = _saved.get("pages_sidebar_open")
             if pages_pref is not None:
                 PdfViewerPanel._pages_sidebar_visible_pref = bool(pages_pref)
+            saved_w = _saved.get("sidebar_panel_width")
+            if saved_w is not None:
+                PdfViewerPanel._saved_sidebar_width_pref = max(70, min(600, int(saved_w)))
+            saved_thumb_scale = _saved.get("thumbnail_scale")
+            if saved_thumb_scale is not None:
+                ThumbnailPanel._thumb_scale_pref = max(0.5, min(2.5, float(saved_thumb_scale)))
         except Exception:
             pass
 
@@ -445,7 +453,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         for i in range(self.stack.count()):
             for dfe in self.stack.widget(i).findChildren(DropFileEdit):
                 if not dfe._save:
-                    dfe.path_changed.connect(lambda p: self._viewer.load(p) if (self._viewer and p and os.path.isfile(p)) else None)
+                    dfe.path_changed.connect(lambda p: self._load_and_track(p) if (p and os.path.isfile(p)) else None)
 
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -534,11 +542,15 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
             sizes = self._splitter.sizes()
             mode = "hidden" if self._sidebar_collapsed else ("icons" if self._sidebar.width() <= 60 else "full")
             pages_open = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
+            sidebar_w = getattr(PdfViewerPanel, "_saved_sidebar_width_pref", 220)
+            thumb_scale = getattr(ThumbnailPanel, "_thumb_scale_pref", 1.0)
 
             def _mutate(cfg: dict) -> None:
                 cfg["splitter_sizes"] = sizes
                 cfg["sidebar_mode"] = mode
                 cfg["pages_sidebar_open"] = bool(pages_open)
+                cfg["sidebar_panel_width"] = int(sidebar_w)
+                cfg["thumbnail_scale"] = float(thumb_scale)
             _update_config(_mutate)
         except Exception:
             pass
