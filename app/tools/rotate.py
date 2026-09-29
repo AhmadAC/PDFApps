@@ -118,6 +118,20 @@ class TabRotar(BasePage):
 
         f.addWidget(grp)
 
+        # In-panel save button row
+        btn_save_row = QHBoxLayout()
+        btn_save_row.setContentsMargins(0, 10, 0, 0)
+        btn_save_row.addStretch()
+        self.btn_save = QPushButton(btn_text)
+        self.btn_save.setObjectName("btn_action_small")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setFixedHeight(32)
+        self.btn_save.setMinimumWidth(80)
+        self.btn_save.clicked.connect(self._run)
+        btn_save_row.addWidget(self.btn_save)
+        f.addLayout(btn_save_row)
+        self.action_btn = self.btn_save
+
         sec_out = section(t("tool.rotate.output"))
         f.addWidget(sec_out)
         self.drop_out = DropFileEdit("rotated.pdf", save=True, default_name="rotated.pdf")
@@ -127,6 +141,7 @@ class TabRotar(BasePage):
         self._compact_hidden = [sec_src, self.drop_in, self.lbl_info]
         sec_out.setVisible(False)
         self.drop_out.setVisible(False)
+        self._action_bar.setVisible(False)
 
     def _get_target_pages(self) -> list[int]:
         total = self._page_count
@@ -309,7 +324,6 @@ class TabRotar(BasePage):
             QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
             return
 
-        # Prompt Save As dialog so user can choose destination file and name
         default_name = "rotated.pdf"
         if pdf_path:
             base, ext = os.path.splitext(os.path.basename(pdf_path))
@@ -341,7 +355,6 @@ class TabRotar(BasePage):
                     page.rotate(rot)
                 w.add_page(page)
 
-            # Release viewer document locks before atomic overwrite if applicable
             if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                 viewer._canvas.close_doc()
                 if viewer._fitz_doc:

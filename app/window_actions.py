@@ -11,17 +11,132 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QFileDialog
 import qtawesome as qta
 from shiboken6 import isValid
 
-from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP
+from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
 from app.utils import _make_palette, show_error
 from app.widgets import DropFileEdit, MultiDropWidget
 from app.viewer.presentation import PresentationWidget
 from app.nav_config import NAV_ITEMS, _NAV_KEYS
+from app.editor.tab import TabEditar
+from app.tools.crop import TabCortar
+from app.tools.page_numbers import TabPageNumbers
+from app.tools.reorder import TabReordenar
+from app.tools.rotate import TabRotar
 
 
 class WindowActionsMixin:
     """Mixin for navigation, page transitions, themes, and presentation."""
+
+    def _tool_idx_for_class(self, cls) -> int:
+        for idx, (_, _, tool_cls) in enumerate(_NAV_KEYS):
+            if tool_cls is cls:
+                return idx
+        return -1
+
+    def _edit_tool_idx(self) -> int:
+        return self._tool_idx_for_class(TabEditar)
+
+    def _rotate_tool_idx(self) -> int:
+        return self._tool_idx_for_class(TabRotar)
+
+    def _crop_tool_idx(self) -> int:
+        return self._tool_idx_for_class(TabCortar)
+
+    def _reorder_tool_idx(self) -> int:
+        return self._tool_idx_for_class(TabReordenar)
+
+    def _page_numbers_tool_idx(self) -> int:
+        return self._tool_idx_for_class(TabPageNumbers)
+
+    def _toggle_pages_sidebar(self):
+        viewer = self._viewer
+        if viewer:
+            viewer._toggle_pages_sidebar()
+            if self.sender() is getattr(self, "_toc_top_btn", None) and not viewer._pages_sidebar_collapsed:
+                if viewer._toc_tree.topLevelItemCount() > 0:
+                    viewer._sidebar_tabs.setCurrentIndex(viewer._toc_tab_idx)
+
+    def _toggle_right_pane(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if hasattr(edit_w, "toggle_controls"):
+                edit_w.toggle_controls()
+            return
+        if self._right_tool_container.isVisible():
+            self._saved_right_width = max(320, self._right_tool_container.width())
+            self._right_tool_container.setVisible(False)
+            total = self._splitter.width()
+            self._splitter.setSizes([total, 0])
+        else:
+            self._right_tool_container.setVisible(True)
+            total = self._splitter.width()
+            tool_w = max(320, getattr(self, "_saved_right_width", 380))
+            self._splitter.setSizes([max(300, total - tool_w), tool_w])
+
+    def _on_rotations_changed(self, rotations: dict[int, int]):
+        if self._viewer:
+            self._viewer.set_page_rotations(rotations)
+
+    def _on_crop_changed(self, crop_data: dict | None):
+        if self._viewer:
+            self._viewer.set_crop_preview(crop_data)
+
+    def _on_crops_changed(self, crops: dict[int, tuple[float, float, float, float]]):
+        if self._viewer:
+            self._viewer.set_page_crops(crops)
+
+    def _on_crop_mode_toggled(self, active: bool):
+        if self._viewer:
+            self._viewer.set_crop_mode(active)
+
+    def _on_order_changed(self, order: list[int] | None):
+        if self._viewer:
+            self._viewer.set_page_order(order)
+
+    def _on_numbers_preview_changed(self, preview_data: dict | None):
+        if self._viewer:
+            self._viewer.set_numbers_preview(preview_data)
+
+    def _update_breadcrumb(self):
+        if getattr(self, "_current_tool", -1) >= 0 and self._current_tool < len(NAV_ITEMS):
+            tool_name = NAV_ITEMS[self._current_tool][0]
+            self._breadcrumb.setText(f"{t('workspace.title')}  ›  {tool_name}")
+        else:
+            self._breadcrumb.setText(t("workspace.title"))
+
+    def _update_undo_redo_buttons(self):
+        if not hasattr(self, "_undo_top_btn") or not hasattr(self, "_redo_top_btn"):
+            return
+        edit_idx = self._edit_tool_idx()
+        crop_idx = self._crop_tool_idx()
+        page_numbers_idx = self._page_numbers_tool_idx()
+
+        if getattr(self, "_current_tool", -1) == -1:
+            self._undo_top_btn.setVisible(True)
+            self._redo_top_btn.setVisible(True)
+            can_u = self._viewer.can_undo() if self._viewer and hasattr(self._viewer, "can_undo") else False
+            can_r = self._viewer.can_redo() if self._viewer and hasattr(self._viewer, "can_redo") else False
+            self._undo_top_btn.setEnabled(can_u)
+            self._redo_top_btn.setEnabled(can_r)
+        elif self._current_tool == edit_idx:
+            self._undo_top_btn.setVisible(True)
+            self._redo_top_btn.setVisible(True)
+            edit_w = self.stack.widget(edit_idx)
+            self._undo_top_btn.setEnabled(bool(getattr(edit_w, "_pending", None)))
+            self._redo_top_btn.setEnabled(bool(getattr(edit_w, "_redo_stack", None)))
+        elif self._current_tool in (crop_idx, page_numbers_idx):
+            self._undo_top_btn.setVisible(True)
+            self._redo_top_btn.setVisible(True)
+            tool_w = self.stack.widget(self._current_tool)
+            btn_u = getattr(tool_w, "btn_undo", None)
+            btn_r = getattr(tool_w, "btn_redo", None)
+            self._undo_top_btn.setEnabled(btn_u.isEnabled() if btn_u else False)
+            self._redo_top_btn.setEnabled(btn_r.isEnabled() if btn_r else False)
+        else:
+            self._undo_top_btn.setVisible(False)
+            self._redo_top_btn.setVisible(False)
 
     def _open_tool_by_name(self, tool_name: str):
         for i, (name, _, _) in enumerate(NAV_ITEMS):
@@ -42,7 +157,7 @@ class WindowActionsMixin:
             usage = dict(self._tool_usage)
             _update_config(lambda cfg: cfg.__setitem__("tool_usage", usage))
         widget = self.stack.widget(index)
-        path = self._viewer.current_path()
+        path = self._viewer.current_path() if self._viewer else ""
         if path:
             viewer_pwd = getattr(self._viewer, "_pdf_password", "")
             if hasattr(widget, "_pdf_password"):
@@ -65,8 +180,12 @@ class WindowActionsMixin:
                     btn.clicked.disconnect()
                 except (RuntimeError, TypeError):
                     pass
-        if canvas is None:
-            canvas = getattr(self.stack.widget(self._edit_tool_idx()), '_canvas', None)
+        if canvas is None and hasattr(self, "_edit_tool_idx"):
+            edit_idx = self._edit_tool_idx()
+            if edit_idx >= 0:
+                canvas = getattr(self.stack.widget(edit_idx), '_canvas', None)
+        if canvas is None and self._viewer:
+            canvas = getattr(self._viewer, '_canvas', None)
         if canvas is None:
             return
         if active:
@@ -128,28 +247,14 @@ class WindowActionsMixin:
             self._pages_toggle_btn.setVisible(True)
             self._tab_container.setVisible(True)
             self._breadcrumb.setText(t("workspace.title"))
-            self._setup_zoom_bar(True, canvas=self._viewer._canvas)
-            self._undo_top_btn.setVisible(True)
-            self._redo_top_btn.setVisible(True)
-            prev = getattr(self, "_undo_redo_handlers", None)
-            if prev is not None:
-                try:
-                    self._undo_top_btn.clicked.disconnect(prev[0])
-                except (RuntimeError, TypeError):
-                    pass
-                try:
-                    self._redo_top_btn.clicked.disconnect(prev[1])
-                except (RuntimeError, TypeError):
-                    pass
-            self._undo_top_btn.clicked.connect(self._viewer.undo)
-            self._redo_top_btn.clicked.connect(self._viewer.redo)
-            self._undo_redo_handlers = (self._viewer.undo, self._viewer.redo)
-            self._viewer.set_page_rotations({})
-            self._viewer.set_crop_mode(False)
-            self._viewer.set_crop_preview(None)
-            self._viewer.set_numbers_preview(None)
-            self._viewer.set_page_crops({})
-            self._viewer.set_page_order(None)
+            self._setup_zoom_bar(True, canvas=self._viewer._canvas if self._viewer else None)
+            if self._viewer:
+                self._viewer.set_page_rotations({})
+                self._viewer.set_crop_mode(False)
+                self._viewer.set_crop_preview(None)
+                self._viewer.set_numbers_preview(None)
+                self._viewer.set_page_crops({})
+                self._viewer.set_page_order(None)
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
@@ -169,27 +274,13 @@ class WindowActionsMixin:
                 edit_w = self.stack.widget(edit_idx)
                 if hasattr(edit_w, "_ctrl_scroll"):
                     edit_w._ctrl_scroll.setVisible(True)
-                self._undo_top_btn.setVisible(True)
-                self._redo_top_btn.setVisible(True)
-                prev = getattr(self, "_undo_redo_handlers", None)
-                if prev is not None:
-                    try:
-                        self._undo_top_btn.clicked.disconnect(prev[0])
-                    except (RuntimeError, TypeError):
-                        pass
-                    try:
-                        self._redo_top_btn.clicked.disconnect(prev[1])
-                    except (RuntimeError, TypeError):
-                        pass
-                self._undo_top_btn.clicked.connect(edit_w._undo)
-                self._redo_top_btn.clicked.connect(edit_w._redo)
-                self._undo_redo_handlers = (edit_w._undo, edit_w._redo)
-                self._viewer.set_page_rotations({})
-                self._viewer.set_crop_mode(False)
-                self._viewer.set_crop_preview(None)
-                self._viewer.set_numbers_preview(None)
-                self._viewer.set_page_crops({})
-                self._viewer.set_page_order(None)
+                if self._viewer:
+                    self._viewer.set_page_rotations({})
+                    self._viewer.set_crop_mode(False)
+                    self._viewer.set_crop_preview(None)
+                    self._viewer.set_numbers_preview(None)
+                    self._viewer.set_page_crops({})
+                    self._viewer.set_page_order(None)
             else:
                 self._pages_toggle_btn.setVisible(True)
                 self.stack.setMinimumWidth(320)
@@ -204,32 +295,19 @@ class WindowActionsMixin:
                 if row == rotate_idx:
                     rot_w = self.stack.widget(rotate_idx)
                     rots = getattr(rot_w, "_rotations", {})
-                    self._viewer.set_page_rotations(rots)
-                else:
+                    if self._viewer:
+                        self._viewer.set_page_rotations(rots)
+                elif self._viewer:
                     self._viewer.set_page_rotations({})
 
                 if row == crop_idx:
                     crop_w = self.stack.widget(crop_idx)
                     active = crop_w.btn_draw_crop.isChecked()
-                    self._viewer.set_crop_mode(active)
-                    crop_w._emit_preview()
-                    self._viewer.set_page_crops(crop_w._applied_crops)
-                    self._undo_top_btn.setVisible(True)
-                    self._redo_top_btn.setVisible(True)
-                    prev = getattr(self, "_undo_redo_handlers", None)
-                    if prev is not None:
-                        try:
-                            self._undo_top_btn.clicked.disconnect(prev[0])
-                        except (RuntimeError, TypeError):
-                            pass
-                        try:
-                            self._redo_top_btn.clicked.disconnect(prev[1])
-                        except (RuntimeError, TypeError):
-                            pass
-                    self._undo_top_btn.clicked.connect(crop_w._undo)
-                    self._redo_top_btn.clicked.connect(crop_w._redo)
-                    self._undo_redo_handlers = (crop_w._undo, crop_w._redo)
-                else:
+                    if self._viewer:
+                        self._viewer.set_crop_mode(active)
+                        crop_w._emit_preview()
+                        self._viewer.set_page_crops(crop_w._applied_crops)
+                elif self._viewer:
                     self._viewer.set_crop_mode(False)
                     self._viewer.set_crop_preview(None)
                     self._viewer.set_page_crops({})
@@ -238,38 +316,21 @@ class WindowActionsMixin:
                     pn_w = self.stack.widget(page_numbers_idx)
                     pn_w._emit_preview()
                     pn_w._update_undo_redo_state()
-                    self._undo_top_btn.setVisible(True)
-                    self._redo_top_btn.setVisible(True)
-                    prev = getattr(self, "_undo_redo_handlers", None)
-                    if prev is not None:
-                        try:
-                            self._undo_top_btn.clicked.disconnect(prev[0])
-                        except (RuntimeError, TypeError):
-                            pass
-                        try:
-                            self._redo_top_btn.clicked.disconnect(prev[1])
-                        except (RuntimeError, TypeError):
-                            pass
-                    self._undo_top_btn.clicked.connect(pn_w._undo)
-                    self._redo_top_btn.clicked.connect(pn_w._redo)
-                    self._undo_redo_handlers = (pn_w._undo, pn_w._redo)
-                else:
+                elif self._viewer:
                     self._viewer.set_numbers_preview(None)
 
                 if row == reorder_idx:
                     reorder_w = self.stack.widget(reorder_idx)
                     order = getattr(reorder_w, "get_order", lambda: [])()
-                    if order:
+                    if order and self._viewer:
                         self._viewer.set_page_order(order)
-                else:
+                elif self._viewer:
                     self._viewer.set_page_order(None)
-
-                if row not in (crop_idx, page_numbers_idx):
-                    self._undo_top_btn.setVisible(False)
-                    self._redo_top_btn.setVisible(False)
 
             self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
             self._try_auto_load(row)
+
+        self._update_undo_redo_buttons()
 
     def _open_pdf(self):
         paths, _ = QFileDialog.getOpenFileNames(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
@@ -278,11 +339,11 @@ class WindowActionsMixin:
 
     def _load_and_track(self, path: str):
         path = os.path.abspath(os.path.normpath(path))
-        if self._viewer.current_path():
+        if self._viewer and self._viewer.current_path():
             self._add_viewer_tab(path)
-        else:
+        elif self._viewer:
             self._viewer.load(path)
-        if self._viewer.current_path():
+        if self._viewer and self._viewer.current_path():
             add_recent_file(path)
         for v in self._viewers:
             refresh = getattr(v, "_refresh_recents", None)
@@ -321,6 +382,9 @@ class WindowActionsMixin:
 
     # ── Page navigation ───────────────────────────────────────────────────
     def _update_page_nav(self):
+        if not self._viewer:
+            self._page_nav_widget.setVisible(False)
+            return
         canvas = self._viewer._canvas
         entries = canvas._entries
         if not entries:
@@ -336,8 +400,11 @@ class WindowActionsMixin:
         self._prev_pg_btn.setEnabled(idx > 0)
         self._next_pg_btn.setEnabled(idx < total - 1)
         self._last_pg_btn.setEnabled(idx < total - 1)
+        self._update_undo_redo_buttons()
 
     def _goto_first_page(self):
+        if not self._viewer:
+            return
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -345,6 +412,8 @@ class WindowActionsMixin:
         sb.setValue(canvas.scroll_to_page(0))
 
     def _goto_prev_page(self):
+        if not self._viewer:
+            return
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -354,6 +423,8 @@ class WindowActionsMixin:
             sb.setValue(canvas.scroll_to_page(idx - 1))
 
     def _goto_next_page(self):
+        if not self._viewer:
+            return
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -363,6 +434,8 @@ class WindowActionsMixin:
             sb.setValue(canvas.scroll_to_page(idx + 1))
 
     def _goto_last_page(self):
+        if not self._viewer:
+            return
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -370,6 +443,8 @@ class WindowActionsMixin:
         sb.setValue(canvas.scroll_to_page(len(canvas._entries) - 1))
 
     def _goto_input_page(self):
+        if not self._viewer:
+            return
         canvas = self._viewer._canvas
         if not canvas._entries:
             return
@@ -468,14 +543,19 @@ class WindowActionsMixin:
                 self._load_and_track(path)
 
     def _toggle_night_mode_top(self):
-        active = self._night_top_btn.isChecked()
-        self._viewer._canvas.set_night_mode(active)
+        if self._viewer:
+            active = self._night_top_btn.isChecked()
+            self._viewer._canvas.set_night_mode(active)
 
     def _refresh_viewer_top_buttons(self):
         try:
             v = self._viewer
-            self._toc_top_btn.setVisible(v._toc_tree.topLevelItemCount() > 0)
-            self._night_top_btn.setChecked(v._canvas._night_mode)
+            if v:
+                self._toc_top_btn.setVisible(v._toc_tree.topLevelItemCount() > 0)
+                self._night_top_btn.setChecked(v._canvas._night_mode)
+            else:
+                self._toc_top_btn.setVisible(False)
+                self._night_top_btn.setChecked(False)
         except Exception:
             self._toc_top_btn.setVisible(False)
             self._night_top_btn.setChecked(False)
@@ -497,7 +577,7 @@ class WindowActionsMixin:
 
     def _start_presentation(self):
         viewer = self._viewer
-        if not viewer._current_path:
+        if not viewer or not viewer._current_path:
             return
         canvas = viewer._canvas
         sb = viewer._canvas_scroll.verticalScrollBar()

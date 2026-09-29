@@ -1,4 +1,3 @@
-
 # app/tools/crop.py
 
 """PDFApps – TabCortar: crop PDF pages tool."""
@@ -537,6 +536,20 @@ class TabCortar(BasePage):
 
         f.addWidget(grp_margins)
 
+        # In-panel save button row
+        btn_save_row = QHBoxLayout()
+        btn_save_row.setContentsMargins(0, 10, 0, 0)
+        btn_save_row.addStretch()
+        self.btn_save = QPushButton(t("tool.crop.btn"))
+        self.btn_save.setObjectName("btn_action_small")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setFixedHeight(32)
+        self.btn_save.setMinimumWidth(80)
+        self.btn_save.clicked.connect(self._run)
+        btn_save_row.addWidget(self.btn_save)
+        f.addLayout(btn_save_row)
+        self.action_btn = self.btn_save
+
         sec_out = section(t("tool.crop.output"))
         f.addWidget(sec_out)
         self.drop_out = DropFileEdit("cropped.pdf", save=True, default_name="cropped.pdf")
@@ -546,6 +559,7 @@ class TabCortar(BasePage):
         self._compact_hidden = [sec_src, self.drop_in, self.lbl_info]
         sec_out.setVisible(False)
         self.drop_out.setVisible(False)
+        self._action_bar.setVisible(False)
 
         # Keyboard shortcuts within the tool panel
         sc_enter1 = QShortcut(QKeySequence(Qt.Key.Key_Return), self, self.apply_crop_preview)

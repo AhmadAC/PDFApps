@@ -1,381 +1,294 @@
 # app/window_tabs.py
-"""PDFApps – Tab management and custom tab bar component."""
+"""PDFApps – Tab management and multi-viewer window mixin."""
+
+from __future__ import annotations
+
 import os
 import sys
 
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QTabBar, QMenu, QApplication, QMessageBox
-import qtawesome as qta
+from PySide6.QtWidgets import (
+    QApplication,
+    QMenu,
+    QMessageBox,
+    QTabBar,
+)
 
-from app.constants import TEXT_PRI, _LQ
-from app.i18n import t, add_recent_file
+from app.i18n import add_recent_file, t
 from app.utils import reveal_file
 from app.viewer.panel import PdfViewerPanel
-from app.tools.rotate import TabRotar
-from app.tools.crop import TabCortar
-from app.tools.reorder import TabReordenar
-from app.tools.page_numbers import TabPageNumbers
-from app.editor.tab import TabEditar
-from app.nav_config import NAV_ITEMS
+
+__all__ = ["_ViewerTabBar", "WindowTabsMixin"]
 
 
 class _ViewerTabBar(QTabBar):
-    """Custom tab bar supporting middle-click (mouse wheel click) to close tabs."""
+    """Custom tab bar supporting mouse middle-click to close tabs and double-click to open."""
 
-    def mousePressEvent(self, event: QMouseEvent):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.MiddleButton:
-            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            pos = (
+                event.position().toPoint()
+                if hasattr(event, "position")
+                else event.pos()
+            )
             idx = self.tabAt(pos)
             if idx >= 0:
                 self.tabCloseRequested.emit(idx)
                 event.accept()
                 return
-        super().mouseReleaseEvent(event)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        pos = (
+            event.position().toPoint()
+            if hasattr(event, "position")
+            else event.pos()
+        )
+        idx = self.tabAt(pos)
+        if idx < 0:
+            parent = self.window()
+            if hasattr(parent, "_open_pdf"):
+                parent._open_pdf()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
 
 class WindowTabsMixin:
-    """Mixin for MainWindow tab operations and viewer interactions."""
+    """Mixin for MainWindow managing viewer tabs, document routing, and tab lifecycle."""
 
     @property
-    def _viewer(self) -> PdfViewerPanel:
-        idx = self._viewer_stack.currentIndex()
-        if 0 <= idx < len(self._viewers):
-            return self._viewers[idx]
-        return self._viewers[0]
-
-    def _rotate_tool_idx(self) -> int:
-        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabRotar)
-
-    def _crop_tool_idx(self) -> int:
-        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabCortar)
-
-    def _reorder_tool_idx(self) -> int:
-        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabReordenar)
-
-    def _page_numbers_tool_idx(self) -> int:
-        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabPageNumbers)
-
-    def _edit_tool_idx(self) -> int:
-        return next(i for i, (_, __, cls) in enumerate(NAV_ITEMS) if cls is TabEditar)
-
-    def _on_rotations_changed(self, rotations: dict):
-        self._viewer.set_page_rotations(rotations)
-
-    def _on_crop_changed(self, crop_data: dict):
-        self._viewer.set_crop_preview(crop_data)
-
-    def _on_crops_changed(self, crops: dict):
-        self._viewer.set_page_crops(crops)
-
-    def _on_numbers_preview_changed(self, preview_data: dict | None):
-        if self._current_tool == self._page_numbers_tool_idx():
-            self._viewer.set_numbers_preview(preview_data)
-
-    def _on_order_changed(self, order: list[int]):
-        self._viewer.set_page_order(order)
-
-    def _on_crop_mode_toggled(self, active: bool):
-        if self._current_tool == self._crop_tool_idx():
-            self._viewer.set_crop_mode(active)
-
-    def _on_viewer_crop_selected(self, page_idx: int, rect: tuple):
-        if self._current_tool == self._crop_tool_idx():
-            crop_w = self.stack.widget(self._crop_tool_idx())
-            crop_w.on_canvas_crop_selected(page_idx, rect)
-
-    def _on_viewer_crop_applied(self):
-        if self._current_tool == self._crop_tool_idx():
-            crop_w = self.stack.widget(self._crop_tool_idx())
-            crop_w.apply_crop_preview()
-
-    def _on_viewer_crop_undo(self):
-        if self._current_tool == self._crop_tool_idx():
-            crop_w = self.stack.widget(self._crop_tool_idx())
-            crop_w._undo()
-
-    def _on_viewer_crop_redo(self):
-        if self._current_tool == self._crop_tool_idx():
-            crop_w = self.stack.widget(self._crop_tool_idx())
-            crop_w._redo()
+    def _viewer(self) -> PdfViewerPanel | None:
+        if hasattr(self, "_viewers") and self._viewers:
+            idx = self._viewer_stack.currentIndex()
+            if 0 <= idx < len(self._viewers):
+                return self._viewers[idx]
+            return self._viewers[0]
+        return None
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
-        v = PdfViewerPanel()
-        self._viewers.append(v)
-        self._viewer_stack.addWidget(v)
-        idx = self._tab_bar.addTab(t("viewer.title"))
-        self._tab_bar.setCurrentIndex(idx)
-        self._update_tab_visibility()
+        viewer = PdfViewerPanel()
 
-        v._canvas_scroll.verticalScrollBar().valueChanged.connect(lambda _: self._update_page_nav())
-        v.crop_selected.connect(self._on_viewer_crop_selected)
-        v.crop_applied.connect(self._on_viewer_crop_applied)
-        v.crop_undo_requested.connect(self._on_viewer_crop_undo)
-        v.crop_redo_requested.connect(self._on_viewer_crop_redo)
+        viewer.crop_selected.connect(self._on_canvas_crop_selected)
+        viewer.crop_applied.connect(self._on_canvas_crop_applied)
+        viewer.crop_undo_requested.connect(self._handle_global_undo)
+        viewer.crop_redo_requested.connect(self._handle_global_redo)
+        if hasattr(viewer, "page_action_requested"):
+            viewer.page_action_requested.connect(self._on_thumbnail_action_requested)
 
-        original_load = v.load
+        viewer._canvas_scroll.verticalScrollBar().valueChanged.connect(
+            lambda _: self._update_page_nav()
+        )
+        viewer._canvas.zoom_changed.connect(lambda _: self._update_page_nav())
 
-        def _make_wrapped(viewer, orig):
-            def _wrapped(*args, track=True, **kwargs):
-                orig(*args, **kwargs)
-                if viewer.current_path():
-                    curr = viewer.current_path()
-                    vid = id(viewer)
-                    ps = self._pipeline_state.get(vid)
-                    if ps and ps.get("original_path"):
-                        orig_path = ps["original_path"]
-                        name = f"● {os.path.basename(orig_path)}"
-                        tooltip = f"{orig_path} (modified)"
-                    else:
-                        if track:
-                            add_recent_file(curr)
-                        name = os.path.basename(curr)
-                        tooltip = curr
-                    for i in range(len(self._viewers)):
-                        if self._viewers[i] is viewer:
-                            self._tab_bar.setTabText(i, name)
-                            self._tab_bar.setTabToolTip(i, tooltip)
-                            break
-                    self._refresh_viewer_top_buttons()
-                QTimer.singleShot(100, self._update_page_nav)
-                self._update_tab_visibility()
-                if self._current_tool == -1 and viewer.current_path():
-                    self._setup_zoom_bar(True, canvas=viewer._canvas)
-            return _wrapped
+        self._viewers.append(viewer)
+        self._viewer_stack.addWidget(viewer)
 
-        v.load = _make_wrapped(v, original_load)
+        tab_title = os.path.basename(path) if path else t("viewer.title")
+        tab_idx = self._tab_bar.addTab(tab_title)
+        self._tab_bar.setTabToolTip(tab_idx, path or "")
+        self._tab_bar.setCurrentIndex(tab_idx)
+        self._viewer_stack.setCurrentIndex(tab_idx)
+
         if path:
-            v.load(path)
-        return v
+            viewer.load(path)
 
-    def _update_tab_visibility(self):
-        has_doc = any(v.current_path() for v in self._viewers)
-        self._tab_bar.setVisible(has_doc)
+        self._update_tab_bar_visibility()
+        if hasattr(self, "_update_page_nav"):
+            self._update_page_nav()
+        return viewer
 
-    def _on_tab_changed(self, idx: int):
-        if idx < 0 or idx >= len(self._viewers):
+    def _update_tab_bar_visibility(self) -> None:
+        has_multiple = len(self._viewers) > 1
+        has_open_doc = bool(self._viewers and self._viewers[0].current_path())
+        self._tab_bar.setVisible(has_multiple or has_open_doc)
+
+    def _close_tab(self, index: int) -> None:
+        if not (0 <= index < len(self._viewers)):
             return
-        self._viewer_stack.setCurrentIndex(idx)
-        self._update_page_nav()
+        viewer = self._viewers[index]
 
-        v = self._viewer
-        if v.current_path():
-            show_pages = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
-            if show_pages is not None and v._pages_sidebar_collapsed == show_pages:
-                v._pages_sidebar_collapsed = not show_pages
-                v._sidebar_panel.setVisible(show_pages)
-                v._sidebar_tabs.setVisible(show_pages)
-                total = v._viewer_splitter.width() or 1020
-                if show_pages:
-                    w = min(400, max(180, getattr(v, "_saved_sidebar_width", 220)))
-                    v._viewer_splitter.setSizes([w, max(300, total - w)])
-                else:
-                    v._viewer_splitter.setSizes([0, total])
-
-        if self._current_tool == -1:
-            self._setup_zoom_bar(True, canvas=self._viewer._canvas)
-            self._undo_top_btn.setVisible(True)
-            self._redo_top_btn.setVisible(True)
-            prev = getattr(self, "_undo_redo_handlers", None)
-            if prev is not None:
-                try:
-                    self._undo_top_btn.clicked.disconnect(prev[0])
-                except (RuntimeError, TypeError):
-                    pass
-                try:
-                    self._redo_top_btn.clicked.disconnect(prev[1])
-                except (RuntimeError, TypeError):
-                    pass
-            self._undo_top_btn.clicked.connect(self._viewer.undo)
-            self._redo_top_btn.clicked.connect(self._viewer.redo)
-            self._undo_redo_handlers = (self._viewer.undo, self._viewer.redo)
-            self._viewer.set_page_rotations({})
-            self._viewer.set_crop_mode(False)
-            self._viewer.set_crop_preview(None)
-            self._viewer.set_numbers_preview(None)
-            self._viewer.set_page_crops({})
-            self._viewer.set_page_order(None)
-        elif self._current_tool == self._rotate_tool_idx():
-            rot_w = self.stack.widget(self._rotate_tool_idx())
-            rots = getattr(rot_w, "_rotations", {})
-            self._viewer.set_page_rotations(rots)
-        elif self._current_tool == self._crop_tool_idx():
-            crop_w = self.stack.widget(self._crop_tool_idx())
-            crop_w._emit_preview()
-            self._viewer.set_page_crops(crop_w._applied_crops)
-        elif self._current_tool == self._page_numbers_tool_idx():
-            pn_w = self.stack.widget(self._page_numbers_tool_idx())
-            pn_w._emit_preview()
-            pn_w._update_undo_redo_state()
-        elif self._current_tool == self._reorder_tool_idx():
-            reorder_w = self.stack.widget(self._reorder_tool_idx())
-            order = getattr(reorder_w, "get_order", lambda: [])()
-            if order:
-                self._viewer.set_page_order(order)
-            else:
-                self._viewer.set_page_order(None)
-        else:
-            self._viewer.set_page_rotations({})
-            self._viewer.set_crop_mode(False)
-            self._viewer.set_crop_preview(None)
-            self._viewer.set_numbers_preview(None)
-            self._viewer.set_page_crops({})
-            self._viewer.set_page_order(None)
-        self._refresh_viewer_top_buttons()
-
-    def _close_tab(self, idx: int):
-        viewer = self._viewers[idx] if idx < len(self._viewers) else self._viewers[0]
-        if self._viewer_has_unsaved(viewer):
+        if hasattr(self, "_viewer_has_unsaved") and self._viewer_has_unsaved(viewer):
             ans = QMessageBox.question(
-                self, t("msg.warning"), t("pipeline.unsaved_prompt"),
-                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel)
+                self,
+                t("msg.warning"),
+                t("pipeline.unsaved_prompt"),
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
             if ans == QMessageBox.StandardButton.Cancel:
                 return
             if ans == QMessageBox.StandardButton.Save:
                 self._save_pipeline()
-                return
-        self._cleanup_pipeline(id(viewer))
-        if self._tab_bar.count() <= 1:
-            viewer = self._viewers[0]
-            viewer._canvas.close_doc()
-            self._wipe_password_holder(viewer)
-            viewer._fitz_doc = None
-            viewer._current_path = ""
-            viewer._original_doc_path = ""
-            viewer._cleanup_history_files()
-            viewer._undo_stack.clear()
-            viewer._redo_stack.clear()
-            viewer._viewer_splitter.setVisible(False)
-            viewer._toc_tree.clear()
-            viewer._toc_tree.setVisible(False)
-            viewer._toc_btn.setVisible(False)
-            viewer._placeholder.setVisible(True)
-            viewer._hdr.setVisible(False)
-            viewer._name_lbl.setText(t("viewer.title"))
-            self._tab_bar.setTabText(0, t("viewer.title"))
-            self._tab_bar.setTabToolTip(0, "")
-            self._update_tab_visibility()
-            self._update_page_nav()
-            self._setup_zoom_bar(False)
-            self._page_nav_widget.setVisible(False)
-            self._refresh_viewer_top_buttons()
-            return
-        viewer = self._viewers.pop(idx)
-        self._tab_bar.removeTab(idx)
+
+        if hasattr(self, "_cleanup_pipeline"):
+            self._cleanup_pipeline(id(viewer))
+
+        viewer.close_doc()
         self._viewer_stack.removeWidget(viewer)
-        viewer._canvas.close_doc()
-        self._wipe_password_holder(viewer)
+        self._viewers.pop(index)
+
+        self._tab_bar.blockSignals(True)
+        self._tab_bar.removeTab(index)
+        self._tab_bar.blockSignals(False)
         viewer.deleteLater()
-        self._update_tab_visibility()
-        self._update_page_nav()
 
-    def _close_current_tab(self):
-        idx = self._tab_bar.currentIndex()
-        if idx >= 0:
-            self._close_tab(idx)
+        if not self._viewers:
+            self._add_viewer_tab()
+        else:
+            new_idx = min(index, len(self._viewers) - 1)
+            self._tab_bar.setCurrentIndex(new_idx)
+            self._viewer_stack.setCurrentIndex(new_idx)
 
-    def _close_other_tabs(self, keep_idx: int):
-        total = len(self._viewers)
-        for i in range(total - 1, -1, -1):
-            if i != keep_idx:
-                self._close_tab(i)
+        self._update_tab_bar_visibility()
+        if hasattr(self, "_update_page_nav"):
+            self._update_page_nav()
+        if hasattr(self, "_update_breadcrumb"):
+            self._update_breadcrumb()
 
-    def _on_tab_context_menu(self, pos: QPoint):
-        idx = self._tab_bar.tabAt(pos)
-        if idx < 0 or idx >= len(self._viewers):
+    def _close_current_tab(self) -> None:
+        if hasattr(self, "_viewer_stack"):
+            self._close_tab(self._viewer_stack.currentIndex())
+
+    def _on_tab_changed(self, index: int) -> None:
+        if 0 <= index < len(self._viewers):
+            self._viewer_stack.setCurrentIndex(index)
+            viewer = self._viewers[index]
+            if hasattr(self, "_update_page_nav"):
+                self._update_page_nav()
+            if hasattr(self, "_update_breadcrumb"):
+                self._update_breadcrumb()
+            if getattr(self, "_current_tool", -1) >= 0:
+                tool_w = self.stack.widget(self._current_tool)
+                cur_path = viewer.current_path()
+                if cur_path and hasattr(tool_w, "auto_load"):
+                    tool_w.auto_load(cur_path)
+            elif hasattr(self, "_setup_zoom_bar"):
+                self._setup_zoom_bar(True, canvas=viewer._canvas)
+
+    def _on_tab_context_menu(self, point: QPoint) -> None:
+        tab_idx = self._tab_bar.tabAt(point)
+        if tab_idx < 0:
             return
-
-        viewer = self._viewers[idx]
+        viewer = self._viewers[tab_idx]
         path = viewer.current_path()
-        if not path:
-            return
-
-        dark = self._dark_mode
-        c = TEXT_PRI if dark else _LQ
 
         menu = QMenu(self)
-
-        # 1. Clipboard options
-        act_copy_path = menu.addAction(qta.icon("fa5s.copy", color=c), "Copy Full Path")
-        act_copy_name = menu.addAction(qta.icon("fa5s.file", color=c), "Copy File Name")
+        act_close = menu.addAction(t("tab.close", default="Close Tab"))
+        act_close_others = menu.addAction(t("tab.close_others", default="Close Other Tabs"))
+        act_close_right = menu.addAction(t("tab.close_right", default="Close Tabs to the Right"))
         menu.addSeparator()
 
-        # 2. Explorer / Finder actions
-        reveal_label = (
-            "Reveal in File Explorer"
-            if sys.platform == "win32"
-            else ("Reveal in Finder" if sys.platform == "darwin" else "Show in File Manager")
-        )
-        act_reveal = menu.addAction(qta.icon("fa5s.folder-open", color=c), reveal_label)
-        menu.addSeparator()
+        act_reveal = None
+        act_copy_path = None
+        if path and os.path.exists(path):
+            label = "Show in Explorer" if sys.platform == "win32" else "Show in File Manager"
+            act_reveal = menu.addAction(t("tab.reveal", default=label))
+            act_copy_path = menu.addAction(t("tab.copy_path", default="Copy File Path"))
 
-        # 3. Tab management
-        act_close = menu.addAction(qta.icon("fa5s.times", color="#EF4444"), "Close Tab")
-        act_close_others = menu.addAction("Close Other Tabs")
-
-        action = menu.exec(self._tab_bar.mapToGlobal(pos))
-        if not action:
-            return
-
-        if action == act_copy_path:
-            QApplication.clipboard().setText(os.path.normpath(path))
-            self._set_status(f"✔ Copied path to clipboard: {os.path.normpath(path)}")
-        elif action == act_copy_name:
-            name = os.path.basename(path)
-            QApplication.clipboard().setText(name)
-            self._set_status(f"✔ Copied file name to clipboard: {name}")
-        elif action == act_reveal:
+        chosen = menu.exec(self._tab_bar.mapToGlobal(point))
+        if chosen == act_close:
+            self._close_tab(tab_idx)
+        elif chosen == act_close_others:
+            for i in range(len(self._viewers) - 1, -1, -1):
+                if i != tab_idx:
+                    self._close_tab(i)
+        elif chosen == act_close_right:
+            for i in range(len(self._viewers) - 1, tab_idx, -1):
+                self._close_tab(i)
+        elif act_reveal and chosen == act_reveal:
             reveal_file(path)
-        elif action == act_close:
-            self._close_tab(idx)
-        elif action == act_close_others:
-            self._close_other_tabs(idx)
+        elif act_copy_path and chosen == act_copy_path:
+            QApplication.clipboard().setText(path)
 
-    def _toggle_pages_sidebar(self):
-        v = self._viewer
-        if hasattr(v, "_toggle_pages_sidebar"):
-            v._toggle_pages_sidebar()
-        elif hasattr(v, "_sidebar_panel"):
-            is_vis = v._sidebar_panel.isVisible()
-            v._sidebar_panel.setVisible(not is_vis)
-            if not is_vis:
-                w = min(400, max(180, getattr(v, "_saved_sidebar_width", 220)))
-                total = v._viewer_splitter.width()
-                v._viewer_splitter.setSizes([w, max(300, total - w)])
-            else:
-                total = v._viewer_splitter.width()
-                v._viewer_splitter.setSizes([0, total])
+    def _load_and_track(self, path: str) -> PdfViewerPanel | None:
+        if not path or not os.path.isfile(path):
+            return None
+        norm_path = os.path.abspath(path)
 
-    def _toggle_right_pane(self):
-        if self._current_tool < 0:
-            return
-        edit_idx = self._edit_tool_idx()
-        if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if hasattr(edit_w, "toggle_controls"):
-                edit_w.toggle_controls()
-            elif hasattr(edit_w, "_ctrl_scroll"):
-                is_vis = edit_w._ctrl_scroll.isVisible()
-                edit_w._ctrl_scroll.setVisible(not is_vis)
-            return
+        for i, v in enumerate(self._viewers):
+            if v.current_path() and os.path.abspath(v.current_path()) == norm_path:
+                self._tab_bar.setCurrentIndex(i)
+                self._viewer_stack.setCurrentIndex(i)
+                add_recent_file(norm_path)
+                if hasattr(self, "_update_page_nav"):
+                    self._update_page_nav()
+                return v
 
-        is_visible = self._right_tool_container.isVisible()
-        if is_visible:
-            self._saved_right_width = max(320, self._right_tool_container.width())
-            self._right_tool_container.setVisible(False)
-            self.stack.setVisible(False)
-            total = self._splitter.width()
-            self._splitter.setSizes([total, 0])
+        cur_v = self._viewer
+        if cur_v and not cur_v.current_path():
+            target_v = cur_v
+            idx = self._viewer_stack.currentIndex()
         else:
-            self._right_tool_container.setVisible(True)
-            self.stack.setVisible(True)
-            tool_w = min(600, max(320, getattr(self, "_saved_right_width", 400)))
-            total = self._splitter.width()
-            self._splitter.setSizes([max(300, tool_w), tool_w])
+            target_v = self._add_viewer_tab()
+            idx = len(self._viewers) - 1
+
+        target_v.load(norm_path)
+        add_recent_file(norm_path)
+        self._tab_bar.setTabText(idx, os.path.basename(norm_path))
+        self._tab_bar.setTabToolTip(idx, norm_path)
+        self._update_tab_bar_visibility()
+        if hasattr(self, "_update_breadcrumb"):
+            self._update_breadcrumb()
+        if hasattr(self, "_update_page_nav"):
+            self._update_page_nav()
+
+        if getattr(self, "_current_tool", -1) >= 0:
+            tool_w = self.stack.widget(self._current_tool)
+            if hasattr(tool_w, "auto_load"):
+                tool_w.auto_load(norm_path)
+        return target_v
+
+    def _on_second_instance(self, paths: list[str]) -> None:
+        self.setWindowState(
+            self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive
+        )
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        for p in paths:
+            if os.path.isfile(p) and p.lower().endswith(".pdf"):
+                self._load_and_track(p)
+
+    def _on_canvas_crop_selected(self, page_idx: int, rect: tuple) -> None:
+        crop_idx = self._crop_tool_idx() if hasattr(self, "_crop_tool_idx") else -1
+        if crop_idx >= 0:
+            crop_w = self.stack.widget(crop_idx)
+            if hasattr(crop_w, "on_canvas_crop_selected"):
+                crop_w.on_canvas_crop_selected(page_idx, rect)
+
+    def _on_canvas_crop_applied(self) -> None:
+        crop_idx = self._crop_tool_idx() if hasattr(self, "_crop_tool_idx") else -1
+        if crop_idx >= 0:
+            crop_w = self.stack.widget(crop_idx)
+            if hasattr(crop_w, "apply_crop_preview"):
+                crop_w.apply_crop_preview()
+
+    def _on_thumbnail_action_requested(self, action: str, pages_arg: object) -> None:
+        if self._viewer and hasattr(self._viewer, "_on_thumbnail_action"):
+            self._viewer._on_thumbnail_action(action, pages_arg)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.toLocalFile().lower().endswith(".pdf"):
+                    event.acceptProposedAction()
+                    return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        urls = event.mimeData().urls()
+        pdf_paths = [
+            u.toLocalFile()
+            for u in urls
+            if u.toLocalFile().lower().endswith(".pdf") and os.path.isfile(u.toLocalFile())
+        ]
+        if pdf_paths:
+            for p in pdf_paths:
+                self._load_and_track(p)
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)

@@ -181,7 +181,7 @@ class BasePage(QWidget):
         toast = QWidget(); toast.setObjectName("toast")
         toast.setStyleSheet(
             "#toast { background: #1B3A2F; border: 1px solid #10B981; "
-            "border-radius: 8px; padding: 8px 12px; }"
+            "border-radius: 8px; padding: 8px 12px; margin: 0 24px 8px 24px; }"
             "#toast QLabel { color: #F0F0F0; font-size: 10pt; background: transparent; }"
             "#toast QPushButton { color: #A7F3D0; border: none; background: transparent; "
             "font-size: 10pt; text-decoration: underline; padding: 0 4px; }"

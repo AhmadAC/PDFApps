@@ -1,4 +1,5 @@
-# app\styles.py 
+# app\styles.py
+
 """PDFApps – stylesheet strings (dark + light themes)."""
 
 from app.constants import (
@@ -12,6 +13,7 @@ STYLE = f"""
 /* ── Globals ─────────────────────────────────────────────────────────── */
 QMainWindow {{ background: {BG_BASE}; }}
 #central_widget {{ background: {BG_BASE}; }}
+#content_area {{ background: {BG_INNER}; }}
 QWidget     {{ background: transparent; color: {TEXT_PRI};
               font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif; font-size: 11pt; }}
 QDialog     {{ background: {BG_CARD}; color: {TEXT_PRI}; }}
@@ -84,8 +86,17 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 /* ── Scroll inner ────────────────────────────────────────────────────── */
 #scroll_inner {{ background: {BG_INNER}; }}
 
-/* ── Action bar ──────────────────────────────────────────────────────── */
-#action_bar   {{ background: {BG_CARD}; border-top: 1px solid {BORDER}; }}
+/* ── Action bar & small save button ──────────────────────────────────── */
+#action_bar   {{ background: {BG_INNER}; border: none; }}
+
+#btn_action_small {{
+    background: {ACCENT}; color: #FFFFFF; border: 1px solid #005A9E;
+    border-radius: 6px; font-size: 10pt; font-weight: 600;
+    padding: 4px 16px; min-height: 24px;
+}}
+#btn_action_small:hover   {{ background: {ACCENT_H}; border-color: {ACCENT}; }}
+#btn_action_small:pressed {{ background: {ACCENT_P}; }}
+#btn_action_small:disabled {{ background: #3A3D40; border-color: #4A4D50; color: #777777; }}
 
 /* ── Primary button ──────────────────────────────────────────────────── */
 #btn_primary {{
@@ -279,6 +290,7 @@ QSplitter::handle {{ background: {BORDER}; width: 1px; }}
 STYLE_LIGHT = f"""
 QMainWindow {{ background: #CBD5E1; }}
 #central_widget {{ background: #CBD5E1; }}
+#content_area {{ background: {_LN}; }}
 QWidget     {{ background: transparent; color: {_LP};
               font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif; font-size: 11pt; }}
 QDialog     {{ background: {_LC}; color: {_LP}; }}
@@ -341,8 +353,20 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #th_desc      {{ font-size: 10.5pt; background: transparent; color: {_LQ}; }}
 
 #scroll_inner {{ background: {_LN}; }}
-#action_bar   {{ background: {_LC}; border-top: 1px solid {_LO}; }}
 
+/* ── Action bar & small save button ──────────────────────────────────── */
+#action_bar   {{ background: {_LN}; border: none; }}
+
+#btn_action_small {{
+    background: {_LA}; color: #FFFFFF; border: none;
+    border-radius: 6px; font-size: 10pt; font-weight: 600;
+    padding: 4px 16px; min-height: 24px;
+}}
+#btn_action_small:hover   {{ background: {_LAH}; }}
+#btn_action_small:pressed {{ background: {_LAP}; }}
+#btn_action_small:disabled {{ background: #CBD5E1; color: #94A3B8; }}
+
+/* ── Primary button ──────────────────────────────────────────────────── */
 #btn_primary {{
     background: {_LA}; color: #FFFFFF; border: none;
     border-radius: 6px; font-size: 11pt; font-weight: 700;

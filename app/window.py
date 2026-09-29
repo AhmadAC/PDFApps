@@ -3,27 +3,25 @@
 import os
 import json
 
-from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QRect, QModelIndex
+from PySide6.QtCore import Qt, QSize, QTimer, QRect, QModelIndex
 from PySide6.QtGui import (
-    QIcon, QColor, QShortcut, QKeySequence, QMouseEvent,
+    QIcon, QColor, QShortcut, QKeySequence,
     QPixmap, QPainter, QImage, QFont, QPen
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QStackedWidget, QSplitter, QStatusBar,
-    QFrame, QApplication, QLineEdit, QMenu, QTabBar, QFileDialog, QMessageBox,
-    QStyledItemDelegate, QStyle
+    QFrame, QApplication, QLineEdit, QMessageBox, QStyledItemDelegate, QStyle
 )
 from shiboken6 import isValid
 import qtawesome as qta
-import fitz
 
-from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP, BORDER, APP_VERSION
-from app.i18n import t, set_language, get_language, add_recent_file, _CONFIG_PATH
+from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, DESKTOP, APP_VERSION
+from app.i18n import t, _CONFIG_PATH
 from app.styles import STYLE, STYLE_LIGHT
-from app.utils import resource_path, _make_palette, show_error, reveal_file
-from app.widgets import DropFileEdit, MultiDropWidget
+from app.utils import resource_path, _make_palette
+from app.widgets import DropFileEdit
 from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
 from app.viewer.panel import PdfViewerPanel
@@ -32,7 +30,6 @@ from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
 from app.tools.reorder import TabReordenar
 from app.tools.page_numbers import TabPageNumbers
-from app.editor.tab import TabEditar
 from app.workspace_bar import WorkspaceBar
 from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
 
@@ -201,14 +198,16 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._open_pdf_btn.clicked.connect(self._open_pdf)
         self._toc_top_btn.clicked.connect(self._toggle_pages_sidebar)
         self._night_top_btn.clicked.connect(self._toggle_night_mode_top)
-        self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf())
+        self._print_top_btn.clicked.connect(lambda: self._viewer._print_pdf() if self._viewer else None)
         self._present_btn.clicked.connect(self._start_presentation)
-        self._search_top_btn.clicked.connect(lambda: self._viewer._toggle_search())
+        self._search_top_btn.clicked.connect(lambda: self._viewer._toggle_search() if self._viewer else None)
         self._first_pg_btn.clicked.connect(self._goto_first_page)
         self._prev_pg_btn.clicked.connect(self._goto_prev_page)
         self._next_pg_btn.clicked.connect(self._goto_next_page)
         self._last_pg_btn.clicked.connect(self._goto_last_page)
         self._page_input.returnPressed.connect(self._goto_input_page)
+        self._undo_top_btn.clicked.connect(self._handle_global_undo)
+        self._redo_top_btn.clicked.connect(self._handle_global_redo)
         self._help_btn.clicked.connect(lambda: __import__('webbrowser').open("https://pdf-apps.com/docs#first-steps"))
         self._lang_btn.clicked.connect(self._show_language_menu)
         self._theme_btn.clicked.connect(self._toggle_theme)
@@ -311,35 +310,6 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._nav_delegate = NavItemDelegate(self.nav, is_dark_fn=lambda: self._dark_mode)
         self.nav.setItemDelegate(self._nav_delegate)
 
-        self._tool_usage = {}
-        try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
-                self._tool_usage = json.load(_cf).get("tool_usage", {})
-        except Exception:
-            pass
-
-        sorted_usage = sorted(self._tool_usage.items(), key=lambda x: x[1], reverse=True)
-        freq_tools = [(k, v) for k, v in sorted_usage if v >= 2][:3]
-        if freq_tools:
-            hdr = QListWidgetItem(t("nav.group.frequent").upper())
-            hdr.setFlags(Qt.ItemFlag.NoItemFlags)
-            hdr.setData(Qt.ItemDataRole.UserRole, -1)
-            hdr.setForeground(QColor(ACCENT))
-            f = QFont()
-            f.setPointSize(9)
-            f.setBold(True)
-            f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
-            hdr.setFont(f)
-            hdr.setSizeHint(QSize(0, 26))
-            self.nav.addItem(hdr)
-            for nav_key, _count in freq_tools:
-                for idx, (key, icon_name, _) in enumerate(_NAV_KEYS):
-                    if key == nav_key:
-                        item = QListWidgetItem(qta.icon(icon_name, color=ACCENT), t(key))
-                        item.setData(Qt.ItemDataRole.UserRole, idx)
-                        self.nav.addItem(item)
-                        break
-
         tool_idx = 0
         for group_key, tools in _NAV_GROUPS:
             if tool_idx > 0:
@@ -387,9 +357,12 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._sidebar_collapsed = False
 
         self._dark_mode = True
+        self._tool_usage: dict[str, int] = {}
         try:
             with open(_CONFIG_PATH, "r", encoding="utf-8") as _cf:
-                self._dark_mode = json.load(_cf).get("dark_mode", True)
+                _cfg_data = json.load(_cf)
+                self._dark_mode = _cfg_data.get("dark_mode", True)
+                self._tool_usage = _cfg_data.get("tool_usage", {})
         except Exception:
             pass
         self._qapp: QApplication = QApplication.instance()
@@ -472,7 +445,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         for i in range(self.stack.count()):
             for dfe in self.stack.widget(i).findChildren(DropFileEdit):
                 if not dfe._save:
-                    dfe.path_changed.connect(lambda p: self._viewer.load(p) if p and os.path.isfile(p) else None)
+                    dfe.path_changed.connect(lambda p: self._viewer.load(p) if (self._viewer and p and os.path.isfile(p)) else None)
 
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -495,7 +468,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         QShortcut(QKeySequence("F5"), self, self._start_presentation)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
-        QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf())
+        QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf() if self._viewer else None)
 
         sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._handle_global_undo)
         sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._handle_global_redo)
@@ -519,6 +492,9 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         if not self._dark_mode:
             self._apply_theme()
 
+        self._setup_zoom_bar(True, canvas=self._viewer._canvas if self._viewer else None)
+        self._update_undo_redo_buttons()
+
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
 
@@ -536,16 +512,18 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
                 if ans == QMessageBox.StandardButton.Save:
                     self._save_pipeline()
                 break
-        edit_w = self.stack.widget(self._edit_tool_idx())
-        if edit_w and getattr(edit_w, "_user_pending", None):
-            ans = QMessageBox.question(
-                self, t("msg.warning"), t("pipeline.unsaved_prompt"),
-                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel
-            )
-            if ans == QMessageBox.StandardButton.Cancel:
-                event.ignore()
-                return
+        edit_idx = self._edit_tool_idx()
+        if edit_idx >= 0:
+            edit_w = self.stack.widget(edit_idx)
+            if edit_w and getattr(edit_w, "_user_pending", None):
+                ans = QMessageBox.question(
+                    self, t("msg.warning"), t("pipeline.unsaved_prompt"),
+                    QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel
+                )
+                if ans == QMessageBox.StandardButton.Cancel:
+                    event.ignore()
+                    return
         for v in list(self._viewers):
             self._cleanup_pipeline(id(v))
         self._wait_for_workers_on_all_pages()

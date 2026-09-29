@@ -29,10 +29,11 @@ _log = logging.getLogger(__name__)
 class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin, PanelNavMixin, QWidget):
     """PDF viewer with drag & drop, native text selection and navigation."""
 
-    crop_selected       = Signal(int, object)
-    crop_applied        = Signal()
-    crop_undo_requested = Signal()
-    crop_redo_requested = Signal()
+    crop_selected         = Signal(int, object)
+    crop_applied          = Signal()
+    crop_undo_requested   = Signal()
+    crop_redo_requested   = Signal()
+    page_action_requested = Signal(str, object)
 
     _pages_sidebar_visible_pref: bool | None = None
 

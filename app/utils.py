@@ -243,29 +243,41 @@ def _action_progress_stylesheet(dark: bool) -> str:
     """Theme-aware stylesheet for the ActionBar's thin progress strip."""
     if dark:
         return (
-            f"QProgressBar {{ background: {BG_INPUT}; border-radius: 3px; }}"
-            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}"
+            f"QProgressBar {{ background: {BG_INPUT}; border-radius: 2px; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT}; border-radius: 2px; }}"
         )
     return (
-        f"QProgressBar {{ background: {_LO}; border-radius: 3px; }}"
-        f"QProgressBar::chunk {{ background: {_LA}; border-radius: 3px; }}"
+        f"QProgressBar {{ background: {_LO}; border-radius: 2px; }}"
+        f"QProgressBar::chunk {{ background: {_LA}; border-radius: 2px; }}"
     )
 
 
 def ActionBar(btn_text: str, slot) -> tuple:
-    """Bottom bar with primary action button and optional progress bar."""
+    """Compact right-aligned action button row with seamless background."""
     from PySide6.QtWidgets import QProgressBar
-    bar = QWidget(); bar.setObjectName("action_bar")
-    v = QVBoxLayout(bar); v.setContentsMargins(20, 8, 20, 8); v.setSpacing(6)
-    progress = QProgressBar(); progress.setVisible(False)
-    progress.setFixedHeight(6); progress.setTextVisible(False)
+    bar = QWidget()
+    bar.setObjectName("action_bar")
+    v = QVBoxLayout(bar)
+    v.setContentsMargins(24, 4, 24, 14)
+    v.setSpacing(4)
+
+    progress = QProgressBar()
+    progress.setVisible(False)
+    progress.setFixedHeight(4)
+    progress.setTextVisible(False)
     progress.setObjectName("action_progress")
     progress.setStyleSheet(_action_progress_stylesheet(is_dark()))
     v.addWidget(progress)
-    h = QHBoxLayout(); h.setContentsMargins(0, 0, 0, 0)
+
+    h = QHBoxLayout()
+    h.setContentsMargins(0, 0, 0, 0)
     h.addStretch()
-    btn = QPushButton(btn_text); btn.setObjectName("btn_primary")
-    btn.setMinimumWidth(200); btn.setFixedHeight(42)
+
+    btn = QPushButton(btn_text)
+    btn.setObjectName("btn_action_small")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setFixedHeight(32)
+    btn.setMinimumWidth(80)
     btn.clicked.connect(slot)
     h.addWidget(btn)
     v.addLayout(h)

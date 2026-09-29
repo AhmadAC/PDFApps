@@ -1,3 +1,6 @@
+
+# app\tools\extract.py
+
 """PDFApps – TabExtrair: extract PDF pages tool."""
 
 import contextlib
@@ -5,7 +8,8 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QFormLayout, QLineEdit, QLabel, QFileDialog, QMessageBox,
+    QGroupBox, QFormLayout, QHBoxLayout, QLineEdit, QLabel, QFileDialog, QMessageBox,
+    QPushButton,
 )
 from pypdf import PdfWriter
 
@@ -45,6 +49,20 @@ class TabExtrair(BasePage):
         form.addRow("", hint)
         f.addWidget(grp)
 
+        # In-panel action button row
+        btn_save_row = QHBoxLayout()
+        btn_save_row.setContentsMargins(0, 10, 0, 0)
+        btn_save_row.addStretch()
+        self.btn_save = QPushButton(t("tool.extract.btn"))
+        self.btn_save.setObjectName("btn_action_small")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setFixedHeight(32)
+        self.btn_save.setMinimumWidth(80)
+        self.btn_save.clicked.connect(self._run)
+        btn_save_row.addWidget(self.btn_save)
+        f.addLayout(btn_save_row)
+        self.action_btn = self.btn_save
+
         sec_out = section(t("tool.extract.output"))
         f.addWidget(sec_out)
         self.drop_out = DropFileEdit("extracted.pdf", save=True, default_name="extracted.pdf")
@@ -52,6 +70,7 @@ class TabExtrair(BasePage):
         self._compact_hidden = [sec_src, self.drop_in, self.lbl_info]
         sec_out.setVisible(False)
         self.drop_out.setVisible(False)
+        self._action_bar.setVisible(False)
 
     def _pick_input(self):
         p, _ = QFileDialog.getOpenFileName(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
@@ -87,7 +106,6 @@ class TabExtrair(BasePage):
         if not txt:
             QMessageBox.warning(self, t("msg.warning"), t("tool.extract.specify")); return
         
-        # Prompt Save As dialog so user can choose destination file and name
         default_name = "extracted.pdf"
         if pdf_path:
             base, ext = os.path.splitext(os.path.basename(pdf_path))
@@ -107,7 +125,6 @@ class TabExtrair(BasePage):
             w = PdfWriter()
             for p in pages: w.add_page(reader.pages[p])
 
-            # Release viewer document locks before atomic overwrite if applicable
             if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                 viewer._canvas.close_doc()
                 if viewer._fitz_doc:
