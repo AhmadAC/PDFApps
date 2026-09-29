@@ -15,7 +15,7 @@ import qtawesome as qta
 
 from app.constants import TEXT_SEC, DESKTOP
 from app.i18n import t, _CONFIG_PATH
-from app.viewer.canvas import _SelectCanvas
+from app.viewer.canvas_1 import _SelectCanvas
 from app.viewer.thumbnails import ThumbnailPanel
 
 from app.viewer.panel_history import PanelHistoryMixin

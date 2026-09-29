@@ -704,7 +704,11 @@ class PanelPageOpsMixin:
             if self._pdf_password and doc.needs_pass:
                 doc.authenticate(self._pdf_password)
             page = doc[page_idx]
-            page.insert_textbox(page.rect.adjusted(36, 36, -36, -36), text, fontsize=11, fontname="helv")
+            r = page.rect
+            margin_x = min(36.0, r.width * 0.1)
+            margin_y = min(36.0, r.height * 0.1)
+            target_box = fitz.Rect(r.x0 + margin_x, r.y0 + margin_y, r.x1 - margin_x, r.y1 - margin_y)
+            page.insert_textbox(target_box, text, fontsize=11, fontname="helv")
             self._save_and_reload(doc, target_page=page_idx, selected_pages=[page_idx])
         except Exception as exc:
             show_error(self, exc)

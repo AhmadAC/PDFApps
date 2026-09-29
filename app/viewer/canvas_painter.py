@@ -10,7 +10,7 @@ from app.i18n import t
 from app.viewer.canvas_worker import _NOTE_ICON_SIZE
 
 if TYPE_CHECKING:
-    from app.viewer.canvas import _SelectCanvas
+    from app.viewer.canvas_1 import _SelectCanvas
 
 
 class CanvasPainter:
@@ -20,7 +20,7 @@ class CanvasPainter:
     def draw_crop_box(p: QPainter, zoom: float, px: int, py: int, pw: int, ph: int,
                       cx0: int, cy0: int, cx1: int, cy1: int):
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 140))
+        p.setBrush(QColor(0, 0, 0, 150))
         if cy0 > py:
             p.drawRect(px, py, pw, cy0 - py)
         if cy1 < py + ph:
@@ -50,9 +50,7 @@ class CanvasPainter:
         pt_h = int(round((cy1 - cy0) / z))
         if pt_w > 20 and pt_h > 20:
             tag = f"{pt_w} × {pt_h} pt"
-            f = QFont()
-            f.setPointSize(9)
-            f.setBold(True)
+            f = QFont("Segoe UI", 9, QFont.Weight.Bold)
             p.setFont(f)
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(tag) + 12
@@ -60,7 +58,9 @@ class CanvasPainter:
             badge_x = cx0 + 6
             badge_y = cy0 + 6
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(20, 184, 166, 220))
+            badge_col = QColor(ACCENT)
+            badge_col.setAlpha(220)
+            p.setBrush(badge_col)
             p.drawRoundedRect(QRect(badge_x, badge_y, tw, th), 4, 4)
             p.setPen(QColor("#FFFFFF"))
             p.drawText(QRect(badge_x, badge_y, tw, th), Qt.AlignmentFlag.AlignCenter, tag)
@@ -85,13 +85,13 @@ class CanvasPainter:
             if e.pixmap:
                 p.drawPixmap(x, e.y_off, e.pixmap)
             else:
-                p.fillRect(x, e.y_off, e.w, e.h, QColor("#252F45"))
+                p.fillRect(x, e.y_off, e.w, e.h, QColor("#2B2B2B"))
                 p.setPen(QColor(TEXT_SEC))
                 f = QFont()
                 f.setPointSize(9)
                 p.setFont(f)
                 p.drawText(QRect(x, e.y_off, e.w, e.h), Qt.AlignmentFlag.AlignCenter, t("viewer.loading"))
-            p.setPen(QPen(QColor("#0d0d1a"), 1))
+            p.setPen(QPen(QColor("#151515"), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(x, e.y_off, e.w - 1, e.h - 1)
 
@@ -128,13 +128,13 @@ class CanvasPainter:
                     balloon_h = max(36, text_h)
                     balloon_r = QRect(balloon_x, balloon_y, balloon_w, balloon_h)
                     shadow_r = QRect(balloon_x + 2, balloon_y + 2, balloon_w, balloon_h)
-                    p.setBrush(QColor(0, 0, 0, 30))
+                    p.setBrush(QColor(0, 0, 0, 40))
                     p.setPen(Qt.PenStyle.NoPen)
                     p.drawRoundedRect(shadow_r, 6, 6)
-                    p.setBrush(QColor("#FFFDF5"))
-                    p.setPen(QPen(QColor("#D97706"), 1))
+                    p.setBrush(QColor("#2B2B2B"))
+                    p.setPen(QPen(QColor(ACCENT), 1))
                     p.drawRoundedRect(balloon_r, 6, 6)
-                    p.setPen(QColor("#000000"))
+                    p.setPen(QColor("#F0F0F0"))
                     text_rect = QRect(balloon_x + 10, balloon_y + 8, balloon_w - 20, balloon_h - 16)
                     p.drawText(
                         text_rect,
@@ -152,8 +152,8 @@ class CanvasPainter:
             rw = int((fr.x1 - fr.x0) * z)
             rh = int((fr.y1 - fr.y0) * z)
             if hi_idx == canvas._search_current:
-                p.fillRect(rx, ry, rw, rh, QColor(249, 115, 22, 140))
-                p.setPen(QPen(QColor("#F97316"), 2))
+                p.fillRect(rx, ry, rw, rh, QColor(0, 120, 212, 160))
+                p.setPen(QPen(QColor("#60A5FA"), 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(rx, ry, rw, rh)
             else:
@@ -161,7 +161,7 @@ class CanvasPainter:
 
         # Selection
         for r in canvas._sel_rects:
-            p.fillRect(r, QColor(59, 130, 246, 90))
+            p.fillRect(r, QColor(0, 120, 212, 100))
 
         # Crop preview
         if (canvas._crop_mode and canvas._crop_drag_start and canvas._crop_drag_cur
@@ -201,8 +201,7 @@ class CanvasPainter:
             font_size = np.get("font_size", 10)
             margin = max(18.0, (font_size + 8.0)) * z
             screen_font_size = max(7, int(font_size * z))
-            font = QFont("Helvetica", screen_font_size)
-            font.setBold(True)
+            font = QFont("Segoe UI", screen_font_size, QFont.Weight.Bold)
             p.setFont(font)
             fm = p.fontMetrics()
 
@@ -215,16 +214,16 @@ class CanvasPainter:
                 tw = fm.horizontalAdvance(label)
                 th = fm.height()
 
-                if pos_code[0] == "t":  # top
+                if pos_code[0] == "t":
                     y_baseline = e.y_off + margin
-                else:                   # bottom
+                else:
                     y_baseline = e.y_off + e.h - margin
 
-                if pos_code[1] == "l":  # left
+                if pos_code[1] == "l":
                     x = x_page + margin
-                elif pos_code[1] == "c":# center
+                elif pos_code[1] == "c":
                     x = x_page + (e.w - tw) / 2
-                else:                   # right
+                else:
                     x = x_page + e.w - margin - tw
 
                 badge_pad_x = 6
@@ -233,7 +232,9 @@ class CanvasPainter:
                                    int(tw + badge_pad_x * 2), int(th + badge_pad_y * 2))
 
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(20, 184, 166, 60))
+                badge_bg = QColor(ACCENT)
+                badge_bg.setAlpha(60)
+                p.setBrush(badge_bg)
                 p.drawRoundedRect(badge_rect, 4, 4)
 
                 p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
@@ -241,3 +242,4 @@ class CanvasPainter:
 
                 p.setPen(QColor(ACCENT))
                 p.drawText(int(x), int(y_baseline), label)
+

@@ -17,13 +17,7 @@ from app.utils import error_color, is_dark
 
 
 def _muted_icon_color(dark: bool | None = None) -> str:
-    """Theme-aware muted grey for drop-zone icons.
-
-    Dark theme: TEXT_SEC (#B0C4BE) — light enough to read on the dark
-    inner background. Light theme: _LQ (#3D5450) — dark enough to read
-    on the near-white card. Reads the saved preference when called
-    without `dark`, so factory helpers don't need a parent reference.
-    """
+    """Theme-aware muted grey for drop-zone icons."""
     if dark is None:
         dark = is_dark()
     return TEXT_SEC if dark else _LQ
@@ -158,13 +152,6 @@ class DropFileEdit(QWidget):
             w.style().unpolish(w); w.style().polish(w)
 
     def update_theme(self, dark: bool) -> None:
-        """Re-emit the muted icons with theme-appropriate colour.
-
-        Only the empty-state icons need refresh — when a file is loaded
-        the upload icon is replaced by the teal ACCENT pdf icon (still
-        readable in both themes) and the clear icon uses ``error_color()``
-        which is already theme-aware.
-        """
         if self._path_value:
             self._clr.setIcon(qta.icon('fa5s.times', color=error_color()))
             return
@@ -175,9 +162,6 @@ class DropFileEdit(QWidget):
     # ── drag & drop ──────────────────────────────────────────────────────────
     @staticmethod
     def _parse_extensions(filter_str: str) -> tuple:
-        """Extract accepted extensions from a Qt file filter like
-        'PDF Files (*.pdf);;All (*.*)'. Uses only the primary group
-        (before ';;'). Returns () if the filter is empty or only '*.*'."""
         import re
         if not filter_str:
             return ()
@@ -276,11 +260,11 @@ class MultiDropWidget(QWidget):
 class ColorPickerButton(QPushButton):
     """Button that shows a color swatch and opens QColorDialog on click."""
 
-    color_changed = Signal(tuple)  # emits (r, g, b) as 0.0-1.0 floats
+    color_changed = Signal(tuple)
 
     def __init__(self, initial: tuple = (0, 0, 0), parent=None):
         super().__init__(parent)
-        self._color = initial  # (r, g, b) 0.0-1.0
+        self._color = initial
         self.setFixedHeight(30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clicked.connect(self._pick)
@@ -299,7 +283,7 @@ class ColorPickerButton(QPushButton):
         lum = 0.299 * r + 0.587 * g + 0.114 * b
         txt = "#FFFFFF" if lum < 0.5 else "#000000"
         self.setStyleSheet(
-            f"QPushButton {{ background: {hex_c}; color: {txt}; border: 1px solid #888;"
+            f"QPushButton {{ background: {hex_c}; color: {txt}; border: 1px solid #555555;"
             f" border-radius: 4px; padding: 2px 10px; font-size: 10pt; }}"
             f"QPushButton:hover {{ border-color: {ACCENT}; }}")
         self.setText(hex_c.upper())

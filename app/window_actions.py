@@ -517,7 +517,8 @@ class WindowActionsMixin:
         if not self._sidebar_collapsed and self._sidebar.width() > 60:
             self._sidebar_collapsed = False
             self._sidebar.setFixedWidth(52)
-            self._brand_layout.setContentsMargins(8, 10, 8, 10)
+            self._brand_layout.setContentsMargins(0, 10, 0, 10)
+            self._brand_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._brand_text_w.setVisible(False)
             self._brand_title.setVisible(False)
             self._brand_sub.setVisible(False)
@@ -529,6 +530,8 @@ class WindowActionsMixin:
                 if idx is not None and idx < 0:
                     it.setHidden(True)
             self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_bars)
+            self.nav.updateGeometries()
+            self.nav.viewport().update()
         elif not self._sidebar_collapsed:
             self._sidebar_collapsed = True
             self._sidebar.setVisible(False)
@@ -538,6 +541,7 @@ class WindowActionsMixin:
             self._sidebar.setVisible(True)
             self._sidebar.setFixedWidth(228)
             self._brand_layout.setContentsMargins(12, 10, 10, 10)
+            self._brand_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self._brand_text_w.setVisible(True)
             self._brand_title.setVisible(True)
             self._brand_sub.setVisible(True)
@@ -549,6 +553,8 @@ class WindowActionsMixin:
                 if idx is not None and idx < 0:
                     it.setHidden(False)
             self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_times)
+            self.nav.updateGeometries()
+            self.nav.viewport().update()
         QTimer.singleShot(50, self._relayout_viewer)
 
     def _relayout_viewer(self):
@@ -580,6 +586,7 @@ class WindowActionsMixin:
                 it.setIcon(qta.icon(icon_name, color=nav_color))
             else:
                 it.setForeground(QColor(nav_color))
+        self.nav.viewport().update()
         for v in self._viewers:
             v.update_theme(self._dark_mode)
         for i in range(self.stack.count()):

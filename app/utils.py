@@ -25,7 +25,7 @@ from app.constants import (
     BG_BASE, BG_CARD, BG_INPUT,
     TEXT_PRI,
     SUCCESS_DARK, SUCCESS_LIGHT,
-    _LA, _LB, _LC, _LI, _LN, _LO, _LP,
+    _LA, _LC, _LI, _LN, _LO, _LP,
 )
 
 
@@ -91,7 +91,7 @@ def _make_palette(dark: bool) -> QPalette:
         p.setColor(QPalette.ColorRole.Highlight,       QColor(ACCENT))
         p.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
     else:
-        p.setColor(QPalette.ColorRole.Window,          QColor(_LB))
+        p.setColor(QPalette.ColorRole.Window,          QColor("#CBD5E1"))
         p.setColor(QPalette.ColorRole.WindowText,      QColor(_LP))
         p.setColor(QPalette.ColorRole.Base,            QColor(_LI))
         p.setColor(QPalette.ColorRole.AlternateBase,   QColor(_LN))

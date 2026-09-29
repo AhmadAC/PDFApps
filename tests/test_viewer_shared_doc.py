@@ -33,7 +33,7 @@ _app = QApplication.instance() or QApplication([])
 
 import fitz  # noqa: E402
 from app.i18n import t  # noqa: E402
-from app.viewer.canvas import _SelectCanvas  # noqa: E402
+from app.viewer.canvas_1 import _SelectCanvas  # noqa: E402
 from app.viewer.panel import PdfViewerPanel  # noqa: E402
 
 CANVAS_SRC = (ROOT / "app" / "viewer" / "canvas.py").read_text(encoding="utf-8")

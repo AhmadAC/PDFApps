@@ -16,7 +16,7 @@ from app.i18n import t
 from app.viewer.canvas_worker import _NOTE_ICON_SIZE
 
 if TYPE_CHECKING:
-    from app.viewer.canvas import _SelectCanvas
+    from app.viewer.canvas_1 import _SelectCanvas
 
 
 class CanvasInteractionHandler:

@@ -1,4 +1,4 @@
-# app\base.py
+# app/base.py
 
 """PDFApps – BasePage: standard page layout (header + scroll + action bar)."""
 
@@ -29,30 +29,26 @@ __all__ = ["BasePage", "Iterable", "_reveal_file", "_open_folder"]
 class BasePage(QWidget):
     """Standard layout: header + scroll area + action bar."""
 
-    pipeline_done = Signal(str)  # emitted with temp output path
-    pipeline_save_requested = Signal()  # toast "Save as..." button clicked
+    pipeline_done = Signal(str)
+    pipeline_save_requested = Signal()
 
     def __init__(self, icon, title, desc, action_text, status_fn):
         super().__init__()
         self._status = status_fn
         self.setObjectName("content_area")
         self._pipeline_active = False
-        self._pipeline_supported = False  # subclasses set True if they emit pipeline_done
+        self._pipeline_supported = False
         self._pipeline_tmp_dir: str | None = None
-        # Password captured by _maybe_prompt_password for the loaded PDF.
-        # Persists for the lifetime of one input file so _run can re-open
-        # the same PDF (or fitz.Document) without re-prompting.
         self._pdf_password: str = ""
 
         page_layout = QVBoxLayout(self)
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.setSpacing(0)
 
-        # Header inside the scrollable container so scrolling down scrolls the header away
         self._header = ToolHeader(icon, title, desc)
 
-        # scrollable content
-        self._inner = QWidget(); self._inner.setObjectName("scroll_inner")
+        self._inner = QWidget()
+        self._inner.setObjectName("scroll_inner")
         self._inner.setMinimumWidth(0)
         inner_layout = QVBoxLayout(self._inner)
         inner_layout.setContentsMargins(0, 0, 0, 0)
@@ -68,17 +64,12 @@ class BasePage(QWidget):
         scroll_area = scrolled(self._inner)
         scroll_area.setMinimumWidth(0)
         page_layout.addWidget(scroll_area, 1)
-        # Allow this page to shrink below its content's natural width — the
-        # splitter needs this so the side panel can be made narrow.
         self.setMinimumWidth(0)
 
-        # Widgets hidden when entering "compact mode" (input/output already
-        # known from the viewer). Subclasses populate this list during build.
         self._compact_hidden: list = []
         self._compact_active = False
         self._compact_link: QPushButton | None = None
 
-        # fixed action bar
         self._action_bar, self.action_btn = ActionBar(action_text, self._run)
         page_layout.addWidget(self._action_bar)
 
@@ -86,14 +77,10 @@ class BasePage(QWidget):
         _paint_bg(self)
 
     def update_theme(self, dark: bool) -> None:
-        """Default theme refresh: re-skins the action bar's progress
-        strip. Subclasses overriding this should call ``super().update_theme(dark)``
-        so the progress strip keeps tracking the theme.
-        """
         fn = getattr(self._action_bar, "update_theme", None)
         if callable(fn):
             try: fn(dark)
-            except RuntimeError: pass  # widget destroyed
+            except RuntimeError: pass
 
     def _build(self):
         """Subclasses add widgets to self._form here."""
@@ -103,7 +90,6 @@ class BasePage(QWidget):
 
     def _prompt_save_as(self, default_name: str = "result.pdf",
                         start_dir: str = "", filter_key: str = "file_filter.pdf") -> str:
-        """Open a Save File dialog and return the chosen path (or "")."""
         base = start_dir if start_dir and os.path.isdir(start_dir) else DESKTOP
         suggested = os.path.join(base, default_name)
         path, _ = QFileDialog.getSaveFileName(
@@ -111,14 +97,11 @@ class BasePage(QWidget):
         return path or ""
 
     def _prompt_save_dir(self, start_dir: str = "") -> str:
-        """Open a folder picker and return the chosen directory (or "")."""
         base = start_dir if start_dir and os.path.isdir(start_dir) else DESKTOP
         return QFileDialog.getExistingDirectory(self, t("btn.choose"), base) or ""
 
     def _resolve_output_file(self, drop_widget, input_path: str = "",
                              filter_key: str = "file_filter.pdf") -> str:
-        """Return the output file path, prompting via Save dialog if empty.
-        In pipeline mode, returns a temp file path instead of prompting."""
         if self._pipeline_active:
             return self._make_pipeline_temp(input_path, drop_widget)
         out = drop_widget.path()
@@ -137,7 +120,6 @@ class BasePage(QWidget):
         return out
 
     def _make_pipeline_temp(self, input_path: str, drop_widget=None) -> str:
-        """Create a temp file path for pipeline output."""
         if self._pipeline_tmp_dir is None:
             self._pipeline_tmp_dir = tempfile.mkdtemp(prefix="pdfapps_")
         default_name = (getattr(drop_widget, "_default", "") or "result.pdf") if drop_widget else "result.pdf"
@@ -149,21 +131,15 @@ class BasePage(QWidget):
         return os.path.join(self._pipeline_tmp_dir, default_name)
 
     def _pipeline_success(self, message: str, out_path: str) -> None:
-        """Call after a successful tool run in pipeline mode:
-        shows a toast (with a prominent "Save as..." button) and emits
-        the pipeline_done signal."""
         self._show_toast(message, out_path, with_save=True)
         self.pipeline_done.emit(out_path)
 
     def cleanup_pipeline(self) -> None:
-        """Remove temp files created during pipeline."""
         if self._pipeline_tmp_dir and os.path.isdir(self._pipeline_tmp_dir):
             shutil.rmtree(self._pipeline_tmp_dir, ignore_errors=True)
             self._pipeline_tmp_dir = None
 
     def set_compact_mode(self, active: bool, path: str = "") -> None:
-        """Hide source/output boilerplate when the input PDF is implicit
-        (e.g. coming from the viewer with a loaded document)."""
         if active and path:
             fn = getattr(self, "auto_load", None)
             if callable(fn):
@@ -198,21 +174,19 @@ class BasePage(QWidget):
 
     def _show_toast(self, message: str, file_path: str = "",
                     with_save: bool = False) -> None:
-        """Show a brief success toast above the action bar with optional
-        'Save as...' / 'Open file' / 'Open folder' buttons."""
         old = getattr(self, "_toast_widget", None)
         if old:
             old.setParent(None); old.deleteLater()
 
         toast = QWidget(); toast.setObjectName("toast")
         toast.setStyleSheet(
-            "#toast { background: #065F46; border: 1px solid #10B981; "
+            "#toast { background: #1B3A2F; border: 1px solid #10B981; "
             "border-radius: 8px; padding: 8px 12px; }"
-            "#toast QLabel { color: white; font-size: 10pt; background: transparent; }"
+            "#toast QLabel { color: #F0F0F0; font-size: 10pt; background: transparent; }"
             "#toast QPushButton { color: #A7F3D0; border: none; background: transparent; "
             "font-size: 10pt; text-decoration: underline; padding: 0 4px; }"
-            "#toast QPushButton:hover { color: white; }"
-            "#toast QPushButton#toast_save { color: white; font-weight: 600; }")
+            "#toast QPushButton:hover { color: #FFFFFF; }"
+            "#toast QPushButton#toast_save { color: #FFFFFF; font-weight: 600; }")
         h = QHBoxLayout(toast); h.setContentsMargins(8, 4, 8, 4); h.setSpacing(8)
         h.addWidget(QLabel(f"✔ {message}"), 1)
         if with_save:
@@ -240,7 +214,6 @@ class BasePage(QWidget):
                 8000, lambda t=toast: t.setVisible(False) if isValid(t) else None)
 
     def _resolve_output_dir(self, drop_widget, input_path: str = "") -> str:
-        """Return the output directory, prompting via folder picker if empty."""
         out = drop_widget.path()
         if out:
             return out

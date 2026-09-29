@@ -1,4 +1,3 @@
-
 # app/editor/tab.py
 
 """PDFApps – TabEditar: visual PDF editor tool tab."""
@@ -443,21 +442,21 @@ class TabEditar(QWidget):
                 b.setIcon(qta.icon(self._MODE_DEFS[i][1], color=sec))
                 if dark:
                     b.setStyleSheet(
-                        "background:#18252E; border:1px solid #2A3944; "
-                        "color:#93A9A3; border-radius:6px; border-radius:6px;")
+                        "background:#333333; border:1px solid #444444; "
+                        "color:#CCCCCC; border-radius:6px;")
                 else:
                     b.setStyleSheet(
-                        "background:#FFFFFF; border:1px solid #C7D8D3; "
-                        "color:#5D7470; border-radius:6px; border-radius:6px;")
+                        "background:#FFFFFF; border:1px solid #D1D5DB; "
+                        "color:#555555; border-radius:6px;")
             else:
                 if dark:
                     b.setStyleSheet(
-                        f"background:#0D3D38; border:1px solid {ACCENT}; "
-                        f"color:{ACCENT}; border-radius:6px; border-radius:6px;")
+                        f"background:#264F78; border:1px solid {ACCENT}; "
+                        f"color:#FFFFFF; border-radius:6px;")
                 else:
                     b.setStyleSheet(
-                        "background:#D6F2EC; border:1px solid #83CABB; "
-                        "color:#0E5A51; border-radius:6px; border-radius:6px;")
+                        f"background:#D6E8FA; border:1px solid #70A7DB; "
+                        f"color:{ACCENT}; border-radius:6px;")
 
     def _update_nav(self):
         n = self._canvas.page_count()
@@ -490,21 +489,21 @@ class TabEditar(QWidget):
             if active:
                 if self._dark_mode:
                     b.setStyleSheet(
-                        f"background:#0D3D38; border:1px solid {ACCENT}; "
-                        f"color:{ACCENT}; border-radius:6px; border-radius:6px;")
+                        f"background:#264F78; border:1px solid {ACCENT}; "
+                        f"color:#FFFFFF; border-radius:6px;")
                 else:
                     b.setStyleSheet(
-                        "background:#D6F2EC; border:1px solid #83CABB; "
-                        "color:#0E5A51; border-radius:6px; border-radius:6px;")
+                        f"background:#D6E8FA; border:1px solid #70A7DB; "
+                        f"color:{ACCENT}; border-radius:6px;")
             else:
                 if self._dark_mode:
                     b.setStyleSheet(
-                        "background:#18252E; border:1px solid #2A3944; "
-                        "color:#93A9A3; border-radius:6px; border-radius:6px;")
+                        "background:#333333; border:1px solid #444444; "
+                        "color:#CCCCCC; border-radius:6px;")
                 else:
                     b.setStyleSheet(
-                        "background:#FFFFFF; border:1px solid #C7D8D3; "
-                        "color:#5D7470; border-radius:6px; border-radius:6px;")
+                        "background:#FFFFFF; border:1px solid #D1D5DB; "
+                        "color:#555555; border-radius:6px;")
         self._opt_stack.setCurrentIndex(idx)
         if idx == _MODE_FORMS:
             tip = t("editor.forms.undo_unavailable")
@@ -1136,3 +1135,4 @@ class TabEditar(QWidget):
             QMessageBox.information(self, t("msg.done"), t("msg.form_saved", path=out))
         except Exception as e:
             show_error(self, e)
+

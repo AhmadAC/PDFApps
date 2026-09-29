@@ -6,25 +6,32 @@ DESKTOP = _os.path.join(_os.path.expanduser("~"), "Desktop")
 APP_VERSION = "1.15.0"
 GITHUB_REPO = "nelsonduarte/PDFApps"
 
-ACCENT   = "#14B8A6"   # main teal
-ACCENT_H = "#0D9488"   # hover
-ACCENT_P = "#0F766E"   # pressed
-BG_BASE  = "#0B0F12"   # global background
-BG_SIDE  = "#11161A"   # sidebar
-BG_CARD  = "#182127"   # cards / tool header
-BG_INPUT = "#1D2A33"   # inputs
-BG_INNER = "#121B22"   # scroll area
-BORDER   = "#2A3944"   # borders
-TEXT_PRI = "#E6F4F1"   # primary text
-TEXT_SEC = "#B0C4BE"   # secondary text
+# PyperPoint Dark Theme Palette
+ACCENT   = "#0078D4"   # PyperPoint / Fluent blue
+ACCENT_H = "#106EBE"   # hover blue
+ACCENT_P = "#005A9E"   # pressed blue
+BG_BASE  = "#1E1E1E"   # global window background
+BG_SIDE  = "#252525"   # sidebar background
+BG_CARD  = "#2B2B2B"   # cards / tool header / panel surfaces
+BG_INPUT = "#1E1E1E"   # inputs and edit areas
+BG_INNER = "#1E1E1E"   # scroll area canvas background
+BORDER   = "#444444"   # subtle dark borders
+TEXT_PRI = "#F0F0F0"   # primary white/light text
+TEXT_SEC = "#A0A0A0"   # secondary neutral grey text
 
-# Theme-aware success green for "result" labels. Brighter shade on dark
-# backgrounds, deeper shade on light — keeps contrast comfortable in both.
-SUCCESS_DARK  = "#34D399"   # emerald-400 on dark bg
-SUCCESS_LIGHT = "#059669"   # emerald-600 on light bg
+# Status colors
+SUCCESS_DARK  = "#10B981"   # vibrant green for dark mode
+SUCCESS_LIGHT = "#059669"   # deeper green for light mode
 
 # ── Light theme ────────────────────────────────────────────────────────────────
-_LA = "#0F766E"; _LAH = "#0D9488"; _LAP = "#0F5F58"
-_LB = "#F4F7F6"; _LS = "#E9EFEC"; _LC = "#FFFFFF"
-_LI = "#F2F7F5"; _LN = "#ECF3F1"; _LO = "#C7D8D3"
-_LP = "#1A2B28"; _LQ = "#3D5450"
+_LA  = "#0078D4"
+_LAH = "#106EBE"
+_LAP = "#005A9E"
+_LB  = "#F4F7F6"
+_LS  = "#E9EFEC"
+_LC  = "#FFFFFF"
+_LI  = "#FFFFFF"
+_LN  = "#F2F4F7"
+_LO  = "#D1D5DB"
+_LP  = "#1A2B28"
+_LQ  = "#555555"

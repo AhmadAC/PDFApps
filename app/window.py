@@ -3,16 +3,17 @@
 import os
 import json
 
-from PySide6.QtCore import Qt, QSize, QTimer, QPoint
+from PySide6.QtCore import Qt, QSize, QTimer, QPoint, QRect, QModelIndex
 from PySide6.QtGui import (
     QIcon, QColor, QShortcut, QKeySequence, QMouseEvent,
-    QPixmap, QPainter, QImage, QFont
+    QPixmap, QPainter, QImage, QFont, QPen
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QStackedWidget, QSplitter, QStatusBar,
     QFrame, QApplication, QLineEdit, QMenu, QTabBar, QFileDialog, QMessageBox,
+    QStyledItemDelegate, QStyle
 )
 from shiboken6 import isValid
 import qtawesome as qta
@@ -40,6 +41,99 @@ from app.window_pipeline import WindowPipelineMixin
 from app.window_actions import WindowActionsMixin
 
 
+_NAV_ICON_CACHE: dict[tuple[str, str], QIcon] = {}
+
+
+def _get_nav_icon(icon_name: str, color: str) -> QIcon:
+    key = (icon_name, color)
+    ico = _NAV_ICON_CACHE.get(key)
+    if ico is None:
+        ico = qta.icon(icon_name, color=color)
+        _NAV_ICON_CACHE[key] = ico
+    return ico
+
+
+class NavItemDelegate(QStyledItemDelegate):
+    """Delegate for sidebar navigation list ensuring icons and selection boxes
+    are perfectly centered horizontally when the sidebar is collapsed."""
+
+    def __init__(self, parent_nav: QListWidget, is_dark_fn=None):
+        super().__init__(parent_nav)
+        self._nav = parent_nav
+        self._is_dark_fn = is_dark_fn
+
+    def _is_collapsed(self) -> bool:
+        sidebar = self._nav.parent()
+        if sidebar is not None:
+            if sidebar.maximumWidth() <= 60 or sidebar.width() <= 60:
+                return True
+        return self._nav.width() <= 60
+
+    def sizeHint(self, option, index: QModelIndex):
+        if self._is_collapsed():
+            idx = index.data(Qt.ItemDataRole.UserRole)
+            if idx is not None and idx < 0:
+                return QSize(0, 0)
+            return QSize(self._nav.width(), 42)
+        return super().sizeHint(option, index)
+
+    def paint(self, painter: QPainter, option, index: QModelIndex):
+        if not self._is_collapsed():
+            super().paint(painter, option, index)
+            return
+
+        idx = index.data(Qt.ItemDataRole.UserRole)
+        if idx is not None and idx < 0:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = option.rect
+        box_size = 36
+        bx = rect.x() + (rect.width() - box_size) // 2
+        by = rect.y() + (rect.height() - box_size) // 2
+        box_rect = QRect(bx, by, box_size, box_size)
+
+        is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        is_hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        dark = self._is_dark_fn() if callable(self._is_dark_fn) else True
+
+        if is_selected:
+            bg_col = QColor("#264F78") if dark else QColor("#D6E8FA")
+            border_col = QColor(ACCENT) if dark else QColor("#70A7DB")
+            painter.setBrush(bg_col)
+            painter.setPen(QPen(border_col, 1))
+            painter.drawRoundedRect(box_rect, 6, 6)
+        elif is_hovered:
+            bg_col = QColor("#333333") if dark else QColor("#E0E7FF")
+            painter.setBrush(bg_col)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(box_rect, 6, 6)
+
+        icon_size = self._nav.iconSize()
+        if not icon_size.isValid() or icon_size.width() <= 0:
+            icon_size = QSize(20, 20)
+        ix = box_rect.x() + (box_rect.width() - icon_size.width()) // 2
+        iy = box_rect.y() + (box_rect.height() - icon_size.height()) // 2
+        icon_rect = QRect(ix, iy, icon_size.width(), icon_size.height())
+
+        tool_idx = index.data(Qt.ItemDataRole.UserRole)
+        if tool_idx is not None and 0 <= tool_idx < len(_NAV_KEYS):
+            icon_name = _NAV_KEYS[tool_idx][1]
+            col = ACCENT if is_selected else (TEXT_SEC if dark else _LQ)
+            ico = _get_nav_icon(icon_name, col)
+            ico.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+        else:
+            icon = index.data(Qt.ItemDataRole.DecorationRole)
+            if isinstance(icon, QIcon):
+                icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+            elif isinstance(icon, QPixmap):
+                painter.drawPixmap(icon_rect, icon)
+
+        painter.restore()
+
+
 class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMainWindow):
     """Main Application Window."""
 
@@ -62,6 +156,8 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self.setAcceptDrops(True)
 
         central = QWidget()
+        central.setObjectName("central_widget")
+        central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         root_v = QVBoxLayout(central)
         root_v.setContentsMargins(0, 0, 0, 0)
         root_v.setSpacing(0)
@@ -125,6 +221,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
 
         body = QWidget()
         body.setObjectName("workspace_shell")
+        body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         main_h = QHBoxLayout(body)
         main_h.setContentsMargins(10, 10, 10, 0)
         main_h.setSpacing(0)
@@ -132,6 +229,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         # ── Sidebar ──────────────────────────────────────────────────────────
         self._sidebar = QWidget()
         self._sidebar.setObjectName("sidebar")
+        self._sidebar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._sidebar.setFixedWidth(228)
         sb_lay = QVBoxLayout(self._sidebar)
         sb_lay.setContentsMargins(0, 0, 0, 0)
@@ -171,7 +269,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         ico_lbl.setObjectName("app_icon")
         ico_lbl.setFixedSize(_w, _h)
         ico_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bh.addWidget(ico_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        bh.addWidget(ico_lbl, 0, Qt.AlignmentFlag.AlignCenter)
 
         self._brand_text_w = QWidget()
         brand_text = QVBoxLayout(self._brand_text_w)
@@ -201,13 +299,17 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self.nav = QListWidget()
         self.nav.setObjectName("nav_list")
         self.nav.setSpacing(0)
-        self.nav.setIconSize(QSize(18, 18))
+        self.nav.setIconSize(QSize(20, 20))
+        self.nav.setMouseTracking(True)
         self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if self.nav.verticalScrollBar():
             self.nav.verticalScrollBar().setFixedWidth(0)
             self.nav.verticalScrollBar().setMaximumWidth(0)
             self.nav.verticalScrollBar().setStyleSheet("width: 0px; max-width: 0px; border: none; background: transparent;")
+
+        self._nav_delegate = NavItemDelegate(self.nav, is_dark_fn=lambda: self._dark_mode)
+        self.nav.setItemDelegate(self._nav_delegate)
 
         self._tool_usage = {}
         try:
@@ -247,8 +349,8 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
                 sep_item.setSizeHint(QSize(0, 24))
                 self.nav.addItem(sep_item)
                 sep_line = QFrame()
+                sep_line.setObjectName("nav_group_sep")
                 sep_line.setFixedHeight(1)
-                sep_line.setStyleSheet(f"background:{BORDER}; margin: 0 8px 0 4px;")
                 self.nav.setItemWidget(sep_item, sep_line)
 
             hdr = QListWidgetItem(t(group_key).upper())

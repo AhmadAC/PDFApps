@@ -1,3 +1,5 @@
+#################### START OF FILE: app\viewer\panel_nav.py ####################
+
 # app/viewer/panel_nav.py
 """PDFApps – Navigation, TOC generation, recent files, and theme rendering."""
 import logging
@@ -154,6 +156,9 @@ class PanelNavMixin:
         rec_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rec_title.setStyleSheet("font-size: 10pt; font-weight: 600; opacity: 0.7;")
         lay.addWidget(rec_title)
+
+        dark = getattr(self.window(), "_dark_mode", True) if self.window() else True
+        link_style = self._recent_link_style(dark=dark)
         for rp in recents[:5]:
             if not os.path.lexists(rp) or os.path.isdir(rp):
                 continue
@@ -167,11 +172,11 @@ class PanelNavMixin:
             link.setToolTip(rp)
             link.setCursor(Qt.CursorShape.PointingHandCursor)
             link.setFlat(True)
-            link.setStyleSheet(self._recent_link_style(dark=True))
+            link.setStyleSheet(link_style)
             link.clicked.connect(lambda checked=False, p=rp, r=row: self._on_recent_clicked(p, r))
             self._recent_links.append(link)
             del_btn = QPushButton()
-            del_btn.setIcon(qta.icon("fa5s.trash-alt", color=TEXT_SEC))
+            del_btn.setIcon(qta.icon("fa5s.trash-alt", color=TEXT_SEC if dark else _LQ))
             del_btn.setFixedSize(28, 28)
             del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             del_btn.setFlat(True)

@@ -20,7 +20,7 @@ from app.base import BasePage
 from app.pdf_io import atomic_pdf_write
 from app.i18n import t, get_language
 from app.utils import section, info_lbl, parse_pages, show_error
-from app.constants import ACCENT, DESKTOP, TEXT_PRI, TEXT_SEC, _LQ
+from app.constants import ACCENT, ACCENT_H, ACCENT_P, DESKTOP, TEXT_PRI, TEXT_SEC, _LQ
 from app.widgets import DropFileEdit
 
 
@@ -387,15 +387,16 @@ class TabCortar(BasePage):
         f.addWidget(self.drop_in)
         f.addWidget(self.lbl_info)
 
-        # ── Interactive Crop Selection Button (Foxit Style) ───────────
+        # ── Interactive Crop Selection Button ─────────────────────────
         self.btn_draw_crop = QPushButton(t("tool.crop.draw_btn"))
         self.btn_draw_crop.setIcon(qta.icon("fa5s.crop-alt", color=TEXT_PRI))
         self.btn_draw_crop.setCheckable(True)
         self.btn_draw_crop.setChecked(True)
         self.btn_draw_crop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_draw_crop.setStyleSheet(
-            f"QPushButton:checked {{ background: #0D3D38; border: 1.5px solid {ACCENT}; color: {ACCENT}; font-weight: bold; padding: 8px; }}"
-            f"QPushButton {{ padding: 8px; font-weight: 600; }}"
+            f"QPushButton:checked {{ background: #264F78; border: 1.5px solid {ACCENT}; color: #FFFFFF; font-weight: bold; padding: 8px; border-radius: 6px; }}"
+            f"QPushButton {{ background: #3C3F41; border: 1px solid #555555; color: {TEXT_PRI}; padding: 8px; font-weight: 600; border-radius: 6px; }}"
+            f"QPushButton:hover {{ background: #4F5254; border-color: {ACCENT}; }}"
         )
         self.btn_draw_crop.clicked.connect(self._on_draw_btn_clicked)
         f.addWidget(self.btn_draw_crop)
@@ -472,7 +473,7 @@ class TabCortar(BasePage):
         v_margins.addLayout(grid)
 
         self.lbl_dimensions = QLabel("")
-        self.lbl_dimensions.setStyleSheet("font-weight: 600; color: #14B8A6; padding: 2px;")
+        self.lbl_dimensions.setStyleSheet(f"font-weight: 600; color: {ACCENT}; padding: 2px;")
         v_margins.addWidget(self.lbl_dimensions)
 
         # Apply preview button
@@ -481,8 +482,8 @@ class TabCortar(BasePage):
         self.btn_apply_crop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_apply_crop.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: white; font-weight: bold; padding: 8px 14px; border-radius: 6px; border: none; font-size: 11pt; }}"
-            f"QPushButton:hover {{ background: #0D9488; }}"
-            f"QPushButton:pressed {{ background: #0F766E; }}"
+            f"QPushButton:hover {{ background: {ACCENT_H}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_P}; }}"
         )
         self.btn_apply_crop.clicked.connect(self.apply_crop_preview)
         v_margins.addWidget(self.btn_apply_crop)
@@ -507,7 +508,7 @@ class TabCortar(BasePage):
         undo_redo_row.addWidget(self.btn_redo)
         v_margins.addLayout(undo_redo_row)
 
-        # Quick preset buttons (Foxit style)
+        # Quick preset buttons
         btn_presets = QHBoxLayout()
         btn_presets.setSpacing(4)
 
@@ -591,7 +592,7 @@ class TabCortar(BasePage):
 
     def _preset_half_inch(self):
         self._updating = True
-        pts = 36  # 0.5 in * 72 pt/in
+        pts = 36
         self.spin_top.setValue(pts)
         self.spin_bottom.setValue(pts)
         self.spin_left.setValue(pts)
@@ -619,9 +620,9 @@ class TabCortar(BasePage):
                     candidates = []
 
         subset = self.cmb_subset.currentIndex()
-        if subset == 1:  # Odd pages (1, 3, 5...) -> 0, 2, 4...
+        if subset == 1:
             return [p for p in candidates if (p + 1) % 2 != 0]
-        elif subset == 2:  # Even pages (2, 4, 6...) -> 1, 3, 5...
+        elif subset == 2:
             return [p for p in candidates if (p + 1) % 2 == 0]
         return candidates
 
@@ -928,7 +929,6 @@ class TabCortar(BasePage):
             QMessageBox.warning(self, t("msg.warning"), t("tool.crop.no_pages"))
             return
 
-        # Always open a Save As dialog so the user can choose a destination file and name
         default_name = "cropped.pdf"
         if pdf_path:
             base, ext = os.path.splitext(os.path.basename(pdf_path))
@@ -952,7 +952,6 @@ class TabCortar(BasePage):
                         if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
                             page.set_cropbox(crop_rect)
 
-                # Release document locks in viewer if saving onto an open file
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
                     if viewer._fitz_doc:
@@ -982,4 +981,3 @@ class TabCortar(BasePage):
             QMessageBox.information(self, t("msg.done"), msg)
         except Exception as e:
             show_error(self, e)
-

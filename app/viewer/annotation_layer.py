@@ -13,6 +13,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QWidget
 import qtawesome as qta
 
+from app.constants import ACCENT
+
 
 class ToolMode(IntEnum):
     POINTER = 0
@@ -1077,15 +1079,15 @@ class AnnotationOverlay(QWidget):
                 box.text,
             )
 
-            # Active selection frame and handles
+            # Active selection frame and handles (PyperPoint Fluent Blue)
             if is_active:
-                p.setPen(QPen(QColor("#14B8A6"), 1.5, Qt.PenStyle.DashLine))
+                p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(box.rect)
 
                 # Resize handles at 4 corners
                 for h_rect in self._box_handles(box.rect).values():
-                    p.setPen(QPen(QColor("#14B8A6"), 1.5))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
                     p.setBrush(QColor("#FFFFFF"))
                     p.drawRect(h_rect)
 
@@ -1101,7 +1103,7 @@ class AnnotationOverlay(QWidget):
                     sy = inner_rect.top() + line_idx * fm.lineSpacing()
                     sw = max(6.0, fm.horizontalAdvance(selected_chars.replace("\n", "")))
                     sh = fm.height()
-                    p.fillRect(QRectF(sx, sy, sw, sh), QColor(20, 184, 166, 90))
+                    p.fillRect(QRectF(sx, sy, sw, sh), QColor(0, 120, 212, 90))
 
                 # Blinking text cursor
                 elif self._cursor_visible and self.hasFocus():
@@ -1119,10 +1121,8 @@ class AnnotationOverlay(QWidget):
         # 3. Draw laser pointer (20% opacity)
         if self._tool == ToolMode.LASER and self._laser_pos is not None:
             p.setPen(Qt.PenStyle.NoPen)
-            # 20% opacity red outer halo (255 * 0.20 = 51)
             p.setBrush(QColor(239, 68, 68, 51))
             p.drawEllipse(self._laser_pos, _LASER_RADIUS, _LASER_RADIUS)
-            # 20% opacity white inner highlight (100 * 0.20 = 20)
             p.setBrush(QColor(255, 255, 255, 20))
             p.drawEllipse(self._laser_pos, _LASER_RADIUS // 3, _LASER_RADIUS // 3)
 

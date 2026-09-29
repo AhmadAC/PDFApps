@@ -195,7 +195,7 @@ class _SignatureCanvas(QWidget):
         self._strokes = []
         self._current = []
         self.setMinimumSize(400, 150)
-        self.setStyleSheet("background: white; border: 1px solid #ccc; border-radius: 4px;")
+        self.setStyleSheet("background: white; border: 1px solid #555; border-radius: 4px;")
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     def mousePressEvent(self, e):
@@ -335,7 +335,7 @@ class _SignatureDialog(QDialog):
         self._type_preview = QLabel()
         self._type_preview.setMinimumHeight(60)
         self._type_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._type_preview.setStyleSheet("background: white; border: 1px solid #ccc; border-radius: 4px;")
+        self._type_preview.setStyleSheet("background: white; border: 1px solid #555; border-radius: 4px;")
         tv.addWidget(self._type_preview)
         tv.addStretch()
         tabs.addTab(type_w, t("edit.signature.type"))
@@ -349,7 +349,7 @@ class _SignatureDialog(QDialog):
         self._imp_preview = QLabel(t("edit.signature.none"))
         self._imp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._imp_preview.setMinimumHeight(60)
-        self._imp_preview.setStyleSheet("background: white; border: 1px solid #ccc; border-radius: 4px;")
+        self._imp_preview.setStyleSheet("background: white; border: 1px solid #555; border-radius: 4px;")
         iv.addWidget(self._imp_preview)
         iv.addStretch()
         self._imp_path = None
