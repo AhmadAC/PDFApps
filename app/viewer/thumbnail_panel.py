@@ -33,6 +33,7 @@ from app.viewer.thumbnail_worker import (
     DEFAULT_THUMB_HEIGHT,
     DEFAULT_THUMB_WIDTH,
     HIDDEN_WINDOW,
+    THUMB_PADDING,
     VISIBLE_BUFFER,
     ThumbnailWorker,
     _install_debug_log,
@@ -131,7 +132,7 @@ class ThumbnailPanel(QWidget):
         )
         menu.addSeparator()
 
-        # 2. Thumbnail Zoom
+        # 2. Thumbnail Zoom and Fitting
         act_enlarge = menu.addAction(
             qta.icon("fa5s.search-plus", color=icon_color),
             "Enlarge Page Thumbnails",
@@ -139,6 +140,14 @@ class ThumbnailPanel(QWidget):
         act_reduce = menu.addAction(
             qta.icon("fa5s.search-minus", color=icon_color),
             "Reduce Page Thumbnails",
+        )
+        act_fit_window = menu.addAction(
+            qta.icon("fa5s.arrows-alt-h", color=icon_color),
+            "Fit Window to Thumbnails",
+        )
+        act_fit_width = menu.addAction(
+            qta.icon("fa5s.expand-arrows-alt", color=icon_color),
+            "Fit Thumbnails to Window Width",
         )
         menu.addSeparator()
 
@@ -252,6 +261,10 @@ class ThumbnailPanel(QWidget):
             self._enlarge_thumbnails()
         elif selected_action == act_reduce:
             self._reduce_thumbnails()
+        elif selected_action == act_fit_window:
+            self.fit_window_to_thumbnails()
+        elif selected_action == act_fit_width:
+            self.fit_thumbnails_to_window()
         elif selected_action == act_embed:
             self.action_requested.emit("embed_thumbnails", selected_pages)
         elif selected_action == act_rem_embed:
@@ -295,6 +308,28 @@ class ThumbnailPanel(QWidget):
         elif selected_action == act_props:
             self.action_requested.emit("properties", selected_pages)
 
+    def fit_window_to_thumbnails(self) -> None:
+        """Resize the parent sidebar panel in the splitter to snugly fit the thumbnails."""
+        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
+        needed_w = tw + 40
+        self.action_requested.emit("fit_sidebar_width", needed_w)
+
+    def fit_thumbnails_to_window(self) -> None:
+        """Scale thumbnail dimensions so they fill the current sidebar viewport width."""
+        vp_w = self._view.viewport().width() if self._view and self._view.viewport() else 0
+        if vp_w <= 0:
+            vp_w = self.width()
+        target_thumb_w = max(60, min(360, vp_w - 2 * THUMB_PADDING - 4))
+        self._thumb_scale = round(target_thumb_w / DEFAULT_THUMB_WIDTH, 2)
+        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
+        th = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
+        self._delegate.set_thumb_size(tw, th)
+        self._model.clear_cache()
+        self._stop_all_workers()
+        self._inflight.clear()
+        self._render_visible()
+        self._view.viewport().update()
+
     def _enlarge_thumbnails(self) -> None:
         self._thumb_scale = min(2.5, round(self._thumb_scale * 1.25, 2))
         tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
@@ -305,6 +340,7 @@ class ThumbnailPanel(QWidget):
         self._inflight.clear()
         self._render_visible()
         self._view.viewport().update()
+        self.fit_window_to_thumbnails()
 
     def _reduce_thumbnails(self) -> None:
         self._thumb_scale = max(0.5, round(self._thumb_scale / 1.25, 2))
@@ -316,6 +352,7 @@ class ThumbnailPanel(QWidget):
         self._inflight.clear()
         self._render_visible()
         self._view.viewport().update()
+        self.fit_window_to_thumbnails()
 
     # ── Public API ────────────────────────────────────────────────
 

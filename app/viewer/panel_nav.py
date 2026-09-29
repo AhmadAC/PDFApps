@@ -1,5 +1,3 @@
-#################### START OF FILE: app\viewer\panel_nav.py ####################
-
 # app/viewer/panel_nav.py
 """PDFApps – Navigation, TOC generation, recent files, and theme rendering."""
 import logging
@@ -26,7 +24,7 @@ class PanelNavMixin:
 
     def _toggle_pages_sidebar(self):
         if not self._pages_sidebar_collapsed:
-            self._saved_sidebar_width = max(180, self._sidebar_panel.width())
+            self._saved_sidebar_width = max(70, self._sidebar_panel.width())
             self._pages_sidebar_collapsed = True
             self._sidebar_panel.setVisible(False)
             total = self._viewer_splitter.width() or 1020
@@ -36,7 +34,7 @@ class PanelNavMixin:
             self._pages_sidebar_collapsed = False
             self._sidebar_panel.setVisible(True)
             self._sidebar_tabs.setVisible(True)
-            w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
+            w = min(500, max(70, getattr(self, "_saved_sidebar_width", 220)))
             total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([w, max(300, total - w)])
             self.__class__._pages_sidebar_visible_pref = True
@@ -94,6 +92,11 @@ class PanelNavMixin:
         _paint_bg(self)
 
     def eventFilter(self, obj, event):
+        if hasattr(self, "_viewer_splitter") and obj is self._viewer_splitter.handle(1):
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                if hasattr(self, "_thumbnails"):
+                    self._thumbnails.fit_window_to_thumbnails()
+                    return True
         if obj is self._canvas_scroll.viewport():
             if event.type() == QEvent.Type.Wheel:
                 if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -424,7 +427,7 @@ class PanelNavMixin:
         self._sidebar_tabs.setVisible(show_pages)
         total = self._viewer_splitter.width() or 1020
         if show_pages:
-            w = min(400, max(180, getattr(self, "_saved_sidebar_width", 220)))
+            w = min(500, max(70, getattr(self, "_saved_sidebar_width", 220)))
             self._viewer_splitter.setSizes([w, max(300, total - w)])
         else:
             self._viewer_splitter.setSizes([0, total])

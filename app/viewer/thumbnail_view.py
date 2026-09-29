@@ -48,6 +48,16 @@ class ThumbnailListView(QListView):
         self._auto_scroll_timer.setInterval(30)
         self._auto_scroll_timer.timeout.connect(self._handle_auto_scroll)
 
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.angleDelta().y() > 0:
+                self._panel._enlarge_thumbnails()
+            else:
+                self._panel._reduce_thumbnails()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     # ── Drag & Drop Implementation ────────────────────────────────────────
 
     def _create_drag_pixmap(self, selected_pages: list[int]) -> QPixmap:

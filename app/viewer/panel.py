@@ -183,7 +183,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._toc_tree = QTreeWidget()
         self._toc_tree.setObjectName("toc_tree")
         self._toc_tree.setHeaderHidden(True)
-        self._toc_tree.setMinimumWidth(180)
+        self._toc_tree.setMinimumWidth(70)
         self._toc_tree.itemClicked.connect(self._on_toc_clicked)
 
         # ── Thumbnails (Pages tab of the sidebar) ───────────────────────
@@ -195,7 +195,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._sidebar_tabs = QTabWidget()
         self._sidebar_tabs.setObjectName("viewer_sidebar_tabs")
         self._sidebar_tabs.setDocumentMode(True)
-        self._sidebar_tabs.setMinimumWidth(180)
+        self._sidebar_tabs.setMinimumWidth(70)
         self._toc_tab_idx = self._sidebar_tabs.addTab(
             self._toc_tree, t("viewer.sidebar.contents"))
         self._pages_tab_idx = self._sidebar_tabs.addTab(
@@ -244,6 +244,10 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._viewer_splitter.setVisible(False)
         self._sidebar_panel.setVisible(False)
         layout.addWidget(self._viewer_splitter, 1)
+
+        handle = self._viewer_splitter.handle(1)
+        if handle:
+            handle.installEventFilter(self)
 
         # ── Search bar (Ctrl+F) ───────────────────────────────────────────
         self._search_bar = QWidget()

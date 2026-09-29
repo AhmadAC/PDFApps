@@ -166,6 +166,20 @@ class ThumbnailDelegate(QStyledItemDelegate):
         is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
         is_current = page_idx == self._current_page
 
+        # Centered thumbnail within available row width
+        thumb_w = min(self._thumb_w, max(40, rect.width() - 2 * THUMB_PADDING))
+        thumb_h = self._thumb_h
+        thumb_x = rect.x() + (rect.width() - thumb_w) // 2
+        thumb_y = rect.y() + THUMB_PADDING
+        thumb_rect = QRect(thumb_x, thumb_y, thumb_w, thumb_h)
+
+        # Card bounding box snugly wraps the thumbnail + page number label without empty margins
+        card_w = min(rect.width() - 8, thumb_w + 16)
+        card_x = rect.x() + (rect.width() - card_w) // 2
+        card_h = thumb_h + PAGE_NUM_HEIGHT + 8
+        card_y = thumb_y - 4
+        card_rect = QRect(card_x, card_y, card_w, card_h)
+
         # Highlight background box covering item
         if is_selected or is_current:
             accent = QColor(ACCENT)
@@ -177,21 +191,14 @@ class ThumbnailDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(QColor(ACCENT), 1.5))
             else:
                 painter.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
-            painter.drawRoundedRect(rect.adjusted(6, 4, -6, -4), 6, 6)
+            painter.drawRoundedRect(card_rect, 6, 6)
         elif option.state & QStyle.StateFlag.State_MouseOver:
             hover = (
                 QColor(255, 255, 255, 22) if self._dark else QColor(0, 0, 0, 20)
             )
             painter.setBrush(hover)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect.adjusted(6, 4, -6, -4), 6, 6)
-
-        # Centered thumbnail within available row width
-        thumb_w = min(self._thumb_w, max(40, rect.width() - 2 * THUMB_PADDING))
-        thumb_h = self._thumb_h
-        thumb_x = rect.x() + (rect.width() - thumb_w) // 2
-        thumb_y = rect.y() + THUMB_PADDING
-        thumb_rect = QRect(thumb_x, thumb_y, thumb_w, thumb_h)
+            painter.drawRoundedRect(card_rect, 6, 6)
 
         if pix is not None and not pix.isNull():
             dpr = pix.devicePixelRatio() or 1.0
@@ -230,9 +237,9 @@ class ThumbnailDelegate(QStyledItemDelegate):
             painter.setPen(QColor(TEXT_SEC))
 
         num_rect = QRect(
-            rect.x(),
+            card_x,
             thumb_y + self._thumb_h + 2,
-            rect.width(),
+            card_w,
             PAGE_NUM_HEIGHT,
         )
         painter.drawText(num_rect, Qt.AlignmentFlag.AlignCenter, label_text)

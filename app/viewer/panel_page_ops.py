@@ -1,3 +1,5 @@
+
+
 # app/viewer/panel_page_ops.py
 """PDFApps – Multi-page operations, drag/drop reordering, and thumbnail action handlers."""
 import os
@@ -211,7 +213,22 @@ class _PageTransitionsDialog(QDialog):
 class PanelPageOpsMixin:
     """Mixin for page modification, reordering, extraction, and insertion."""
 
+    def _set_sidebar_width(self, target_w: int) -> None:
+        target_w = max(70, min(600, target_w))
+        self._saved_sidebar_width = target_w
+        if not getattr(self, "_pages_sidebar_collapsed", False) and hasattr(self, "_viewer_splitter"):
+            sizes = self._viewer_splitter.sizes()
+            if len(sizes) >= 2:
+                total = sum(sizes)
+                canvas_w = max(200, total - target_w)
+                self._viewer_splitter.setSizes([target_w, canvas_w])
+
     def _on_thumbnail_action(self, action: str, pages_arg: object) -> None:
+        if action == "fit_sidebar_width":
+            if isinstance(pages_arg, (int, float)):
+                self._set_sidebar_width(int(pages_arg))
+            return
+
         if not self._fitz_doc or not self._current_path:
             return
 
@@ -747,3 +764,4 @@ class PanelPageOpsMixin:
         win = self.window()
         if hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.split"))
+
