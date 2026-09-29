@@ -212,7 +212,11 @@ class PanelNavMixin:
                 self._remove_recent(path, row_widget)
             return
 
-        self.load(resolved)
+        win = self.window()
+        if win and hasattr(win, "_load_and_track"):
+            win._load_and_track(resolved)
+        else:
+            self.load(resolved)
 
     def _remove_recent(self, path: str, row_widget):
         from app.i18n import _update_config
@@ -237,7 +241,11 @@ class PanelNavMixin:
         path, _ = QFileDialog.getOpenFileName(
             self.window(), t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
         if path:
-            self.load(path)
+            win = self.window()
+            if win and hasattr(win, "_load_and_track"):
+                win._load_and_track(path)
+            else:
+                self.load(path)
 
     def current_path(self) -> str:
         return self._current_path
@@ -335,6 +343,21 @@ class PanelNavMixin:
                     self._next_btn, self._toc_btn):
             btn.setEnabled(False)
         self._refresh_recents()
+
+        win = self.window()
+        if win:
+            if hasattr(win, "_tab_bar") and hasattr(win, "_viewers"):
+                for idx, v in enumerate(win._viewers):
+                    if v is self:
+                        win._tab_bar.setTabText(idx, t("viewer.title"))
+                        win._tab_bar.setTabToolTip(idx, "")
+                        break
+            if hasattr(win, "_update_tab_bar_visibility"):
+                win._update_tab_bar_visibility()
+            if hasattr(win, "_update_breadcrumb"):
+                win._update_breadcrumb()
+            if hasattr(win, "setWindowTitle"):
+                win.setWindowTitle(t("app.name"))
 
     def load(self, path: str, target_page: int = 0, target_scroll: int = -1, selected_pages: list[int] | None = None, active_sidebar_tab: QWidget | int | None = None, _is_history_step: bool = False):
         print(f"[PDFApps] Loading: {path}")
@@ -439,6 +462,20 @@ class PanelNavMixin:
             if ps and ps.get("original_path"):
                 display_name = f"● {os.path.basename(ps['original_path'])}"
         self._name_lbl.setText(display_name)
+
+        if win:
+            if hasattr(win, "_tab_bar") and hasattr(win, "_viewers"):
+                for idx, v in enumerate(win._viewers):
+                    if v is self:
+                        win._tab_bar.setTabText(idx, display_name)
+                        win._tab_bar.setTabToolTip(idx, self._original_doc_path or path)
+                        break
+            if hasattr(win, "_update_tab_bar_visibility"):
+                win._update_tab_bar_visibility()
+            if hasattr(win, "_update_breadcrumb"):
+                win._update_breadcrumb()
+            if hasattr(win, "setWindowTitle"):
+                win.setWindowTitle(f"{t('app.name')} - {display_name}")
 
         self._zoom_lbl.setText(t("zoom.fit"))
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,

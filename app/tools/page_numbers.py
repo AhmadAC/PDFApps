@@ -1,3 +1,5 @@
+#################### START OF FILE: app/tools/page_numbers.py ####################
+
 """PDFApps – TabPageNumbers: add page numbers to a PDF with live preview and undo/redo."""
 
 import contextlib
@@ -5,7 +7,6 @@ import os
 import re
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QHBoxLayout, QLineEdit, QFileDialog, QMessageBox,
     QPushButton, QLabel,
@@ -137,12 +138,6 @@ class TabPageNumbers(BasePage):
         sec_out.setVisible(False)
         self.drop_out.setVisible(False)
 
-        sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._undo)
-        sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._redo)
-        sc_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._redo)
-        for sc in (sc_undo, sc_redo1, sc_redo2):
-            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-
     def _calc_preview(self) -> dict | None:
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -209,7 +204,9 @@ class TabPageNumbers(BasePage):
         if viewer and hasattr(viewer, "undo"):
             viewer.undo()
             self._update_undo_redo_state()
-            self._emit_preview()
+            self.numbers_preview_changed.emit(None)
+            if hasattr(self, "_status"):
+                self._status("↩ " + t("tool.page_numbers.undone", default="Page numbers undone (Ctrl+Y to redo)"))
 
     def _redo(self):
         win = self.window()
@@ -218,6 +215,8 @@ class TabPageNumbers(BasePage):
             viewer.redo()
             self._update_undo_redo_state()
             self.numbers_preview_changed.emit(None)
+            if hasattr(self, "_status"):
+                self._status("↪ " + t("tool.page_numbers.redone", default="Page numbers redone"))
 
     def _update_undo_redo_state(self):
         win = self.window()
@@ -358,7 +357,8 @@ class TabPageNumbers(BasePage):
         if in_viewer_mode:
             try:
                 import fitz
-                doc = fitz.open(pdf_path)
+                active_path = viewer.current_path() if viewer and viewer.current_path() else pdf_path
+                doc = fitz.open(active_path)
                 if doc.needs_pass and self._pdf_password:
                     doc.authenticate(self._pdf_password)
 
@@ -400,6 +400,12 @@ class TabPageNumbers(BasePage):
 
                 first_target = min(i for i in range(total) if i in targets and i >= start_page)
                 viewer._save_and_reload(doc, target_page=first_target)
+
+                # Keep the tool's drop_in in sync with the viewer's current path
+                if viewer.current_path():
+                    self.drop_in.blockSignals(True)
+                    self.drop_in.set_path(viewer.current_path())
+                    self.drop_in.blockSignals(False)
 
                 self._status(t("tool.page_numbers.applied", default="✔ Page numbers added (Ctrl+Z to undo, Ctrl+S to save)"))
                 self._update_undo_redo_state()

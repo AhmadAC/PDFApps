@@ -1,3 +1,4 @@
+
 # app/viewer/panel_history.py
 """PDFApps – Panel history, undo/redo state management, and temp pipeline persistence."""
 import contextlib
@@ -6,6 +7,7 @@ import tempfile
 
 from app.utils import show_error
 from app.pdf_io import atomic_pdf_write
+from app.i18n import t
 
 
 class PanelHistoryMixin:
@@ -77,15 +79,32 @@ class PanelHistoryMixin:
                         break
             if hasattr(win, "_set_status"):
                 win._set_status("↩ Undo (Original document state)")
+            if hasattr(win, "setWindowTitle"):
+                orig_name = os.path.basename(self._original_doc_path)
+                win.setWindowTitle(f"{t('app.name')} - {orig_name}")
         else:
             if hasattr(win, "_pipeline_state"):
                 win._pipeline_state[vid] = {
                     "original_path": self._original_doc_path,
                     "temp_path": target_path,
                 }
+            if hasattr(win, "_tab_bar") and hasattr(win, "_viewers"):
+                for idx, v in enumerate(win._viewers):
+                    if v is self:
+                        orig_name = os.path.basename(self._original_doc_path)
+                        win._tab_bar.setTabText(idx, f"● {orig_name}")
+                        win._tab_bar.setTabToolTip(idx, f"{self._original_doc_path} (modified)")
+                        break
             if hasattr(win, "_set_status"):
                 win._set_status("↩ Undo")
+            if hasattr(win, "setWindowTitle"):
+                orig_name = os.path.basename(self._original_doc_path)
+                win.setWindowTitle(f"{t('app.name')} - ● {orig_name}")
 
+        if hasattr(win, "_update_tab_bar_visibility"):
+            win._update_tab_bar_visibility()
+        if hasattr(win, "_update_breadcrumb"):
+            win._update_breadcrumb()
         if hasattr(win, "_update_page_nav"):
             win._update_page_nav()
 
@@ -140,6 +159,9 @@ class PanelHistoryMixin:
                         win._tab_bar.setTabText(idx, orig_name)
                         win._tab_bar.setTabToolTip(idx, self._original_doc_path)
                         break
+            if hasattr(win, "setWindowTitle"):
+                orig_name = os.path.basename(self._original_doc_path)
+                win.setWindowTitle(f"{t('app.name')} - {orig_name}")
         else:
             if hasattr(win, "_pipeline_state"):
                 win._pipeline_state[vid] = {
@@ -153,9 +175,16 @@ class PanelHistoryMixin:
                         win._tab_bar.setTabText(idx, f"● {orig_name}")
                         win._tab_bar.setTabToolTip(idx, f"{self._original_doc_path} (modified)")
                         break
+            if hasattr(win, "setWindowTitle"):
+                orig_name = os.path.basename(self._original_doc_path)
+                win.setWindowTitle(f"{t('app.name')} - ● {orig_name}")
 
         if hasattr(win, "_set_status"):
             win._set_status("↪ Redo")
+        if hasattr(win, "_update_tab_bar_visibility"):
+            win._update_tab_bar_visibility()
+        if hasattr(win, "_update_breadcrumb"):
+            win._update_breadcrumb()
         if hasattr(win, "_update_page_nav"):
             win._update_page_nav()
 
@@ -248,6 +277,14 @@ class PanelHistoryMixin:
                         win._tab_bar.setTabText(idx, f"● {orig_name}")
                         win._tab_bar.setTabToolTip(idx, f"{orig_path} (modified)")
                         break
+
+            if win and hasattr(win, "_update_tab_bar_visibility"):
+                win._update_tab_bar_visibility()
+            if win and hasattr(win, "_update_breadcrumb"):
+                win._update_breadcrumb()
+            if win and hasattr(win, "setWindowTitle"):
+                orig_name = os.path.basename(orig_path)
+                win.setWindowTitle(f"{t('app.name')} - ● {orig_name}")
 
             if not scroll_to_target and thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
                 sb = self._thumbnails._view.verticalScrollBar()

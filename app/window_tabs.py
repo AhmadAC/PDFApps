@@ -97,12 +97,16 @@ class WindowTabsMixin:
         self._update_tab_bar_visibility()
         if hasattr(self, "_update_page_nav"):
             self._update_page_nav()
+        if hasattr(self, "_update_breadcrumb"):
+            self._update_breadcrumb()
         return viewer
 
     def _update_tab_bar_visibility(self) -> None:
         has_multiple = len(self._viewers) > 1
-        has_open_doc = bool(self._viewers and self._viewers[0].current_path())
+        has_open_doc = any(bool(v.current_path()) for v in self._viewers)
         self._tab_bar.setVisible(has_multiple or has_open_doc)
+        if hasattr(self, "_update_breadcrumb"):
+            self._update_breadcrumb()
 
     def _close_tab(self, index: int) -> None:
         if not (0 <= index < len(self._viewers)):
@@ -157,10 +161,17 @@ class WindowTabsMixin:
         if 0 <= index < len(self._viewers):
             self._viewer_stack.setCurrentIndex(index)
             viewer = self._viewers[index]
+            self._update_tab_bar_visibility()
             if hasattr(self, "_update_page_nav"):
                 self._update_page_nav()
             if hasattr(self, "_update_breadcrumb"):
                 self._update_breadcrumb()
+            if hasattr(self, "setWindowTitle"):
+                doc_name = os.path.basename(viewer._original_doc_path or viewer.current_path()) if viewer.current_path() else ""
+                if doc_name:
+                    self.setWindowTitle(f"{t('app.name')} - {doc_name}")
+                else:
+                    self.setWindowTitle(t("app.name"))
             if getattr(self, "_current_tool", -1) >= 0:
                 tool_w = self.stack.widget(self._current_tool)
                 cur_path = viewer.current_path()
@@ -214,8 +225,11 @@ class WindowTabsMixin:
                 self._tab_bar.setCurrentIndex(i)
                 self._viewer_stack.setCurrentIndex(i)
                 add_recent_file(norm_path)
+                self._update_tab_bar_visibility()
                 if hasattr(self, "_update_page_nav"):
                     self._update_page_nav()
+                if hasattr(self, "_update_breadcrumb"):
+                    self._update_breadcrumb()
                 return v
 
         cur_v = self._viewer

@@ -100,11 +100,23 @@ class WindowActionsMixin:
             self._viewer.set_numbers_preview(preview_data)
 
     def _update_breadcrumb(self):
+        cur_file = ""
+        if self._viewer and self._viewer.current_path():
+            cur_file = os.path.basename(self._viewer._original_doc_path or self._viewer.current_path())
+
+        file_part = f"  ›  {cur_file}" if cur_file else ""
         if getattr(self, "_current_tool", -1) >= 0 and self._current_tool < len(NAV_ITEMS):
             tool_name = NAV_ITEMS[self._current_tool][0]
-            self._breadcrumb.setText(f"{t('workspace.title')}  ›  {tool_name}")
+            self._breadcrumb.setText(f"{t('workspace.title')}{file_part}  ›  {tool_name}")
+        elif cur_file:
+            self._breadcrumb.setText(f"{t('workspace.title')}{file_part}")
         else:
             self._breadcrumb.setText(t("workspace.title"))
+
+        if self._viewer and self._viewer.current_path():
+            self._breadcrumb.setToolTip(self._viewer._original_doc_path or self._viewer.current_path())
+        else:
+            self._breadcrumb.setToolTip("")
 
     def _update_undo_redo_buttons(self):
         if not hasattr(self, "_undo_top_btn") or not hasattr(self, "_redo_top_btn"):
@@ -246,7 +258,7 @@ class WindowActionsMixin:
             self._right_pane_toggle_btn.setVisible(False)
             self._pages_toggle_btn.setVisible(True)
             self._tab_container.setVisible(True)
-            self._breadcrumb.setText(t("workspace.title"))
+            self._update_breadcrumb()
             self._setup_zoom_bar(True, canvas=self._viewer._canvas if self._viewer else None)
             if self._viewer:
                 self._viewer.set_page_rotations({})
@@ -327,7 +339,7 @@ class WindowActionsMixin:
                 elif self._viewer:
                     self._viewer.set_page_order(None)
 
-            self._breadcrumb.setText(f"{t('workspace.title')}  ›  {NAV_ITEMS[row][0]}")
+            self._update_breadcrumb()
             self._try_auto_load(row)
 
         self._update_undo_redo_buttons()
@@ -351,6 +363,10 @@ class WindowActionsMixin:
                 with contextlib.suppress(Exception):
                     refresh()
         self._refresh_viewer_top_buttons()
+        if hasattr(self, "_update_tab_bar_visibility"):
+            self._update_tab_bar_visibility()
+        if hasattr(self, "_update_breadcrumb"):
+            self._update_breadcrumb()
 
     def _on_second_instance(self, paths: list):
         _wlog = logging.getLogger(__name__)
