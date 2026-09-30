@@ -1,8 +1,6 @@
-
-
 # app/viewer/canvas_1.py
 
-"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas."""
+"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas with smooth zooming."""
 
 from __future__ import annotations
 
@@ -11,6 +9,7 @@ import os
 
 import fitz
 from PySide6.QtCore import QPoint, QRect, Qt, QThreadPool, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from app.constants import BG_INNER, _LN
@@ -29,7 +28,7 @@ from app.viewer.canvas_worker import (
 
 class _SelectCanvas(QWidget):
     """Continuous-scroll PDF viewer canvas supporting text selection, search highlights,
-    page notes, cropping, and live signature placement and resizing."""
+    page notes, cropping, live signature placement, and smooth flash-free zooming."""
 
     zoom_changed = Signal(int)
     doc_replaced = Signal(object)
@@ -106,7 +105,7 @@ class _SelectCanvas(QWidget):
         if self._night_mode == night:
             return
         self._night_mode = night
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(preserve_pixmaps=False)
 
     def set_crop_mode(self, active: bool):
         self._crop_mode = active
@@ -128,15 +127,15 @@ class _SelectCanvas(QWidget):
 
     def set_page_rotations(self, rotations: dict[int, int]):
         self._page_rotations = dict(rotations)
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(preserve_pixmaps=False)
 
     def set_page_crops(self, crops: dict[int, tuple[float, float, float, float]]):
         self._page_crops = dict(crops)
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(preserve_pixmaps=False)
 
     def set_page_order(self, order: list[int] | None):
         self._page_order = list(order) if order is not None else None
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(preserve_pixmaps=False)
 
     def set_search_highlights(self, highlights: list, current: int = -1):
         self._search_highlights = highlights
@@ -206,6 +205,7 @@ class _SelectCanvas(QWidget):
         self.cancel_signature_placement()
         self._active_sig = None
         self._interaction.clear_selection()
+        self._entries.clear()
         self._layout_and_schedule()
 
     def close_doc(self):
@@ -246,7 +246,13 @@ class _SelectCanvas(QWidget):
         except Exception:
             return None
 
-    # ── Geometry and Navigation ───────────────────────────────────────────
+    # ── Geometry, Zoom and Anchored Navigation ────────────────────────────
+
+    def _get_scroll_area(self):
+        from PySide6.QtWidgets import QScrollArea as _SA
+        vp = self.parent()
+        sa = vp.parent() if vp else None
+        return sa if isinstance(sa, _SA) else None
 
     def page_count(self) -> int:
         return len(self._entries)
@@ -262,27 +268,63 @@ class _SelectCanvas(QWidget):
                 return i
         return max(0, len(self._entries) - 1)
 
-    def zoom_in(self):
+    def zoom_in(self, anchor_pos: QPoint | None = None):
         self._zoom_factor = min(5.0, round(self._zoom_factor * 1.25, 4))
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(anchor_pos=anchor_pos, preserve_pixmaps=True)
 
-    def zoom_out(self):
+    def zoom_out(self, anchor_pos: QPoint | None = None):
         self._zoom_factor = max(0.2, round(self._zoom_factor / 1.25, 4))
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(anchor_pos=anchor_pos, preserve_pixmaps=True)
 
     def zoom_reset(self):
         self._zoom_factor = 1.0
-        self._invalidate_and_relayout()
+        self._invalidate_and_relayout(preserve_pixmaps=True)
 
-    def _invalidate_and_relayout(self):
+    def _invalidate_and_relayout(self, anchor_pos: QPoint | None = None, preserve_pixmaps: bool = True):
         self._gen += 1
         self._pending.clear()
-        for e in self._entries:
-            e.pixmap = None
-            e.words = None
-        self._layout_and_schedule()
 
-    def _layout_and_schedule(self):
+        sa = self._get_scroll_area()
+        anchor_ratio_y = None
+        anchor_vp_y = 0.0
+        anchor_ratio_x = None
+        anchor_vp_x = 0.0
+        if sa and self.height() > 0:
+            sb_v = sa.verticalScrollBar()
+            vp_h = sa.viewport().height()
+            anchor_vp_y = float(anchor_pos.y()) if anchor_pos is not None else vp_h / 2.0
+            doc_y = sb_v.value() + anchor_vp_y
+            anchor_ratio_y = doc_y / max(1.0, float(self.height()))
+
+            sb_h = sa.horizontalScrollBar()
+            vp_w = sa.viewport().width()
+            anchor_vp_x = float(anchor_pos.x()) if anchor_pos is not None else vp_w / 2.0
+            doc_x = sb_h.value() + anchor_vp_x
+            anchor_ratio_x = doc_x / max(1.0, float(self.width()))
+
+        old_pixmaps: dict[int, QPixmap] = {}
+        if preserve_pixmaps:
+            for e in self._entries:
+                p = e.pixmap if e.pixmap is not None else e.prev_pixmap
+                if p is not None and not p.isNull():
+                    old_pixmaps[e.src_page] = p
+
+        self._layout_and_schedule(
+            old_pixmaps=old_pixmaps,
+            anchor_ratio_y=anchor_ratio_y,
+            anchor_vp_y=anchor_vp_y,
+            anchor_ratio_x=anchor_ratio_x,
+            anchor_vp_x=anchor_vp_x,
+        )
+
+    def _layout_and_schedule(
+        self,
+        old_pixmaps: dict[int, QPixmap] | None = None,
+        anchor_ratio_y: float | None = None,
+        anchor_vp_y: float = 0.0,
+        anchor_ratio_x: float | None = None,
+        anchor_vp_x: float = 0.0,
+    ):
         if not self._doc or self._doc.page_count <= 0:
             return
 
@@ -326,6 +368,8 @@ class _SelectCanvas(QWidget):
             ph = round(h * self._zoom)
 
             entry = _PageEntry(y_off, pw, ph, src_page=src_idx)
+            if old_pixmaps and src_idx in old_pixmaps:
+                entry.prev_pixmap = old_pixmaps[src_idx]
 
             annots = []
             try:
@@ -342,7 +386,21 @@ class _SelectCanvas(QWidget):
             y_off += ph + _PAGE_GAP
 
         total_h = y_off - _PAGE_GAP if y_off > 0 else 400
-        self.setFixedSize(max(max_w, 300), max(total_h, 400))
+        new_w = max(max_w, 300)
+        new_h = max(total_h, 400)
+        self.setFixedSize(new_w, new_h)
+
+        if anchor_ratio_y is not None:
+            sa = self._get_scroll_area()
+            if sa:
+                new_scroll_y = int(round(anchor_ratio_y * new_h - anchor_vp_y))
+                sb_v = sa.verticalScrollBar()
+                sb_v.setValue(max(0, min(new_scroll_y, sb_v.maximum())))
+                if anchor_ratio_x is not None:
+                    new_scroll_x = int(round(anchor_ratio_x * new_w - anchor_vp_x))
+                    sb_h = sa.horizontalScrollBar()
+                    sb_h.setValue(max(0, min(new_scroll_x, sb_h.maximum())))
+
         self.zoom_changed.emit(round(self._zoom_factor * 100))
         self.update()
         self._schedule_visible()
@@ -402,6 +460,7 @@ class _SelectCanvas(QWidget):
         if 0 <= pos < len(self._entries):
             entry = self._entries[pos]
             entry.pixmap = pixmap
+            entry.prev_pixmap = None
             entry.words = words
             self.update()
 
@@ -424,7 +483,9 @@ class _SelectCanvas(QWidget):
         self._gen += 1
         self._pending.clear()
         for e in self._entries:
-            e.pixmap = None
+            if e.pixmap is not None:
+                e.prev_pixmap = e.pixmap
+                e.pixmap = None
         self._schedule_visible()
         self.update()
 
@@ -452,10 +513,11 @@ class _SelectCanvas(QWidget):
 
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            pos = e.position().toPoint()
             if e.angleDelta().y() > 0:
-                self.zoom_in()
+                self.zoom_in(anchor_pos=pos)
             else:
-                self.zoom_out()
+                self.zoom_out(anchor_pos=pos)
             e.accept()
         else:
             super().wheelEvent(e)

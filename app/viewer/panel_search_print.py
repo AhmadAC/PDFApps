@@ -1,91 +1,882 @@
 # app/viewer/panel_search_print.py
-"""PDFApps – In-document text search and print dialog routines."""
+"""PDFApps – High-speed custom print dialog, accounting integration, and in-document search."""
 from __future__ import annotations
 
 import contextlib
+import json
+import logging
 import os
-import threading
+import re
+import socket
+import subprocess
+import sys
+import tempfile
 
 import fitz
-from PySide6.QtCore import QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QImage, QPainter
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import QProgressDialog
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+import qtawesome as qta
 
+from app.constants import ACCENT, BG_CARD, BG_INNER, BORDER, TEXT_PRI, TEXT_SEC, _LQ
 from app.i18n import t
-from app.utils import show_error
+from app.utils import parse_pages, show_error
+
+_log = logging.getLogger(__name__)
 
 
-class _PrintPageWorker(QThread):
-    """Background worker thread that rasterizes PDF pages into QImages without blocking the GUI."""
+def _is_linux() -> bool:
+    return sys.platform.startswith("linux")
 
-    page_rendered = Signal(int, int, QImage)  # step_idx, page_idx, QImage
-    render_error = Signal(str)
-    finished_all = Signal()
 
-    def __init__(self, doc_path: str, password: str, job_pages: list[int], target_dpi: int, parent=None):
+def _get_os_badge() -> str:
+    if _is_linux():
+        try:
+            if os.path.exists("/etc/os-release"):
+                with open("/etc/os-release", "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("PRETTY_NAME="):
+                            return line.split("=", 1)[1].strip().strip('"')
+                        if line.startswith("NAME="):
+                            return line.split("=", 1)[1].strip().strip('"')
+        except Exception:
+            pass
+        return "Linux CUPS"
+    elif sys.platform == "win32":
+        return "Windows Spooler"
+    elif sys.platform == "darwin":
+        return "macOS"
+    return sys.platform
+
+
+def _find_printer_accounting_script() -> str | None:
+    """Locate the standalone PrinterAccounting.py script if present."""
+    base_dirs = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "ComputerScripts"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ComputerScripts"),
+        os.path.join(os.getcwd(), "ComputerScripts"),
+        os.path.join(os.getcwd(), "..", "ComputerScripts"),
+        os.path.join(os.path.expanduser("~"), "ComputerScripts"),
+        "/var/mnt/shared-drive/2027/ComputerScripts",
+    ]
+    for d in base_dirs:
+        p = os.path.join(d, "PrinterAccounting.py")
+        if os.path.isfile(p):
+            return os.path.abspath(p)
+    return None
+
+
+def _find_accounting_history_file() -> str | None:
+    script_path = _find_printer_accounting_script()
+    if script_path:
+        h = os.path.join(os.path.dirname(script_path), "history.json")
+        if os.path.isfile(h):
+            return h
+    home_history = os.path.expanduser("~/.fuji_printer_history.json")
+    if os.path.isfile(home_history):
+        return home_history
+    return None
+
+
+class _FastPrintWorker(QThread):
+    """Background worker thread for asynchronous high-speed printing."""
+
+    progress = Signal(int, str)
+    finished = Signal(bool, str)
+
+    def __init__(self, job_type: str, target: str, payload_or_pdf: bytes | str, job_kwargs: dict, parent=None):
         super().__init__(parent)
-        self.doc_path = doc_path
-        self.password = password
-        self.job_pages = job_pages
-        self.target_dpi = target_dpi
+        self.job_type = job_type  # "socket", "cups", "qprinter"
+        self.target = target
+        self.payload_or_pdf = payload_or_pdf
+        self.kwargs = job_kwargs
         self._is_cancelled = False
-        self._next_event = threading.Event()
-        self._next_event.set()
 
     def cancel(self):
         self._is_cancelled = True
-        self._next_event.set()
-
-    def continue_next(self):
-        self._next_event.set()
 
     def run(self):
-        doc = None
+        try:
+            if self.job_type == "socket":
+                self._run_socket()
+            elif self.job_type == "cups":
+                self._run_cups()
+            elif self.job_type == "qprinter":
+                self._run_qprinter()
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+    def _run_socket(self):
+        ip = self.target
+        port = int(self.kwargs.get("port", 9100))
+        data = self.payload_or_pdf
+        if isinstance(data, str) and os.path.isfile(data):
+            with open(data, "rb") as f:
+                data = f.read()
+
+        total = len(data)
+        self.progress.emit(10, f"Connecting to {ip}:{port}...")
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            s.settimeout(12)
+            s.connect((ip, port))
+
+            chunk_size = 65536
+            sent = 0
+            self.progress.emit(25, f"Streaming {total / 1024:.1f} KB to printer...")
+
+            while sent < total:
+                if self._is_cancelled:
+                    raise RuntimeError("Print job cancelled by user.")
+                chunk = data[sent:sent + chunk_size]
+                s.sendall(chunk)
+                sent += len(chunk)
+                pct = 25 + int((sent / total) * 70)
+                self.progress.emit(pct, f"Sending: {sent // 1024} / {total // 1024} KB ({pct}%)...")
+
+            self.progress.emit(100, "Print job accepted by printer.")
+        self.finished.emit(True, f"Sent successfully to {ip}:{port}!")
+
+    def _run_cups(self):
+        queue = self.target
+        pdf_path = self.payload_or_pdf
+        copies = self.kwargs.get("copies", 1)
+        duplex = self.kwargs.get("duplex", "1-Sided")
+        paper = self.kwargs.get("paper", "A4")
+        color = self.kwargs.get("color", "Color")
+        user = self.kwargs.get("user", "")
+
+        self.progress.emit(30, f"Spooling to CUPS queue '{queue}'...")
+        cmd = ["lp", "-d", queue, "-n", str(copies)]
+
+        if "Long Edge" in duplex:
+            cmd.extend(["-o", "sides=two-sided-long-edge"])
+        elif "Short Edge" in duplex:
+            cmd.extend(["-o", "sides=two-sided-short-edge"])
+        else:
+            cmd.extend(["-o", "sides=one-sided"])
+
+        if paper:
+            cmd.extend(["-o", f"media={paper}"])
+        if "Color" in color:
+            cmd.extend(["-o", "ColorModel=Color"])
+        else:
+            cmd.extend(["-o", "ColorModel=Gray"])
+        if user:
+            cmd.extend(["-o", f"job-originating-user-name={user}"])
+
+        cmd.append(str(pdf_path))
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr.strip() or f"CUPS returned code {res.returncode}")
+
+        self.progress.emit(100, "Dispatched to CUPS spooler.")
+        self.finished.emit(True, f"Sent to CUPS printer '{queue}'!\n{res.stdout.strip()}")
+
+    def _run_qprinter(self):
+        # Native Windows GDI fallback with adaptive DPI rendering
+        printer_name = self.target
+        pdf_path = self.payload_or_pdf
+        page_indices = self.kwargs.get("page_indices", [])
+        copies = self.kwargs.get("copies", 1)
+
+        self.progress.emit(15, f"Initializing {printer_name}...")
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPrinterName(printer_name)
+        printer.setDocName(os.path.basename(str(pdf_path)))
+        if printer.supportsMultipleCopies():
+            printer.setCopyCount(copies)
+            job_copies = 1
+        else:
+            job_copies = copies
+
+        painter = QPainter()
+        if not painter.begin(printer):
+            raise RuntimeError(f"Could not open printer '{printer_name}' for writing.")
+
+        try:
+            doc = fitz.open(str(pdf_path))
+            total_pages = doc.page_count
+            pages_to_render = [p for p in page_indices if 0 <= p < total_pages] if page_indices else list(range(total_pages))
+            total_steps = len(pages_to_render) * job_copies
+            step_count = 0
+
+            target_dpi = min(200, max(120, printer.resolution() // 2))
+            zoom = target_dpi / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+
+            first_page = True
+            for _ in range(job_copies):
+                for p_idx in pages_to_render:
+                    if self._is_cancelled:
+                        raise RuntimeError("Print job cancelled.")
+
+                    step_count += 1
+                    pct = int((step_count / max(1, total_steps)) * 95)
+                    self.progress.emit(pct, f"Printing page {p_idx + 1} ({step_count}/{total_steps})...")
+
+                    if not first_page:
+                        printer.newPage()
+                    first_page = False
+
+                    page = doc[p_idx]
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    if pix.n != 3:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888).copy()
+                    pix = None
+
+                    target_rect = QRectF(painter.viewport())
+                    source_rect = QRectF(0, 0, img.width(), img.height())
+                    scale = min(target_rect.width() / source_rect.width(), target_rect.height() / source_rect.height())
+                    w = source_rect.width() * scale
+                    h = source_rect.height() * scale
+                    x = target_rect.x() + (target_rect.width() - w) / 2
+                    y = target_rect.y() + (target_rect.height() - h) / 2
+                    painter.drawImage(QRectF(x, y, w, h), img, source_rect)
+            doc.close()
+        finally:
+            painter.end()
+
+        self.progress.emit(100, "Sent to Windows Print Spooler.")
+        self.finished.emit(True, f"Successfully spooled to '{printer_name}'.")
+
+
+class _PdfPrintDialog(QDialog):
+    """Modern, high-performance custom print dialog with live preview and Fuji Xerox accounting."""
+
+    def __init__(self, doc_path: str, password: str = "", initial_pages: list[int] | None = None, parent=None):
+        super().__init__(parent)
+        self.doc_path = doc_path
+        self.password = password
+        self.initial_pages = initial_pages
+        self.total_pages = 0
+        self.current_preview_page = 0
+        self.temp_slice_path = None
+        self.worker = None
+
+        self.setWindowTitle(f"Print — {os.path.basename(doc_path)}")
+        self.setMinimumSize(880, 580)
+        self.resize(960, 640)
+        self.setModal(True)
+
+        self._load_accounting_history()
+        self._init_doc_metrics()
+        self._build_ui()
+        self._populate_printers()
+        self._update_preview()
+
+    def _init_doc_metrics(self):
+        try:
+            doc = fitz.open(self.doc_path)
+            if self.password and doc.needs_pass:
+                doc.authenticate(self.password)
+            self.total_pages = doc.page_count
+            doc.close()
+        except Exception:
+            self.total_pages = 1
+
+    def _load_accounting_history(self):
+        self.acct_user = "ali"
+        self.acct_pin = "1688"
+        self.acct_id = ""
+        self.saved_ip = "172.31.2.14"
+        self.saved_printer = ""
+        self.saved_duplex = "2-Sided (Flip on Long Edge)"
+        self.saved_paper = "A4"
+        self.saved_color = "Color"
+
+        h_file = _find_accounting_history_file()
+        if h_file and os.path.isfile(h_file):
+            try:
+                with open(h_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.acct_user = data.get("user_id", self.acct_user)
+                    self.acct_pin = data.get("passcode", self.acct_pin)
+                    self.acct_id = data.get("account_id", self.acct_id)
+                    self.saved_ip = data.get("printer_ip", self.saved_ip)
+                    self.saved_printer = data.get("printer_queue", self.saved_printer)
+                    self.saved_duplex = data.get("duplex", self.saved_duplex)
+                    self.saved_paper = data.get("paper_size", self.saved_paper)
+                    self.saved_color = data.get("color_mode", self.saved_color)
+            except Exception:
+                pass
+
+    def _save_accounting_history(self):
+        h_file = _find_accounting_history_file()
+        if not h_file:
+            script_path = _find_printer_accounting_script()
+            if script_path:
+                h_file = os.path.join(os.path.dirname(script_path), "history.json")
+            else:
+                h_file = os.path.expanduser("~/.fuji_printer_history.json")
+
+        data = {
+            "user_id": self.edit_acct_user.text().strip(),
+            "passcode": self.edit_acct_pin.text().strip(),
+            "account_id": self.edit_acct_id.text().strip(),
+            "printer_ip": self.edit_ip.text().strip(),
+            "printer_queue": self.cmb_printer.currentText(),
+            "duplex": self.cmb_duplex.currentText(),
+            "paper_size": self.cmb_paper.currentText(),
+            "color_mode": self.cmb_color.currentText(),
+            "copies": self.spin_copies.value(),
+        }
+        try:
+            with open(h_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        main_lay = QHBoxLayout(self)
+        main_lay.setContentsMargins(14, 14, 14, 14)
+        main_lay.setSpacing(14)
+
+        # ── LEFT PANEL: Live Interactive Preview ──────────────────────
+        left_box = QWidget()
+        left_box.setMinimumWidth(340)
+        v_left = QVBoxLayout(left_box)
+        v_left.setContentsMargins(0, 0, 0, 0)
+        v_left.setSpacing(8)
+
+        # Document & OS Badge header
+        top_hdr = QHBoxLayout()
+        lbl_doc = QLabel(f"<b>{os.path.basename(self.doc_path)}</b>")
+        lbl_doc.setStyleSheet(f"font-size: 11pt; color: {TEXT_PRI};")
+        top_hdr.addWidget(lbl_doc)
+        top_hdr.addStretch()
+
+        badge_txt = _get_os_badge()
+        os_badge = QLabel(badge_txt)
+        os_badge.setStyleSheet(f"background: #24283B; color: {ACCENT}; border: 1px solid {BORDER}; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 8.5pt;")
+        top_hdr.addWidget(os_badge)
+        v_left.addLayout(top_hdr)
+
+        # Preview Scroll Frame
+        self.preview_scroll = QScrollArea()
+        self.preview_scroll.setWidgetResizable(True)
+        self.preview_scroll.setStyleSheet("background: #1A1B26; border: 1px solid #414868; border-radius: 6px;")
+        self.lbl_preview_img = QLabel("Generating preview...")
+        self.lbl_preview_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_scroll.setWidget(self.lbl_preview_img)
+        v_left.addWidget(self.preview_scroll, 1)
+
+        # Preview Navigation Bar
+        nav_h = QHBoxLayout()
+        self.btn_prev_page = QPushButton("◀ Prev")
+        self.btn_prev_page.setFixedWidth(70)
+        self.btn_prev_page.clicked.connect(self._prev_preview_page)
+        nav_h.addWidget(self.btn_prev_page)
+
+        self.lbl_page_count = QLabel(f"Page 1 of {self.total_pages}")
+        self.lbl_page_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_page_count.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+        nav_h.addWidget(self.lbl_page_count, 1)
+
+        self.btn_next_page = QPushButton("Next ▶")
+        self.btn_next_page.setFixedWidth(70)
+        self.btn_next_page.clicked.connect(self._next_preview_page)
+        nav_h.addWidget(self.btn_next_page)
+        v_left.addLayout(nav_h)
+
+        main_lay.addWidget(left_box, 1)
+
+        # ── RIGHT PANEL: Settings, Accounting & Print Actions ─────────
+        right_box = QWidget()
+        right_box.setMinimumWidth(440)
+        v_right = QVBoxLayout(right_box)
+        v_right.setContentsMargins(0, 0, 0, 0)
+        v_right.setSpacing(10)
+
+        # 1. Destination Group
+        grp_dest = QGroupBox("Printer Destination")
+        f_dest = QFormLayout(grp_dest)
+        f_dest.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.cmb_printer = QComboBox()
+        self.cmb_printer.currentIndexChanged.connect(self._on_printer_changed)
+        f_dest.addRow("Printer:", self.cmb_printer)
+
+        ip_row = QHBoxLayout()
+        self.edit_ip = QLineEdit(self.saved_ip)
+        self.edit_ip.setPlaceholderText("e.g. 172.31.2.14")
+        ip_row.addWidget(self.edit_ip, 1)
+        self.btn_test_ip = QPushButton("Test Port 9100")
+        self.btn_test_ip.setToolTip("Verify high-speed port connectivity")
+        self.btn_test_ip.clicked.connect(self._test_printer_ip)
+        ip_row.addWidget(self.btn_test_ip)
+        self.row_ip_widget = QWidget()
+        self.row_ip_widget.setLayout(ip_row)
+        f_dest.addRow("Network IP:", self.row_ip_widget)
+
+        v_right.addWidget(grp_dest)
+
+        # 2. Accounting Credentials (Fuji Xerox ApeosPort / XSA)
+        grp_acct = QGroupBox("Printer Accounting (Fuji Xerox ApeosPort / Auditron)")
+        f_acct = QFormLayout(grp_acct)
+        f_acct.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.edit_acct_user = QLineEdit(self.acct_user)
+        f_acct.addRow("User ID:", self.edit_acct_user)
+
+        pin_row = QHBoxLayout()
+        self.edit_acct_pin = QLineEdit(self.acct_pin)
+        self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Password)
+        pin_row.addWidget(self.edit_acct_pin, 1)
+
+        self.btn_toggle_pin = QPushButton("Show")
+        self.btn_toggle_pin.setFixedWidth(54)
+        self.btn_toggle_pin.setCheckable(True)
+        self.btn_toggle_pin.toggled.connect(
+            lambda checked: self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password)
+        )
+        pin_row.addWidget(self.btn_toggle_pin)
+        pin_widget = QWidget()
+        pin_widget.setLayout(pin_row)
+        f_acct.addRow("Passcode / PIN:", pin_widget)
+
+        self.edit_acct_id = QLineEdit(self.acct_id)
+        self.edit_acct_id.setPlaceholderText("Optional Account ID")
+        f_acct.addRow("Account ID:", self.edit_acct_id)
+
+        # If standalone PrinterAccounting script is installed, offer 1-click launch
+        script_path = _find_printer_accounting_script()
+        if script_path:
+            btn_launch_acct = QPushButton("Open Fuji Xerox Manager (Standalone)...")
+            btn_launch_acct.setIcon(qta.icon("fa5s.external-link-alt", color=TEXT_PRI))
+            btn_launch_acct.clicked.connect(self._launch_standalone_accounting)
+            f_acct.addRow("", btn_launch_acct)
+
+        v_right.addWidget(grp_acct)
+
+        # 3. Page Range Group
+        grp_range = QGroupBox("Page Range")
+        v_range = QVBoxLayout(grp_range)
+        v_range.setSpacing(6)
+
+        self.rad_all = QRadioButton(f"All Pages (1 - {self.total_pages})")
+        self.rad_current = QRadioButton(f"Current Page (Page {self.current_preview_page + 1})")
+        self.rad_custom = QRadioButton("Custom Range:")
+
+        self.bg_range = QButtonGroup(self)
+        self.bg_range.addButton(self.rad_all, 0)
+        self.bg_range.addButton(self.rad_current, 1)
+        self.bg_range.addButton(self.rad_custom, 2)
+        self.rad_all.setChecked(True)
+
+        if self.initial_pages and len(self.initial_pages) > 0 and len(self.initial_pages) != self.total_pages:
+            self.rad_custom.setChecked(True)
+
+        v_range.addWidget(self.rad_all)
+        v_range.addWidget(self.rad_current)
+
+        custom_h = QHBoxLayout()
+        custom_h.addWidget(self.rad_custom)
+        self.edit_range = QLineEdit()
+        self.edit_range.setPlaceholderText("e.g. 1-3, 5, 8")
+        if self.initial_pages:
+            self.edit_range.setText(", ".join(str(p + 1) for p in self.initial_pages))
+        custom_h.addWidget(self.edit_range, 1)
+        v_range.addLayout(custom_h)
+
+        quick_row = QHBoxLayout()
+        btn_odd = QPushButton("Odd Pages")
+        btn_odd.clicked.connect(self._set_range_odd)
+        btn_even = QPushButton("Even Pages")
+        btn_even.clicked.connect(self._set_range_even)
+        quick_row.addWidget(btn_odd)
+        quick_row.addWidget(btn_even)
+        quick_row.addStretch()
+        v_range.addLayout(quick_row)
+
+        self.bg_range.idClicked.connect(lambda _: self._update_preview())
+        self.edit_range.textChanged.connect(lambda _: self._update_preview() if self.rad_custom.isChecked() else None)
+
+        v_right.addWidget(grp_range)
+
+        # 4. Layout & Options
+        grp_opts = QGroupBox("Layout & Finishing")
+        f_opts = QFormLayout(grp_opts)
+        f_opts.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        copies_h = QHBoxLayout()
+        self.spin_copies = QSpinBox()
+        self.spin_copies.setRange(1, 999)
+        self.spin_copies.setValue(1)
+        copies_h.addWidget(self.spin_copies)
+        self.chk_collate = QCheckBox("Collate")
+        self.chk_collate.setChecked(True)
+        copies_h.addWidget(self.chk_collate)
+        copies_h.addStretch()
+        copies_w = QWidget(); copies_w.setLayout(copies_h)
+        f_opts.addRow("Copies:", copies_w)
+
+        self.cmb_duplex = QComboBox()
+        self.cmb_duplex.addItems(["1-Sided (Simplex)", "2-Sided (Flip on Long Edge)", "2-Sided (Flip on Short Edge)"])
+        idx_dup = self.cmb_duplex.findText(self.saved_duplex)
+        if idx_dup >= 0: self.cmb_duplex.setCurrentIndex(idx_dup)
+        f_opts.addRow("Duplex:", self.cmb_duplex)
+
+        self.cmb_paper = QComboBox()
+        self.cmb_paper.addItems(["A4", "A3", "Letter", "Legal", "A5"])
+        idx_paper = self.cmb_paper.findText(self.saved_paper)
+        if idx_paper >= 0: self.cmb_paper.setCurrentIndex(idx_paper)
+        f_opts.addRow("Paper Size:", self.cmb_paper)
+
+        self.cmb_color = QComboBox()
+        self.cmb_color.addItems(["Color", "Black & White (Grayscale)"])
+        idx_col = self.cmb_color.findText(self.saved_color)
+        if idx_col >= 0: self.cmb_color.setCurrentIndex(idx_col)
+        self.cmb_color.currentIndexChanged.connect(lambda _: self._update_preview())
+        f_opts.addRow("Color Mode:", self.cmb_color)
+
+        self.cmb_orient = QComboBox()
+        self.cmb_orient.addItems(["Auto (Match PDF)", "Portrait", "Landscape"])
+        self.cmb_orient.currentIndexChanged.connect(lambda _: self._update_preview())
+        f_opts.addRow("Orientation:", self.cmb_orient)
+
+        v_right.addWidget(grp_opts)
+
+        # 5. Progress and Action buttons
+        self.prog_bar = QProgressBar()
+        self.prog_bar.setFixedHeight(14)
+        self.prog_bar.setVisible(False)
+        v_right.addWidget(self.prog_bar)
+
+        self.lbl_status = QLabel("")
+        self.lbl_status.setStyleSheet(f"color: {ACCENT}; font-size: 9pt;")
+        v_right.addWidget(self.lbl_status)
+
+        act_h = QHBoxLayout()
+        act_h.addStretch()
+
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        act_h.addWidget(self.btn_cancel)
+
+        self.btn_print = QPushButton("⚡ Fast Print")
+        self.btn_print.setObjectName("btn_primary")
+        self.btn_print.setStyleSheet(f"background: {ACCENT}; color: white; font-weight: bold; padding: 8px 22px; border-radius: 6px;")
+        self.btn_print.clicked.connect(self._start_print_job)
+        act_h.addWidget(self.btn_print)
+
+        v_right.addLayout(act_h)
+        main_lay.addWidget(right_box, 1)
+
+    def _populate_printers(self):
+        self.cmb_printer.clear()
+
+        # Always offer Direct Port 9100 Raw Socket option (instant Foxit-speed bypass)
+        self.cmb_printer.addItem("⚡ Direct Network Printer (Raw Port 9100 — Instant JetDirect)", "socket")
+
+        # Discover system printers
+        printers = QPrinterInfo.availablePrinters()
+        default_p = QPrinterInfo.defaultPrinterName()
+
+        for p in printers:
+            p_name = p.printerName()
+            self.cmb_printer.addItem(f"🖨️ {p_name}", ("cups" if _is_linux() else "qprinter", p_name))
+
+        # Check CUPS queues specifically on Linux if QPrinterInfo returned few
+        if _is_linux():
+            try:
+                res = subprocess.run(["lpstat", "-e"], capture_output=True, text=True)
+                for q in res.stdout.splitlines():
+                    q = q.strip()
+                    if q and not any(q in self.cmb_printer.itemText(i) for i in range(self.cmb_printer.count())):
+                        self.cmb_printer.addItem(f"🖨️ {q} (CUPS)", ("cups", q))
+            except Exception:
+                pass
+
+        if self.saved_printer:
+            idx = self.cmb_printer.findText(self.saved_printer)
+            if idx >= 0:
+                self.cmb_printer.setCurrentIndex(idx)
+
+    def _on_printer_changed(self, idx: int):
+        data = self.cmb_printer.itemData(idx)
+        is_direct_socket = (data == "socket")
+        self.row_ip_widget.setVisible(is_direct_socket)
+        if is_direct_socket:
+            self.btn_print.setText("⚡ Fast Print (Port 9100)")
+        else:
+            self.btn_print.setText("🖨️ Send Print Job")
+
+    def _test_printer_ip(self):
+        ip = self.edit_ip.text().strip()
+        if not ip:
+            QMessageBox.warning(self, "Invalid IP", "Please specify a target printer IP.")
+            return
+        try:
+            with socket.create_connection((ip, 9100), timeout=1.5):
+                QMessageBox.information(self, "Online", f"Printer at {ip}:9100 is ONLINE and accepting raw connections!")
+        except Exception as e:
+            QMessageBox.critical(self, "Offline / Refused", f"Cannot connect to {ip}:9100:\n{e}")
+
+    def _launch_standalone_accounting(self):
+        script_path = _find_printer_accounting_script()
+        if not script_path:
+            QMessageBox.warning(self, "Not Found", "PrinterAccounting.py not found in ComputerScripts directory.")
+            return
+        self._save_accounting_history()
+        subprocess.Popen([sys.executable, script_path, self.doc_path])
+
+    def _set_range_odd(self):
+        self.rad_custom.setChecked(True)
+        odds = [str(p) for p in range(1, self.total_pages + 1, 2)]
+        self.edit_range.setText(", ".join(odds))
+
+    def _set_range_even(self):
+        self.rad_custom.setChecked(True)
+        evens = [str(p) for p in range(2, self.total_pages + 1, 2)]
+        self.edit_range.setText(", ".join(evens))
+
+    def _prev_preview_page(self):
+        if self.current_preview_page > 0:
+            self.current_preview_page -= 1
+            self._update_preview()
+
+    def _next_preview_page(self):
+        if self.current_preview_page < self.total_pages - 1:
+            self.current_preview_page += 1
+            self._update_preview()
+
+    def _update_preview(self):
+        self.rad_current.setText(f"Current Page (Page {self.current_preview_page + 1})")
+        self.lbl_page_count.setText(f"Page {self.current_preview_page + 1} of {self.total_pages}")
+        self.btn_prev_page.setEnabled(self.current_preview_page > 0)
+        self.btn_next_page.setEnabled(self.current_preview_page < self.total_pages - 1)
+
         try:
             doc = fitz.open(self.doc_path)
             if self.password and doc.needs_pass:
                 doc.authenticate(self.password)
 
-            zoom = self.target_dpi / 72.0
-            mat = fitz.Matrix(zoom, zoom)
+            if 0 <= self.current_preview_page < doc.page_count:
+                page = doc[self.current_preview_page]
+                target_w = max(260, self.preview_scroll.viewport().width() - 30)
+                zoom = target_w / max(1.0, page.rect.width)
 
-            for step, page_idx in enumerate(self.job_pages, start=1):
-                if self._is_cancelled:
-                    break
+                orient = self.cmb_orient.currentText()
+                mat = fitz.Matrix(zoom, zoom)
+                if "Landscape" in orient and page.rect.width < page.rect.height:
+                    mat = mat.prerotate(90)
+                elif "Portrait" in orient and page.rect.width > page.rect.height:
+                    mat = mat.prerotate(90)
 
-                self._next_event.wait()
-                if self._is_cancelled:
-                    break
-                self._next_event.clear()
-
-                if page_idx < 0 or page_idx >= doc.page_count:
-                    continue
-
-                page = doc[page_idx]
                 pix = page.get_pixmap(matrix=mat, alpha=False)
-                if pix.n != 3:
+                if "Black & White" in self.cmb_color.currentText() and pix.n != 1:
+                    pix = fitz.Pixmap(fitz.csGRAY, pix)
+                elif pix.n != 3:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                img = QImage(pix.samples, pix.width, pix.height,
-                             pix.stride, QImage.Format.Format_RGB888).copy()
-                pix = None
+                fmt = QImage.Format.Format_Grayscale8 if pix.n == 1 else QImage.Format.Format_RGB888
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt).copy()
+                doc.close()
+                self.lbl_preview_img.setPixmap(QPixmap.fromImage(img))
+                return
+            doc.close()
+        except Exception:
+            pass
+        self.lbl_preview_img.setText(f"Preview unavailable for Page {self.current_preview_page + 1}")
 
-                self.page_rendered.emit(step, page_idx, img)
+    def _resolve_target_pages(self) -> list[int]:
+        if self.rad_all.isChecked():
+            return list(range(self.total_pages))
+        elif self.rad_current.isChecked():
+            return [self.current_preview_page]
+        else:
+            txt = self.edit_range.text().strip()
+            if not txt:
+                raise ValueError("Custom page range is empty.")
+            return parse_pages(txt, self.total_pages)
 
-            if not self._is_cancelled:
-                self.finished_all.emit()
-        except Exception as exc:
-            if not self._is_cancelled:
-                self.render_error.emit(str(exc))
-        finally:
-            if doc is not None:
-                with contextlib.suppress(Exception):
-                    doc.close()
+    def _start_print_job(self):
+        try:
+            pages = self._resolve_target_pages()
+        except Exception as e:
+            QMessageBox.warning(self, "Invalid Range", str(e))
+            return
+
+        if not pages:
+            QMessageBox.warning(self, "Invalid Range", "No pages selected to print.")
+            return
+
+        self._save_accounting_history()
+
+        p_idx = self.cmb_printer.currentIndex()
+        p_data = self.cmb_printer.itemData(p_idx)
+
+        # Slice in memory if not printing full document
+        target_file = self.doc_path
+        self.temp_slice_path = None
+
+        if len(pages) != self.total_pages or pages != list(range(self.total_pages)):
+            try:
+                doc = fitz.open(self.doc_path)
+                if self.password and doc.needs_pass:
+                    doc.authenticate(self.password)
+                sliced_doc = fitz.open()
+                for p in pages:
+                    if 0 <= p < doc.page_count:
+                        sliced_doc.insert_pdf(doc, from_page=p, to_page=p)
+                doc.close()
+
+                fd, tmp_out = tempfile.mkstemp(prefix="pdfapps_print_", suffix=".pdf")
+                os.close(fd)
+                sliced_doc.save(tmp_out)
+                sliced_doc.close()
+                self.temp_slice_path = tmp_out
+                target_file = tmp_out
+            except Exception as ex:
+                QMessageBox.critical(self, "Page Slicing Error", f"Failed to prepare pages:\n{ex}")
+                return
+
+        # Prepare payload or parameters
+        copies = self.spin_copies.value()
+        duplex = self.cmb_duplex.currentText()
+        paper = self.cmb_paper.currentText()
+        color = self.cmb_color.currentText()
+        user = self.edit_acct_user.text().strip() or "none"
+        pin = self.edit_acct_pin.text().strip()
+        acct = self.edit_acct_id.text().strip()
+
+        # Mode 1: Direct Socket Port 9100 (Instant Foxit Speed)
+        if p_data == "socket":
+            ip = self.edit_ip.text().strip()
+            if not ip:
+                QMessageBox.warning(self, "Missing IP", "Printer IP is required for Port 9100.")
+                return
+
+            try:
+                with open(target_file, "rb") as f:
+                    pdf_bytes = f.read()
+
+                pjl = [
+                    "\x1b%-12345X@PJL",
+                    f'@PJL SET JOBATTR = "@JOAU={user}"',
+                    f'@PJL SET JOBATTR = "@JOAP={pin}"',
+                ]
+                if acct:
+                    pjl.append(f'@PJL SET JOBATTR = "@DAID={acct}"')
+                pjl.append(f'@PJL SET JOBNAME = "{os.path.basename(self.doc_path)}"')
+                pjl.append(f"@PJL SET COPIES = {copies}")
+                pjl.append(f"@PJL SET PAPER = {paper}")
+                pjl.append("@PJL SET COLORMODE = COLOR" if "Color" in color else "@PJL SET COLORMODE = MONO")
+
+                if "Long Edge" in duplex:
+                    pjl.append("@PJL SET DUPLEX = ON\r\n@PJL SET BINDING = LONGEDGE")
+                elif "Short Edge" in duplex:
+                    pjl.append("@PJL SET DUPLEX = ON\r\n@PJL SET BINDING = SHORTEDGE")
+                else:
+                    pjl.append("@PJL SET DUPLEX = OFF")
+
+                pjl.append("@PJL ENTER LANGUAGE = PDF\r\n")
+                payload = "\r\n".join(pjl).encode("latin-1") + pdf_bytes + b"\r\n\x1b%-12345X"
+
+                self._dispatch_worker("socket", ip, payload, {"port": 9100})
+            except Exception as e:
+                self._cleanup_temp_slice()
+                QMessageBox.critical(self, "Setup Error", str(e))
+                return
+
+        # Mode 2: CUPS on Linux
+        elif isinstance(p_data, tuple) and p_data[0] == "cups":
+            queue_name = p_data[1]
+            self._dispatch_worker(
+                "cups",
+                queue_name,
+                target_file,
+                {
+                    "copies": copies,
+                    "duplex": duplex,
+                    "paper": paper,
+                    "color": color,
+                    "user": user,
+                },
+            )
+
+        # Mode 3: Native Windows Spooler / QPrinter fallback
+        else:
+            printer_name = p_data[1] if isinstance(p_data, tuple) else self.cmb_printer.currentText()
+            self._dispatch_worker(
+                "qprinter",
+                printer_name,
+                target_file,
+                {
+                    "copies": copies,
+                    "page_indices": pages if not self.temp_slice_path else None,
+                },
+            )
+
+    def _dispatch_worker(self, job_type: str, target: str, payload_or_pdf, kwargs):
+        self.btn_print.setEnabled(False)
+        self.btn_cancel.setEnabled(False)
+        self.prog_bar.setValue(0)
+        self.prog_bar.setVisible(True)
+
+        self.worker = _FastPrintWorker(job_type, target, payload_or_pdf, kwargs, parent=self)
+
+        def on_prog(pct, msg):
+            self.prog_bar.setValue(pct)
+            self.lbl_status.setText(msg)
+
+        def on_done(success, msg):
+            self.btn_print.setEnabled(True)
+            self.btn_cancel.setEnabled(True)
+            self.prog_bar.setVisible(False)
+            self._cleanup_temp_slice()
+
+            if success:
+                QMessageBox.information(self, "Print Succeeded", msg)
+                self.accept()
+            else:
+                QMessageBox.critical(self, "Print Error", msg)
+
+        self.worker.progress.connect(on_prog)
+        self.worker.finished.connect(on_done)
+        self.worker.start()
+
+    def _cleanup_temp_slice(self):
+        if self.temp_slice_path and os.path.exists(self.temp_slice_path):
+            with contextlib.suppress(Exception):
+                os.unlink(self.temp_slice_path)
+            self.temp_slice_path = None
+
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            self.worker.wait(1000)
+        self._cleanup_temp_slice()
+        super().closeEvent(event)
 
 
 class PanelSearchPrintMixin:
-    """Mixin for text search bar interactions and document printing."""
+    """Mixin for in-document text search bar and high-speed custom print dialog."""
 
     def _toggle_search(self):
         if self._search_bar.isVisible():
@@ -194,162 +985,20 @@ class PanelSearchPrintMixin:
         self._close_search()
 
     def _cancel_print_job(self):
-        """Clean up any active background print worker and finish painter."""
-        if getattr(self, "_print_in_progress", False):
-            if hasattr(self, "_print_worker") and self._print_worker is not None:
-                self._print_worker.cancel()
-                self._print_worker.wait(1500)
-                self._print_worker.deleteLater()
-                self._print_worker = None
-            if hasattr(self, "_print_painter") and self._print_painter is not None:
-                with contextlib.suppress(Exception):
-                    self._print_painter.end()
-                self._print_painter = None
-            if hasattr(self, "_print_progress") and self._print_progress is not None:
-                with contextlib.suppress(Exception):
-                    self._print_progress.close()
-                    self._print_progress.deleteLater()
-                self._print_progress = None
-            self._print_in_progress = False
+        pass
 
     def _print_pdf(self, page_indices: list[int] | None = None):
-        if getattr(self, "_print_in_progress", False):
-            return
-
+        """Invoke the high-speed custom PDFApps Print Dialog."""
         doc = self._fitz_doc
         if doc is None or getattr(doc, "is_closed", False):
             return
         if not self._current_path or not os.path.isfile(self._current_path):
             return
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setDocName(os.path.basename(self._current_path))
-
-        dlg = QPrintDialog(printer, self)
-        dlg.setWindowTitle(t("viewer.print"))
-        if dlg.exec() != QPrintDialog.DialogCode.Accepted:
-            return
-
-        page_count = doc.page_count
-        if page_indices is not None and len(page_indices) > 0:
-            pages = [p for p in page_indices if 0 <= p < page_count]
-        else:
-            from_page = printer.fromPage()
-            to_page = printer.toPage()
-            if from_page == 0 and to_page == 0:
-                pages = list(range(page_count))
-            else:
-                start = max(0, from_page - 1)
-                end = min(page_count, to_page)
-                pages = list(range(start, end))
-
-        try:
-            reverse = (printer.pageOrder() == QPrinter.PageOrder.LastPageFirst)
-        except AttributeError:
-            reverse = False
-        if reverse:
-            pages = list(reversed(pages))
-
-        copies = 1 if printer.supportsMultipleCopies() else max(1, printer.copyCount())
-
-        job_pages: list[int] = []
-        for _ in range(copies):
-            job_pages.extend(pages)
-
-        total_steps = len(job_pages)
-        if total_steps == 0:
-            return
-
-        # Cap raster DPI to 300 to prevent multi-gigabyte memory allocations and UI freezing
-        target_dpi = min(300, max(150, printer.resolution()))
-
-        painter = QPainter()
-        if not painter.begin(printer):
-            return
-
-        self._print_in_progress = True
-        self._print_painter = painter
-        self._print_first_page = True
-
-        progress = QProgressDialog(t("viewer.print"), t("btn.cancel"), 0, total_steps, self)
-        progress.setWindowTitle(t("viewer.print"))
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        progress.setLabelText(f"{t('viewer.print')}: 1/{total_steps}…")
-        self._print_progress = progress
-
-        worker = _PrintPageWorker(
-            self._current_path,
-            getattr(self, "_pdf_password", ""),
-            job_pages,
-            target_dpi,
+        dlg = _PdfPrintDialog(
+            doc_path=self._current_path,
+            password=getattr(self, "_pdf_password", ""),
+            initial_pages=page_indices,
             parent=self,
         )
-        self._print_worker = worker
-
-        def finish_printing():
-            if not getattr(self, "_print_in_progress", False):
-                return
-            self._print_in_progress = False
-
-            w = getattr(self, "_print_worker", None)
-            if w is not None:
-                w.cancel()
-                w.wait(2000)
-                w.deleteLater()
-                self._print_worker = None
-
-            p = getattr(self, "_print_painter", None)
-            if p is not None:
-                with contextlib.suppress(Exception):
-                    p.end()
-                self._print_painter = None
-
-            prog = getattr(self, "_print_progress", None)
-            if prog is not None:
-                with contextlib.suppress(Exception):
-                    prog.close()
-                    prog.deleteLater()
-                self._print_progress = None
-
-        def on_page_rendered(step: int, page_idx: int, img: QImage):
-            if not getattr(self, "_print_in_progress", False) or progress.wasCanceled():
-                finish_printing()
-                return
-
-            if not self._print_first_page:
-                printer.newPage()
-            self._print_first_page = False
-
-            target = QRectF(painter.viewport())
-            source = QRectF(0, 0, img.width(), img.height())
-            scale = min(target.width() / source.width(), target.height() / source.height())
-            w = source.width() * scale
-            h = source.height() * scale
-            x = target.x() + (target.width() - w) / 2
-            y = target.y() + (target.height() - h) / 2
-            painter.drawImage(QRectF(x, y, w, h), img, source)
-
-            progress.setValue(step)
-            progress.setLabelText(f"{t('viewer.print')}: {step}/{total_steps}…")
-
-            # Signal worker to render next page in background
-            w_inst = getattr(self, "_print_worker", None)
-            if w_inst is not None:
-                w_inst.continue_next()
-
-        def on_worker_finished():
-            finish_printing()
-
-        def on_worker_error(err_msg: str):
-            finish_printing()
-            show_error(self, RuntimeError(err_msg))
-
-        progress.canceled.connect(finish_printing)
-        worker.page_rendered.connect(on_page_rendered, Qt.ConnectionType.QueuedConnection)
-        worker.finished_all.connect(on_worker_finished, Qt.ConnectionType.QueuedConnection)
-        worker.render_error.connect(on_worker_error, Qt.ConnectionType.QueuedConnection)
-
-        progress.show()
-        worker.start()
+        dlg.exec()

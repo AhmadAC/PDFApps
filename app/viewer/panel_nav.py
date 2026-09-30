@@ -106,10 +106,11 @@ class PanelNavMixin:
         if obj is self._canvas_scroll.viewport():
             if event.type() == QEvent.Type.Wheel:
                 if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                     if event.angleDelta().y() > 0:
-                        self._canvas.zoom_in()
+                        self._canvas.zoom_in(anchor_pos=pos)
                     else:
-                        self._canvas.zoom_out()
+                        self._canvas.zoom_out(anchor_pos=pos)
                     return True
             elif event.type() == QEvent.Type.Resize:
                 if self._canvas._doc and self._canvas._zoom_factor == 1.0:

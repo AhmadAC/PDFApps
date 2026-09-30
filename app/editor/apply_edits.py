@@ -1,13 +1,12 @@
-
 # app/editor/apply_edits.py
 
-"""PDFApps – pure edit-application dispatcher for the PDF editor."""
+"""PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification support."""
 
+import os
 import logging
 from dataclasses import dataclass, field
 
 from app.editor.text_reinsert import _reinsert_edited_text
-
 
 _log = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ class ApplyResult:
 
 
 def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
-    """Apply pending edits to open doc, supporting transparent SVG and PNG signatures."""
+    """Apply pending edits to open doc, supporting transparent SVG/PNG signatures and clean media manipulation."""
     import fitz
 
     result = ApplyResult()
@@ -33,12 +32,31 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
 
     embedded_font = False
     for e in pending:
-        if e.get("_existing") and e.get("type") != "delete_annot":
-            continue
+        etype = e.get("type")
         pg = doc[e["page"]]
-        if e["type"] == "redact":
-            pg.add_redact_annot(e["rect"], fill=e["fill"]); pg.apply_redactions()
-        elif e["type"] == "text":
+
+        # Handle existing document items that were moved, resized, or deleted
+        if e.get("_existing"):
+            if e.get("_deleted"):
+                if e.get("_existing_annot"):
+                    for annot in list(pg.annots() or []):
+                        if getattr(annot, "xref", None) == e["_existing_annot"]:
+                            pg.delete_annot(annot)
+                            break
+                elif e.get("_orig_rect"):
+                    pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
+                    pg.apply_redactions()
+                continue
+            elif etype in ("image", "signature") and e.get("_orig_rect"):
+                # Cleanly redact old position before inserting at new position
+                pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
+                pg.apply_redactions()
+
+        if etype == "redact":
+            pg.add_redact_annot(e["rect"], fill=e["fill"])
+            pg.apply_redactions()
+
+        elif etype == "text":
             fname = (e.get("font", "") or "").lower()
             if "times" in fname or "serif" in fname or "roman" in fname:
                 fontname = "tiro"
@@ -46,10 +64,20 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                 fontname = "cour"
             else:
                 fontname = "helv"
-            pg.insert_text(e["point"], e["text"], fontsize=e["size"],
-                           color=e["color"], fontname=fontname)
-        elif e["type"] in ("image", "signature"):
-            path = e["path"]
+            c = e.get("color", (0, 0, 0))
+            if isinstance(c, (list, tuple)) and len(c) >= 3:
+                color = tuple(float(x) for x in c[:3])
+            else:
+                color = (0.0, 0.0, 0.0)
+            pg.insert_text(e["point"], e["text"], fontsize=e.get("size", 12),
+                           color=color, fontname=fontname)
+
+        elif etype in ("image", "signature"):
+            if e.get("_deleted"):
+                continue
+            path = e.get("path", "")
+            if not path or not os.path.isfile(path):
+                continue
             if path.lower().endswith((".svg", ".svgz")):
                 try:
                     sdoc = fitz.open(path)
@@ -82,11 +110,16 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                         pg.insert_image(e["rect"], filename=path)
             else:
                 pg.insert_image(e["rect"], filename=path)
-        elif e["type"] == "highlight":
-            a = pg.add_highlight_annot(e["rect"]); a.set_colors(stroke=e["color"]); a.update()
-        elif e["type"] == "note":
+
+        elif etype == "highlight":
+            a = pg.add_highlight_annot(e["rect"])
+            a.set_colors(stroke=e["color"])
+            a.update()
+
+        elif etype == "note":
             pg.add_text_annot(e["point"], e["text"])
-        elif e["type"] == "draw":
+
+        elif etype == "draw":
             stroke = [(float(x), float(y))
                       for x, y in e.get("points", [])]
             if len(stroke) >= 2:
@@ -94,7 +127,8 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                 annot.set_colors(stroke=e.get("color", (1, 0, 0)))
                 annot.set_border(width=max(1, int(e.get("width", 2))))
                 annot.update()
-        elif e["type"] == "delete_annot":
+
+        elif etype == "delete_annot":
             target_type = e.get("annot_type")
             target_bbox = e.get("bbox")
             if target_bbox is not None:
@@ -105,10 +139,12 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                             and abs(annot.rect.y0 - target_rect.y0) < 1):
                         pg.delete_annot(annot)
                         break
-        elif e["type"] == "text_edit":
+
+        elif etype == "text_edit":
             if _reinsert_edited_text(fitz, doc, pg, e,
                                      warn_fn=_collect_warning):
                 embedded_font = True
+
     result.embedded_font = embedded_font
     if embedded_font:
         try:

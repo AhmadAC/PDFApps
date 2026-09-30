@@ -1,71 +1,49 @@
+# app/editor/tab.py 
+"""PDFApps – TabEditar: visual PDF editor tool tab with media object manipulation & typography styling."""
 
-# app/editor/tab.py
-
-"""PDFApps – TabEditar: visual PDF editor tool tab."""
-
-import contextlib
-import logging
 import os
-import tempfile
-
-from PySide6.QtCore import Qt, QEvent, QSize, QTimer
+import fitz
+from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QStackedWidget, QGroupBox,
-    QSizePolicy, QListWidget, QTableWidget,
-    QTableWidgetItem, QHeaderView, QTextEdit, QFileDialog,
-    QMessageBox, QDialog, QApplication, QSlider,
+    QWidget, QVBoxLayout, QFileDialog, QMessageBox, QDialog, QApplication,
 )
 from shiboken6 import isValid
 import qtawesome as qta
 
-from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, DESKTOP, _LQ, _LP
-from app.utils import (
-    ToolHeader, ActionBar, info_lbl, _paint_bg, show_error,
-    WrongPasswordError,
-)
+from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, DESKTOP
+from app.utils import _paint_bg
 from app.i18n import t
-from app.widgets import DropFileEdit, ColorPickerButton, FocusSpinBox
-from app.editor.canvas import PdfEditCanvas, _get_icon_cursor
+from app.editor.canvas import _get_icon_cursor
 from app.editor.dialogs import _NoteDialog, _SignatureDialog, load_signature_pixmap
-from app.editor.apply_edits import apply_pending_edits
-from app.pdf_io import atomic_pdf_write
-from app.pdf_password import authenticate_fitz, decrypt_pypdf
+from app.pdf_password import authenticate_fitz
 
-
-_log = logging.getLogger(__name__)
-
-
-_MODE_TEXT = 1
-_MODE_IMAGE = 2
-_MODE_FORMS = 5
-_MODE_SIGNATURE = 6
+from app.editor.tab_constants import (
+    _MAX_REDO, _MAX_PENDING,
+    _HI_COLORS_KEYS, _HI_COLORS_VALS,
+    _RED_FILLS_KEYS, _RED_FILLS_VALS,
+    _MODE_KEYS, _DRAW_COLORS_KEYS, _DRAW_COLORS_VALS,
+    _MODE_TEXT, _MODE_IMAGE, _MODE_FORMS, _MODE_SIGNATURE,
+)
+from app.editor.tab_ui import setup_editor_ui, update_tab_theme
+from app.editor.tab_history import TabHistoryManager
+from app.editor.tab_operations import (
+    prompt_encryption_choice, get_fitz_permissions, cleanup_signature_temp_file,
+    load_form_fields, apply_form_fields_and_save, apply_visual_edits_and_save,
+)
 
 
 class TabEditar(QWidget):
-    """Visual editor: click/drag directly on the rendered PDF."""
+    """Visual editor facade: click/drag directly on the rendered PDF."""
 
-    _MAX_REDO = 100
-    _MAX_PENDING = 500
-
-    _HI_COLORS_KEYS  = ["color.yellow", "color.green", "color.pink", "color.light_blue"]
-    _HI_COLORS_VALS  = [(1,1,0), (0,1,0), (1,0.4,0.7), (0.5,0.8,1)]
-    _RED_FILLS_KEYS  = ["color.black", "color.white", "color.grey"]
-    _RED_FILLS_VALS  = [(0,0,0), (1,1,1), (0.5,0.5,0.5)]
-    _MODE_KEYS = [
-        ("edit.mode.redact",    "fa5s.eraser"),
-        ("edit.mode.text",      "fa5s.font"),
-        ("edit.mode.image",     "fa5s.image"),
-        ("edit.mode.highlight", "fa5s.highlighter"),
-        ("edit.mode.note",      "fa5s.sticky-note"),
-        ("edit.mode.forms",     "fa5s.clipboard-list"),
-        ("edit.mode.signature", "fa5s.signature"),
-        ("edit.mode.draw",      "fa5s.pencil-alt"),
-        ("edit.mode.select",    "fa5s.mouse-pointer"),
-    ]
-
-    _DRAW_COLORS_KEYS = ["color.red", "color.black", "color.blue", "color.green", "color.yellow"]
-    _DRAW_COLORS_VALS = [(1,0,0), (0,0,0), (0.1,0.4,1), (0,0.7,0.2), (1,0.85,0)]
+    _MAX_REDO = _MAX_REDO
+    _MAX_PENDING = _MAX_PENDING
+    _HI_COLORS_KEYS = _HI_COLORS_KEYS
+    _HI_COLORS_VALS = _HI_COLORS_VALS
+    _RED_FILLS_KEYS = _RED_FILLS_KEYS
+    _RED_FILLS_VALS = _RED_FILLS_VALS
+    _MODE_KEYS = _MODE_KEYS
+    _DRAW_COLORS_KEYS = _DRAW_COLORS_KEYS
+    _DRAW_COLORS_VALS = _DRAW_COLORS_VALS
 
     @property
     def _HI_COLORS(self):
@@ -87,30 +65,25 @@ class TabEditar(QWidget):
     def _user_pending(self) -> list:
         return [
             e for e in self._pending
-            if not e.get("_existing") or e.get("type") == "delete_annot"
+            if not e.get("_existing") or e.get("_deleted") or e.get("type") in ("delete_annot", "text_edit", "image", "signature")
         ]
 
     def __init__(self, status_fn):
         super().__init__()
-        self._status   = status_fn
-        self._pending  = []
+        self._status = status_fn
+        self._pending = []
         self._redo_stack = []
         self._doc_path = None
         self._pdf_password = ""
         self._mode_idx = _MODE_TEXT
         self._dark_mode = True
-        self.setObjectName("content_area")
+        self._signature_path = None
+        self._page_idx = 0
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
-        root.addWidget(ToolHeader("fa5s.edit", t("edit.title"),
-                                  t("edit.subtitle")))
+        self._history = TabHistoryManager(self)
+        setup_editor_ui(self)
 
-        body = QWidget()
-        body_h = QHBoxLayout(body)
-        body_h.setContentsMargins(0, 0, 0, 0); body_h.setSpacing(0)
-
-        self._canvas = PdfEditCanvas()
+        # Wire canvas signals
         self._canvas.rect_selected.connect(self._on_rect)
         self._canvas.point_clicked.connect(self._on_point)
         self._canvas.stroke_finished.connect(self._on_stroke)
@@ -118,274 +91,10 @@ class TabEditar(QWidget):
         self._canvas.note_deleted.connect(self._on_note_deleted)
         self._canvas.text_edit_committed.connect(self._on_text_edit_committed)
         self._canvas.text_inserted.connect(self._on_text_edit_committed)
+        self._canvas.text_edit_started.connect(self._on_text_edit_started)
         self._canvas.signature_added.connect(self._on_signature_added)
         self._canvas.overlay_changed.connect(lambda: self.update())
-
-        from app.constants import BG_INNER
-        canvas_scroll = QScrollArea()
-        canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        canvas_scroll.setWidgetResizable(False)
-        canvas_scroll.setStyleSheet(f"QScrollArea {{ background: {BG_INNER}; }}")
-        canvas_scroll.setWidget(self._canvas)
-        canvas_scroll.setMinimumWidth(320)
-        canvas_scroll.viewport().installEventFilter(self)
-        canvas_scroll.verticalScrollBar().valueChanged.connect(
-            lambda _: self._canvas.on_scroll())
-        self._canvas_scroll = canvas_scroll
-        body_h.addWidget(canvas_scroll, 1)
-
-        ctrl_inner = QWidget(); ctrl_inner.setObjectName("scroll_inner")
-        ctrl_inner.setFixedWidth(380)
-        cv = QVBoxLayout(ctrl_inner); cv.setContentsMargins(10, 10, 10, 10); cv.setSpacing(8)
-
-        # -- PDF file --
-        self._grp_file = grp_file = QGroupBox(t("edit.pdf_file"))
-        gf = QVBoxLayout(grp_file); gf.setSpacing(4)
-        self._drop_in = DropFileEdit()
-        try: self._drop_in.btn.clicked.disconnect()
-        except RuntimeError: pass
-        self._drop_in.btn.clicked.connect(self._pick_pdf)
-        self._drop_in.path_changed.connect(self._load_pdf)
-        self._drop_in._clr.clicked.connect(self._close_pdf)
-        self._lbl_info = info_lbl()
-        gf.addWidget(self._drop_in); gf.addWidget(self._lbl_info)
-        cv.addWidget(grp_file)
-
-        # -- Page --
-        grp_page = QGroupBox(t("edit.page"))
-        gp = QHBoxLayout(grp_page); gp.setSpacing(6)
-        self._btn_prev = QPushButton()
-        self._btn_prev.setIcon(qta.icon("fa5s.chevron-left", color=TEXT_PRI))
-        self._btn_prev.setFixedSize(28, 28); self._btn_prev.setObjectName("viewer_nav_btn")
-        self._btn_prev.setToolTip(t("nav.prev_page")); self._btn_prev.setAccessibleName(t("nav.prev_page"))
-        self._btn_prev.clicked.connect(self._prev_page)
-        self._lbl_page = QLabel("---"); self._lbl_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._btn_next = QPushButton()
-        self._btn_next.setIcon(qta.icon("fa5s.chevron-right", color=TEXT_PRI))
-        self._btn_next.setFixedSize(28, 28); self._btn_next.setObjectName("viewer_nav_btn")
-        self._btn_next.setToolTip(t("nav.next_page")); self._btn_next.setAccessibleName(t("nav.next_page"))
-        self._btn_next.clicked.connect(self._next_page)
-        gp.addWidget(self._btn_prev); gp.addWidget(self._lbl_page, 1); gp.addWidget(self._btn_next)
-        cv.addWidget(grp_page)
-        self._page_idx = 0
-
-        # -- Edit mode --
-        grp_mode = QGroupBox(t("edit.mode"))
-        from PySide6.QtWidgets import QGridLayout as _GL
-        gm = _GL(grp_mode); gm.setSpacing(4)
-        self._mode_btns: list = []
-        self._mode_btn_idx: dict = {}
-        cols = 5
-        for i, (label, icon_name) in enumerate(self._MODE_DEFS):
-            btn = QPushButton()
-            btn.setIcon(qta.icon(icon_name, color=TEXT_SEC))
-            btn.setIconSize(QSize(18, 18))
-            btn.setToolTip(label)
-            btn.setCheckable(True)
-            btn.setFixedSize(36, 36)
-            self._mode_btn_idx[id(btn)] = i
-            btn.clicked.connect(lambda checked, b=btn: self._on_mode_btn(b))
-            self._mode_btns.append(btn)
-            gm.addWidget(btn, i // cols, i % cols)
-        cv.addWidget(grp_mode)
-
-        # -- Options per mode --
-        grp_opts = QGroupBox(t("edit.options"))
-        go = QVBoxLayout(grp_opts); go.setContentsMargins(6, 6, 6, 6)
-        self._opt_stack = QStackedWidget()
-
-        self._hint_labels: list = []
-
-        # 0 - Redact
-        w0 = QWidget(); v0 = QVBoxLayout(w0); v0.setContentsMargins(0,4,0,0); v0.setSpacing(4)
-        v0.addWidget(QLabel(t("edit.color")))
-        self._red_color = ColorPickerButton((0, 0, 0))
-        v0.addWidget(self._red_color)
-        hint0 = QLabel(t("edit.hint.redact")); hint0.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        self._hint_labels.append(hint0)
-        v0.addWidget(hint0); v0.addStretch()
-        self._opt_stack.addWidget(w0)
-
-        # 1 - Text
-        w1 = QWidget(); v1 = QVBoxLayout(w1); v1.setContentsMargins(0,4,0,0); v1.setSpacing(4)
-        row1 = QHBoxLayout(); row1.setSpacing(8)
-        row1.addWidget(QLabel(t("dialog.insert_size")))
-        self._text_size = FocusSpinBox(); self._text_size.setMinimum(4); self._text_size.setMaximum(144); self._text_size.setValue(12)
-        row1.addWidget(self._text_size)
-        row1.addSpacing(8)
-        row1.addWidget(QLabel(t("dialog.insert_color")))
-        self._text_color = ColorPickerButton((0, 0, 0))
-        row1.addWidget(self._text_color); row1.addStretch()
-        v1.addLayout(row1)
-        self._text_hint = QLabel(t("edit.hint.text"))
-        self._text_hint.setWordWrap(True)
-        self._text_hint.setStyleSheet(
-            f"color:{ACCENT}; font-size:12px; font-weight:bold;")
-        v1.addWidget(self._text_hint); v1.addStretch()
-        self._opt_stack.addWidget(w1)
-
-        # 2 - Image
-        w2 = QWidget(); v2 = QVBoxLayout(w2); v2.setContentsMargins(0,4,0,0); v2.setSpacing(4)
-        v2.addWidget(QLabel(t("edit.image")))
-        self._img_drop = DropFileEdit(placeholder=t("edit.image_hint"),
-                                      filters=t("file_filter.images"))
-        try: self._img_drop.btn.clicked.disconnect()
-        except RuntimeError: pass
-        self._img_drop.btn.clicked.connect(self._pick_image)
-        v2.addWidget(self._img_drop)
-        hint2 = QLabel(t("edit.hint.image")); hint2.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        self._hint_labels.append(hint2)
-        v2.addWidget(hint2); v2.addStretch()
-        self._opt_stack.addWidget(w2)
-
-        # 3 - Highlight
-        w3 = QWidget(); v3 = QVBoxLayout(w3); v3.setContentsMargins(0,4,0,0); v3.setSpacing(4)
-        v3.addWidget(QLabel(t("edit.color")))
-        self._hi_color = ColorPickerButton((1, 1, 0))
-        v3.addWidget(self._hi_color)
-        hint3 = QLabel(t("edit.hint.highlight")); hint3.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        self._hint_labels.append(hint3)
-        v3.addWidget(hint3); v3.addStretch()
-        self._opt_stack.addWidget(w3)
-
-        # 4 - Note
-        w4 = QWidget(); v4 = QVBoxLayout(w4); v4.setContentsMargins(0,4,0,0); v4.setSpacing(4)
-        v4.addWidget(QLabel(t("edit.note_text")))
-        self._note_txt = QTextEdit(); self._note_txt.setMaximumHeight(80)
-        v4.addWidget(self._note_txt)
-        hint4 = QLabel(t("edit.hint.note")); hint4.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        self._hint_labels.append(hint4)
-        v4.addWidget(hint4); v4.addStretch()
-        self._opt_stack.addWidget(w4)
-
-        # 5 - Forms
-        w5 = QWidget(); v5 = QVBoxLayout(w5); v5.setContentsMargins(0,4,0,0); v5.setSpacing(4)
-        v5.addWidget(QLabel(t("edit.fields_detected")))
-        self._form_table = QTableWidget(0, 2)
-        self._form_table.setHorizontalHeaderLabels([t("edit.field"), t("edit.value")])
-        self._form_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._form_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._form_table.setObjectName("pdf_table"); self._form_table.setMinimumHeight(130)
-        v5.addWidget(self._form_table)
-        self._form_status = QLabel("")
-        self._form_status.setWordWrap(True)
-        self._form_status.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        self._hint_labels.append(self._form_status)
-        v5.addWidget(self._form_status)
-        self._opt_stack.addWidget(w5)
-
-        # 6 - Signature
-        w7 = QWidget(); v7s = QVBoxLayout(w7); v7s.setContentsMargins(0,4,0,0); v7s.setSpacing(6)
-        self._sig_preview = QLabel(t("edit.signature.none"))
-        self._sig_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sig_preview.setMinimumHeight(60)
-        self._sig_preview.setStyleSheet("background: white; border: 1.5px dashed #ccc; border-radius: 6px;")
-        v7s.addWidget(self._sig_preview)
-        self._sig_choose = QPushButton(t("edit.signature.choose"))
-        self._sig_choose.setIcon(qta.icon("fa5s.signature", color=TEXT_PRI))
-        self._sig_choose.clicked.connect(self._pick_signature)
-        v7s.addWidget(self._sig_choose)
-        sig_clear = QPushButton(t("edit.signature.clear"))
-        sig_clear.clicked.connect(self._clear_signature)
-        v7s.addWidget(sig_clear)
-        hint7s = QLabel(t("edit.hint.signature"))
-        hint7s.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        hint7s.setWordWrap(True)
-        self._hint_labels.append(hint7s)
-        v7s.addWidget(hint7s); v7s.addStretch()
-        self._opt_stack.addWidget(w7)
-        self._signature_path = None
-
-        from app.i18n import get_saved_signature
-        saved = get_saved_signature()
-        if saved:
-            self._signature_path = saved
-            pix = load_signature_pixmap(saved, max_size=(200, 50))
-            if not pix.isNull():
-                self._sig_preview.setPixmap(pix)
-
-        # 7 - Draw (freehand ink)
-        w_draw = QWidget(); v_d = QVBoxLayout(w_draw); v_d.setContentsMargins(0,4,0,0); v_d.setSpacing(4)
-        v_d.addWidget(QLabel(t("edit.color")))
-        self._draw_color_cb = ColorPickerButton((1, 0, 0))
-        self._draw_color_cb.color_changed.connect(self._on_draw_color_changed)
-        v_d.addWidget(self._draw_color_cb)
-        v_d.addWidget(QLabel(t("edit.draw.width")))
-        self._draw_width_slider = QSlider(Qt.Orientation.Horizontal)
-        self._draw_width_slider.setMinimum(1); self._draw_width_slider.setMaximum(12)
-        self._draw_width_slider.setValue(2)
-        self._draw_width_lbl = QLabel("2")
-        self._draw_width_slider.valueChanged.connect(self._on_draw_width_changed)
-        wrow = QHBoxLayout(); wrow.addWidget(self._draw_width_slider, 1); wrow.addWidget(self._draw_width_lbl)
-        v_d.addLayout(wrow)
-        hint_d = QLabel(t("edit.hint.draw"))
-        hint_d.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint_d.setWordWrap(True)
-        self._hint_labels.append(hint_d)
-        v_d.addWidget(hint_d); v_d.addStretch()
-        self._opt_stack.addWidget(w_draw)
-
-        # 8 - Select / Copy text
-        w7 = QWidget(); v7 = QVBoxLayout(w7); v7.setContentsMargins(0,4,0,0); v7.setSpacing(6)
-        hint7 = QLabel(t("edit.hint.select"))
-        hint7.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
-        hint7.setWordWrap(True)
-        self._hint_labels.append(hint7)
-        self._sel_result = QTextEdit()
-        self._sel_result.setReadOnly(True)
-        self._sel_result.setMaximumHeight(80)
-        self._sel_result.setPlaceholderText(t("edit.select_placeholder"))
-        self._btn_copy = QPushButton(t("btn.copy"))
-        self._btn_copy.setIcon(qta.icon("fa5s.copy", color=TEXT_PRI))
-        self._btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(self._sel_result.toPlainText()))
-        v7.addWidget(hint7)
-        v7.addWidget(self._sel_result)
-        v7.addWidget(self._btn_copy)
-        v7.addStretch()
-        self._opt_stack.addWidget(w7)
-
-        go.addWidget(self._opt_stack)
-        cv.addWidget(grp_opts)
-
-        # -- Pending edits --
-        grp_pend = QGroupBox(t("edit.pending"))
-        gpe = QVBoxLayout(grp_pend); gpe.setSpacing(4)
-        self._pending_list = QListWidget(); self._pending_list.setMaximumHeight(110)
-        gpe.addWidget(self._pending_list)
-        pend_btns = QHBoxLayout(); pend_btns.setSpacing(4)
-        self._btn_undo = QPushButton(); self._btn_undo.setIcon(qta.icon("fa5s.undo", color=TEXT_PRI))
-        self._btn_undo.setToolTip(t("edit.undo_tip")); self._btn_undo.setAccessibleName(t("edit.undo_tip"))
-        self._btn_undo.setFixedSize(28, 28); self._btn_undo.clicked.connect(self._undo)
-        self._btn_redo = QPushButton(); self._btn_redo.setIcon(qta.icon("fa5s.redo", color=TEXT_PRI))
-        self._btn_redo.setToolTip(t("edit.redo_tip")); self._btn_redo.setAccessibleName(t("edit.redo_tip"))
-        self._btn_redo.setFixedSize(28, 28); self._btn_redo.clicked.connect(self._redo)
-        btn_clear = QPushButton(t("btn.clear_all"))
-        btn_clear.clicked.connect(self._clear_pending)
-        pend_btns.addWidget(self._btn_undo); pend_btns.addWidget(self._btn_redo)
-        pend_btns.addWidget(btn_clear); pend_btns.addStretch()
-        gpe.addLayout(pend_btns)
-        cv.addWidget(grp_pend)
-
-        # -- Save --
-        self._grp_save = grp_save = QGroupBox(t("edit.save_to"))
-        gs = QVBoxLayout(grp_save)
-        self._drop_out = DropFileEdit("output_edited.pdf", save=True, default_name="output_edited.pdf")
-        gs.addWidget(self._drop_out)
-        cv.addWidget(grp_save)
-        cv.addStretch()
-
-        ctrl_scroll = QScrollArea()
-        ctrl_scroll.setWidgetResizable(True)
-        ctrl_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        ctrl_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        ctrl_scroll.setWidget(ctrl_inner)
-        ctrl_scroll.setFixedWidth(400)
-        ctrl_scroll.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        body_h.addWidget(ctrl_scroll)
-        self._ctrl_scroll = ctrl_scroll
-        root.addWidget(body, 1)
-
-        self._action_bar, _ = ActionBar(t("btn.apply_save"), self._run)
-        root.addWidget(self._action_bar)
+        self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
 
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()
@@ -414,51 +123,7 @@ class TabEditar(QWidget):
         self._grp_save.setVisible(not active)
 
     def update_theme(self, dark: bool) -> None:
-        self._dark_mode = dark
-        from app.constants import BG_INNER, _LN
-        bg = BG_INNER if dark else _LN
-        self._canvas.set_dark_mode(dark)
-        self._canvas_scroll.setStyleSheet(f"QScrollArea {{ background: {bg}; }}")
-        pri = TEXT_PRI if dark else _LP
-        sec = TEXT_SEC if dark else _LQ
-        self._btn_prev.setIcon(qta.icon("fa5s.chevron-left", color=pri))
-        self._btn_next.setIcon(qta.icon("fa5s.chevron-right", color=pri))
-        self._btn_undo.setIcon(qta.icon("fa5s.undo", color=pri))
-        self._btn_redo.setIcon(qta.icon("fa5s.redo", color=pri))
-        self._btn_copy.setIcon(qta.icon("fa5s.copy", color=pri))
-        self._sig_choose.setIcon(qta.icon("fa5s.signature", color=pri))
-        for lbl in self._hint_labels:
-            try:
-                lbl.setStyleSheet(f"color:{sec}; font-size:11px;")
-            except RuntimeError:
-                pass
-        for dfe in (self._drop_in, self._img_drop, self._drop_out):
-            fn = getattr(dfe, "update_theme", None)
-            if callable(fn):
-                fn(dark)
-        fn = getattr(self._action_bar, "update_theme", None)
-        if callable(fn):
-            fn(dark)
-        for i, b in enumerate(self._mode_btns):
-            if not b.isChecked():
-                b.setIcon(qta.icon(self._MODE_DEFS[i][1], color=sec))
-                if dark:
-                    b.setStyleSheet(
-                        "background:#333333; border:1px solid #444444; "
-                        "color:#CCCCCC; border-radius:6px;")
-                else:
-                    b.setStyleSheet(
-                        "background:#FFFFFF; border:1px solid #D1D5DB; "
-                        "color:#555555; border-radius:6px;")
-            else:
-                if dark:
-                    b.setStyleSheet(
-                        f"background:#264F78; border:1px solid {ACCENT}; "
-                        f"color:#FFFFFF; border-radius:6px;")
-                else:
-                    b.setStyleSheet(
-                        f"background:#D6E8FA; border:1px solid #70A7DB; "
-                        f"color:{ACCENT}; border-radius:6px;")
+        update_tab_theme(self, dark)
 
     def _update_nav(self):
         n = self._canvas.page_count()
@@ -489,23 +154,17 @@ class TabEditar(QWidget):
             b.setChecked(active)
             b.setIcon(qta.icon(self._MODE_DEFS[i][1], color=ACCENT if active else sec))
             if active:
-                if self._dark_mode:
-                    b.setStyleSheet(
-                        f"background:#264F78; border:1px solid {ACCENT}; "
-                        f"color:#FFFFFF; border-radius:6px;")
-                else:
-                    b.setStyleSheet(
-                        f"background:#D6E8FA; border:1px solid #70A7DB; "
-                        f"color:{ACCENT}; border-radius:6px;")
+                b.setStyleSheet(
+                    f"background:#264F78; border:1px solid {ACCENT}; color:#FFFFFF; border-radius:6px;"
+                    if self._dark_mode else
+                    f"background:#D6E8FA; border:1px solid #70A7DB; color:{ACCENT}; border-radius:6px;"
+                )
             else:
-                if self._dark_mode:
-                    b.setStyleSheet(
-                        "background:#333333; border:1px solid #444444; "
-                        "color:#CCCCCC; border-radius:6px;")
-                else:
-                    b.setStyleSheet(
-                        "background:#FFFFFF; border:1px solid #D1D5DB; "
-                        "color:#555555; border-radius:6px;")
+                b.setStyleSheet(
+                    "background:#333333; border:1px solid #444444; color:#CCCCCC; border-radius:6px;"
+                    if self._dark_mode else
+                    "background:#FFFFFF; border:1px solid #D1D5DB; color:#555555; border-radius:6px;"
+                )
         self._opt_stack.setCurrentIndex(idx)
         if idx == _MODE_FORMS:
             tip = t("editor.forms.undo_unavailable")
@@ -516,7 +175,7 @@ class TabEditar(QWidget):
             self._btn_redo.setToolTip(t("edit.redo_tip"))
         if hasattr(self, "_canvas") and self._canvas._inline_edit.isVisible():
             self._canvas._commit_inline()
-        self._canvas.set_select_mode(idx == 8)
+        self._canvas.set_select_mode(idx in (6, 8))
         is_draw = (idx == 7)
         self._canvas.set_draw_mode(
             is_draw,
@@ -524,33 +183,69 @@ class TabEditar(QWidget):
             width=self._draw_width_slider.value() if is_draw else None,
         )
         self._canvas.set_text_mode(idx == 1)
-        if idx == 0:
-            self._canvas.setCursor(_get_icon_cursor("fa5s.eraser", 22, 22))
-        elif idx == 2:
-            self._canvas.setCursor(_get_icon_cursor("fa5s.image", 14, 14))
-        elif idx == 3:
-            self._canvas.setCursor(_get_icon_cursor("fa5s.highlighter", 14, 2, rotate=135))
-        elif idx == 4:
-            self._canvas.setCursor(_get_icon_cursor("fa5s.sticky-note", 4, 4))
-        elif idx == 5:
-            self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
-        elif idx == 6:
-            self._canvas.setCursor(_get_icon_cursor("fa5s.signature", 14, 14))
-        elif idx == 8:
-            self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
+        cursors = {
+            0: _get_icon_cursor("fa5s.eraser", 22, 22),
+            1: Qt.CursorShape.IBeamCursor,
+            2: _get_icon_cursor("fa5s.image", 14, 14),
+            3: _get_icon_cursor("fa5s.highlighter", 14, 2, rotate=135),
+            4: _get_icon_cursor("fa5s.sticky-note", 4, 4),
+            5: Qt.CursorShape.ArrowCursor,
+            6: Qt.CursorShape.ArrowCursor,
+            8: Qt.CursorShape.ArrowCursor,
+        }
+        if idx in cursors:
+            self._canvas.setCursor(cursors[idx])
+
         if idx == _MODE_IMAGE:
             cur = self._img_drop.path()
             if not cur or not os.path.isfile(cur):
                 self._pick_image()
-        elif idx == _MODE_SIGNATURE:
-            if not self._signature_path or not os.path.isfile(self._signature_path):
-                self._pick_signature()
-            elif os.path.isfile(self._signature_path):
-                self._canvas.begin_signature_placement(self._signature_path)
+
+    def _on_text_format_changed(self):
+        font = self._text_font.currentText()
+        size = float(self._text_size.value())
+        color = self._text_color.color_tuple()
+        bold = self._btn_bold.isChecked()
+        italic = self._btn_italic.isChecked()
+        self._canvas.update_active_text_format(font, size, color, bold, italic)
+
+    def _on_text_edit_started(self, fmt: dict):
+        self._text_font.blockSignals(True)
+        self._text_size.blockSignals(True)
+        self._text_color.blockSignals(True)
+        self._btn_bold.blockSignals(True)
+        self._btn_italic.blockSignals(True)
+
+        font_name = fmt.get("font", "Helvetica")
+        idx = self._text_font.findText(font_name, Qt.MatchFlag.MatchContains)
+        if idx >= 0:
+            self._text_font.setCurrentIndex(idx)
+        else:
+            self._text_font.setCurrentText(font_name)
+
+        self._text_size.setValue(max(4, int(round(fmt.get("size", 12)))))
+        col = fmt.get("color", (0, 0, 0))
+        self._text_color.set_color(col)
+        self._btn_bold.setChecked(fmt.get("bold", False))
+        self._btn_italic.setChecked(fmt.get("italic", False))
+
+        self._text_font.blockSignals(False)
+        self._text_size.blockSignals(False)
+        self._text_color.blockSignals(False)
+        self._btn_bold.blockSignals(False)
+        self._btn_italic.blockSignals(False)
+
+    def _delete_active_text(self):
+        if self._canvas._inline_edit.isVisible():
+            self._canvas._inline_edit.setText("")
+            self._canvas._commit_inline()
+        elif self._canvas._selected_overlay_idx >= 0:
+            self._canvas.delete_selected_overlay()
 
     def _pick_pdf(self):
         p, _ = QFileDialog.getOpenFileName(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
-        if p: self._load_pdf(p)
+        if p:
+            self._load_pdf(p)
 
     def _load_pdf(self, p: str):
         if not p:
@@ -583,66 +278,36 @@ class TabEditar(QWidget):
         self._drop_in.blockSignals(False)
         if not self._drop_out.path():
             self._drop_out.set_path(os.path.splitext(p)[0] + "_edited.pdf")
-        self._pending.clear(); self._pending_list.clear()
+        self._pending.clear()
+        self._pending_list.clear()
         try:
             self._canvas.load(p, password=self._pdf_password)
         except ModuleNotFoundError as ex:
             QMessageBox.critical(self, t("msg.missing_dep"), t("msg.dep_pymupdf", ex=ex))
             return
         except Exception as ex:
-            QMessageBox.critical(self, t("msg.error"), t("msg.pdf_open_error", ex=ex)); return
+            QMessageBox.critical(self, t("msg.error"), t("msg.pdf_open_error", ex=ex))
+            return
         self._page_idx = 0
         n = self._canvas.page_count()
         self._lbl_info.setText(t("edit.status.pages", n=n))
         self._update_nav()
-        QTimer.singleShot(
-            100,
-            lambda: self._load_existing_annotations() if isValid(self) else None,
-        )
-        QTimer.singleShot(
-            200,
-            lambda: self._load_form_fields(p) if isValid(self) else None,
-        )
+        QTimer.singleShot(100, lambda: self._load_existing_annotations() if isValid(self) else None)
+        QTimer.singleShot(200, lambda: self._load_form_fields(p) if isValid(self) else None)
 
     def _load_existing_annotations(self):
-        try:
-            doc = self._canvas._doc
-            if not doc:
-                self._status(t("edit.status.no_doc"))
-                return
-            count = 0
-            total_annots = 0
-            for page_idx in range(doc.page_count):
-                page = doc[page_idx]
-                for annot in page.annots():
-                    total_annots += 1
-                    if annot.type[0] == fitz.PDF_ANNOT_TEXT:
-                        r = annot.rect
-                        txt = annot.info.get("content", "")
-                        if txt:
-                            self._pending.append({
-                                "type": "note", "page": page_idx,
-                                "point": fitz.Point(r.x0, r.y0 + r.height),
-                                "text": txt,
-                                "_existing": True,
-                                "_annot_type": annot.type[0],
-                                "_annot_bbox": [r.x0, r.y0, r.x1, r.y1],
-                            })
-                            count += 1
-            self._status(t("edit.status.note_loaded",
-                           count=count, total=total_annots))
-            self._canvas.set_overlays(self._pending)
-        except Exception as ex:
-            self._status(t("edit.status.annot_error", ex=ex))
+        self._history.load_existing_annotations()
 
     def auto_load(self, path: str):
-        if path and not self._drop_in.path(): self._load_pdf(path)
+        if path and not self._drop_in.path():
+            self._load_pdf(path)
 
     def _close_pdf(self):
         self._doc_path = None
         self._canvas.close_doc()
         self._canvas.set_overlays([])
-        self._pending.clear(); self._pending_list.clear()
+        self._pending.clear()
+        self._pending_list.clear()
         self._lbl_info.setText("")
         self._page_idx = 0
         self._update_nav()
@@ -653,32 +318,22 @@ class TabEditar(QWidget):
         wipe_pdf_password(self)
 
     def _pick_image(self):
-        p, _ = QFileDialog.getOpenFileName(self, t("edit.image"), DESKTOP,
-                                           t("file_filter.images"))
+        p, _ = QFileDialog.getOpenFileName(self, t("edit.image"), DESKTOP, t("file_filter.images"))
         if p:
             from app.utils import check_image_size
             ok, w, h = check_image_size(p)
             if not ok:
-                QMessageBox.warning(self, t("msg.warning"),
-                                    t("editor.image_too_large",
-                                      width=w, height=h,
-                                      megapix=w * h // 1_000_000))
+                QMessageBox.warning(
+                    self, t("msg.warning"),
+                    t("editor.image_too_large", width=w, height=h, megapix=w * h // 1_000_000)
+                )
                 return
             self._img_drop.blockSignals(True)
             self._img_drop.set_path(p)
             self._img_drop.blockSignals(False)
 
     def _cleanup_signature_temp(self):
-        old = self._signature_path
-        if not old or not os.path.isfile(old):
-            return
-        try:
-            old_dir = os.path.normcase(os.path.dirname(old))
-            tmp_dir = os.path.normcase(tempfile.gettempdir())
-            if old_dir.startswith(tmp_dir):
-                os.unlink(old)
-        except OSError:
-            pass
+        cleanup_signature_temp_file(self._signature_path)
 
     def _pick_signature(self):
         dlg = _SignatureDialog(self)
@@ -704,38 +359,22 @@ class TabEditar(QWidget):
         clear_saved_signature()
 
     def _load_form_fields(self, path):
-        self._form_table.setRowCount(0)
-        self._form_status.setText("")
-        try:
-            from pypdf import PdfReader
-            self._form_table.setUpdatesEnabled(False)
-            _r = PdfReader(path)
-            if _r.is_encrypted and self._pdf_password:
-                if decrypt_pypdf(_r, self._pdf_password) is None:
-                    raise WrongPasswordError(t("tool.err.wrong_password"))
-            fields = _r.get_fields() or {}
-            for name, field in fields.items():
-                r = self._form_table.rowCount(); self._form_table.insertRow(r)
-                self._form_table.setItem(r, 0, QTableWidgetItem(name))
-                self._form_table.setItem(r, 1, QTableWidgetItem(str(field.get("/V", "") or "")))
-            self._form_table.setUpdatesEnabled(True)
-            if not fields:
-                self._form_status.setText(t("editor.forms.no_fields"))
-        except Exception as exc:
-            self._form_table.setUpdatesEnabled(True)
-            _log.warning("Failed to load form fields from %s: %s", path, exc)
-            self._form_status.setText(t("editor.forms.load_failed"))
+        load_form_fields(self, path)
 
     def _on_draw_color_changed(self, _color_tuple):
-        self._canvas.set_draw_mode(self._mode_idx == 7,
-                                   color=self._draw_color_cb.color_tuple(),
-                                   width=self._draw_width_slider.value())
+        self._canvas.set_draw_mode(
+            self._mode_idx == 7,
+            color=self._draw_color_cb.color_tuple(),
+            width=self._draw_width_slider.value(),
+        )
 
     def _on_draw_width_changed(self, v):
         self._draw_width_lbl.setText(str(v))
-        self._canvas.set_draw_mode(self._mode_idx == 7,
-                                   color=self._draw_color_cb.color_tuple(),
-                                   width=v)
+        self._canvas.set_draw_mode(
+            self._mode_idx == 7,
+            color=self._draw_color_cb.color_tuple(),
+            width=v,
+        )
 
     def _on_stroke(self, page_idx, pdf_points):
         self._page_idx = page_idx
@@ -754,7 +393,8 @@ class TabEditar(QWidget):
         mode = self._mode_idx
         if mode == 8:
             doc = self._canvas._doc
-            if not doc: return
+            if not doc:
+                return
             text = doc[page_idx].get_text("text", clip=pdf_rect).strip()
             self._sel_result.setPlainText(text)
             if text:
@@ -764,29 +404,29 @@ class TabEditar(QWidget):
                 self._status(t("edit.status.no_text_in_selection"))
             return
         if mode in (1, 4):
-            center = fitz.Point((pdf_rect.x0 + pdf_rect.x1) / 2,
-                                (pdf_rect.y0 + pdf_rect.y1) / 2)
-            self._on_point(page_idx, center); return
+            center = fitz.Point((pdf_rect.x0 + pdf_rect.x1) / 2, (pdf_rect.y0 + pdf_rect.y1) / 2)
+            self._on_point(page_idx, center)
+            return
         if mode == 0:
-            self._add({"type": "redact", "page": self._page_idx, "rect": pdf_rect,
-                       "fill": self._red_color.color_tuple()})
+            self._add({"type": "redact", "page": self._page_idx, "rect": pdf_rect, "fill": self._red_color.color_tuple()})
         elif mode == 2:
             img = self._img_drop.path()
             if not img or not os.path.isfile(img):
                 self._pick_image()
                 img = self._img_drop.path()
-                if not img or not os.path.isfile(img): return
+                if not img or not os.path.isfile(img):
+                    return
             self._add({"type": "image", "page": self._page_idx, "rect": pdf_rect, "path": img})
         elif mode == 6:
             sig = self._signature_path
             if not sig or not os.path.isfile(sig):
                 self._pick_signature()
                 sig = self._signature_path
-                if not sig or not os.path.isfile(sig): return
+                if not sig or not os.path.isfile(sig):
+                    return
             self._add({"type": "signature", "page": self._page_idx, "rect": pdf_rect, "path": sig})
         elif mode == 3:
-            self._add({"type": "highlight", "page": self._page_idx, "rect": pdf_rect,
-                       "color": self._hi_color.color_tuple()})
+            self._add({"type": "highlight", "page": self._page_idx, "rect": pdf_rect, "color": self._hi_color.color_tuple()})
 
     def _on_point(self, page_idx, pdf_pt):
         self._page_idx = page_idx
@@ -794,7 +434,7 @@ class TabEditar(QWidget):
         doc = self._canvas._doc
         if doc:
             page = doc[page_idx]
-            for annot in page.annots():
+            for annot in page.annots() or []:
                 if annot.type[0] == fitz.PDF_ANNOT_TEXT:
                     expanded = annot.rect + fitz.Rect(-10, -10, 10, 10)
                     if expanded.contains(fitz.Point(pdf_pt.x, pdf_pt.y)):
@@ -804,7 +444,7 @@ class TabEditar(QWidget):
                             return
         mode = self._mode_idx
         if mode == 1:
-            hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=3.0)
+            hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=18.0)
             if hit:
                 self._canvas.begin_inline_text_edit(hit, page_idx)
                 return
@@ -814,26 +454,28 @@ class TabEditar(QWidget):
                 size = max(float(near.get("size") or 0), float(bb[3] - bb[1]))
                 cr = near.get("color", 0)
                 if isinstance(cr, int):
-                    color = (((cr>>16)&0xFF)/255, ((cr>>8)&0xFF)/255, (cr&0xFF)/255)
+                    color = (((cr >> 16) & 0xFF) / 255, ((cr >> 8) & 0xFF) / 255, (cr & 0xFF) / 255)
                 elif isinstance(cr, (list, tuple)) and len(cr) >= 3:
                     color = tuple(float(v) for v in cr[:3])
                 else:
                     color = (0, 0, 0)
-                font = near.get("font", "")
+                font = near.get("font", "Helvetica")
                 origin = near.get("origin")
                 baseline_y = float(origin[1]) if origin else float(bb[3])
                 insert_pt = fitz.Point(pdf_pt.x, baseline_y)
             else:
                 size = self._text_size.value()
                 color = self._text_color.color_tuple()
-                font = ""
+                font = self._text_font.currentText()
                 insert_pt = pdf_pt
             self._canvas.begin_inline_text_insert(page_idx, insert_pt, size, color, font)
         elif mode == 4:
             dlg = _NoteDialog(self)
-            if dlg.exec() != QDialog.DialogCode.Accepted: return
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
             txt = dlg.edit.toPlainText().strip()
-            if not txt: return
+            if not txt:
+                return
             self._add({"type": "note", "page": self._page_idx, "point": pdf_pt, "text": txt})
 
     def _on_text_edit_committed(self, page_idx, edit):
@@ -842,296 +484,62 @@ class TabEditar(QWidget):
     def _on_signature_added(self, page_idx: int, rect, path: str):
         self._add({"type": "signature", "page": page_idx, "rect": rect, "path": path})
 
-    def _add(self, edit: dict, *, _from_redo: bool = False):
-        if not _from_redo:
-            self._redo_stack.clear()
-        self._pending.append(edit)
-        if len(self._pending) > self._MAX_PENDING:
-            to_drop = self._pending[:-self._MAX_PENDING]
-            self._pending = self._pending[-self._MAX_PENDING:]
-            tmp_root = os.path.normcase(tempfile.gettempdir())
-            for old in to_drop:
-                with contextlib.suppress(Exception):
-                    p = old.get("path")
-                    if (p and os.path.isfile(p)
-                            and os.path.normcase(p).startswith(tmp_root)):
-                        os.unlink(p)
-            for _ in range(len(to_drop)):
-                self._pending_list.takeItem(0)
-        suffix = t("edit.label.page_suffix", n=edit["page"] + 1)
-        labels = {
-            "redact":    lambda e: t("edit.label.redact") + suffix,
-            "text":      lambda e: t("edit.label.text", txt=e["text"][:18]) + suffix,
-            "image":     lambda e: t("edit.label.image",
-                                     name=os.path.basename(e["path"])) + suffix,
-            "highlight": lambda e: t("edit.label.highlight") + suffix,
-            "note":      lambda e: t("edit.label.note") + suffix,
-            "text_edit": lambda e: t("edit.label.edit",
-                                     old=e["old_text"][:15],
-                                     new=e["new_text"][:15]) + suffix,
-            "signature": lambda e: t("edit.mode.signature") + suffix,
-            "draw":      lambda e: t("edit.mode.draw") + suffix,
-            "delete_annot": lambda e: t("edit.label.note_delete") + suffix,
-        }
-        builder = labels.get(edit["type"], lambda e: e["type"] + suffix)
-        lbl = builder(edit)
-        self._pending_list.addItem(lbl)
-        self._status(t("edit.status.added",
-                       label=lbl, count=len(self._pending)))
-        self._canvas.set_overlays(self._pending)
-
-    def _undo(self):
-        if getattr(self, "_mode_idx", -1) == _MODE_FORMS:
-            self._status(t("editor.forms.undo_unavailable"))
-            return
-        if not self._pending:
-            return
-        edit = self._pending.pop()
-        self._redo_stack.append(edit)
-        if len(self._redo_stack) > self._MAX_REDO:
-            self._redo_stack.pop(0)
-        self._pending_list.takeItem(self._pending_list.count() - 1)
-        if edit.get("type") == "delete_annot":
-            original = edit.get("_original_note")
-            if isinstance(original, dict):
-                self._pending.append(original)
-                page = original.get("page", 0)
-                self._pending_list.addItem(
-                    t("edit.status.note_label", n=(page or 0) + 1))
-        self._canvas.set_overlays(self._pending)
-        self._status(t("edit.status.undo", n=len(self._pending)))
-
-    def _redo(self):
-        if not self._redo_stack:
-            return
-        edit = self._redo_stack.pop()
-        self._add(edit, _from_redo=True)
-
-    def _prompt_encryption_choice(self) -> str | None:
-        box = QMessageBox(self)
-        box.setWindowTitle(t("editor.encrypt.warning_title"))
-        box.setText(t("editor.encrypt.warning_text"))
-        box.setIcon(QMessageBox.Icon.Warning)
-        keep_btn = box.addButton(t("editor.encrypt.save_protected"),
-                                 QMessageBox.ButtonRole.AcceptRole)
-        plain_btn = box.addButton(t("editor.encrypt.save_unprotected"),
-                                  QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = box.addButton(t("btn.cancel"),
-                                   QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(keep_btn)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is keep_btn:
-            return "protect"
-        if clicked is plain_btn:
-            return "plaintext"
-        if clicked is cancel_btn:
-            return None
-        return None
+    def _on_overlay_deleted(self, idx: int, edit: dict):
+        self._history.handle_overlay_deleted(idx, edit)
 
     def _on_note_deleted(self, overlay: dict):
-        text = overlay.get("text", "").strip()
-        page = overlay.get("page")
-        for i, p in enumerate(self._pending):
-            if p.get("type") == "note" and p.get("text", "").strip() == text and p.get("page") == page:
-                removed = self._pending.pop(i)
-                self._pending_list.takeItem(i)
-                self._redo_stack.append(removed)
-                if len(self._redo_stack) > self._MAX_REDO:
-                    self._redo_stack.pop(0)
-                if removed.get("_existing"):
-                    edit = {
-                        "type": "delete_annot",
-                        "page": removed.get("page"),
-                        "annot_type": removed.get("_annot_type"),
-                        "bbox": removed.get("_annot_bbox"),
-                        "_existing": True,
-                        "_original_note": removed,
-                    }
-                    self._pending.append(edit)
-                    suffix = t("edit.label.page_suffix",
-                               n=((removed.get("page") or 0) + 1))
-                    self._pending_list.addItem(
-                        t("edit.label.note_delete") + suffix)
-                self._canvas.set_overlays(self._pending)
-                return
-        if overlay.get("_existing"):
-            edit = {
-                "type": "delete_annot",
-                "page": page,
-                "annot_type": overlay.get("_annot_type"),
-                "bbox": overlay.get("_annot_bbox"),
-                "_existing": True,
-            }
-            self._pending.append(edit)
-            suffix = t("edit.label.page_suffix", n=(page or 0) + 1)
-            self._pending_list.addItem(t("edit.label.note_delete") + suffix)
-            self._canvas.set_overlays(self._pending)
+        self._history.handle_note_deleted(overlay)
+
+    def _add(self, edit: dict, *, _from_redo: bool = False):
+        self._history.add(edit, _from_redo=_from_redo)
+
+    def _undo(self):
+        self._history.undo()
+
+    def _redo(self):
+        self._history.redo()
 
     def _clear_pending(self):
-        self._pending.clear(); self._pending_list.clear()
-        self._redo_stack.clear()
-        self._canvas.set_overlays([])
+        self._history.clear()
+
+    def _prompt_encryption_choice(self) -> str | None:
+        return prompt_encryption_choice(self)
+
+    @staticmethod
+    def _fitz_permissions_of(doc) -> int:
+        return get_fitz_permissions(doc)
+
+    def _apply_forms(self, out):
+        apply_form_fields_and_save(self, out)
 
     def _run(self):
         if not self._doc_path or not os.path.isfile(self._doc_path):
-            QMessageBox.warning(self, t("msg.warning"), t("msg.open_pdf_first")); return
+            QMessageBox.warning(self, t("msg.warning"), t("msg.open_pdf_first"))
+            return
         out = self._drop_out.path()
         if not out:
             base, ext = os.path.splitext(os.path.basename(self._doc_path))
             suggested = os.path.join(os.path.dirname(self._doc_path), base + "_edited" + ext)
-            out, _ = QFileDialog.getSaveFileName(
-                self, t("btn.choose"), suggested, t("file_filter.pdf"))
-            if not out: return
+            out, _ = QFileDialog.getSaveFileName(self, t("btn.choose"), suggested, t("file_filter.pdf"))
+            if not out:
+                return
             self._drop_out.set_path(out)
+
         if self._mode_idx == _MODE_FORMS:
             if self._user_pending:
                 reply = QMessageBox.question(
                     self, t("msg.warning"),
                     t("editor.forms.has_pending"),
-                    QMessageBox.StandardButton.Yes
-                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
                 )
                 if reply != QMessageBox.StandardButton.Yes:
                     return
             self._apply_forms(out)
             return
+
         if not self._user_pending:
-            QMessageBox.warning(self, t("msg.warning"), t("msg.no_pending")); return
-        try:
-            peek = fitz.open(self._doc_path)
-            was_encrypted = bool(peek.needs_pass)
-            if was_encrypted and self._pdf_password:
-                peek.authenticate(self._pdf_password)
-            encrypt_choice = "plaintext"
-            if was_encrypted and self._pdf_password:
-                encrypt_choice = self._prompt_encryption_choice()
-                if encrypt_choice is None:
-                    peek.close()
-                    return
-            peek.close()
-            self._canvas.release_doc()
-            doc = fitz.open(self._doc_path)
-            if doc.needs_pass and self._pdf_password:
-                doc.authenticate(self._pdf_password)
-            _non_latin = any(
-                e.get("type") in ("text", "note", "text_edit")
-                and any(ord(c) > 0xFF for c in (e.get("text") or ""))
-                for e in self._pending
-            )
-            if _non_latin:
-                self._status(t("tool.warn.font_latin_only"))
-            _apply_result = apply_pending_edits(doc, self._pending)
-            text_fit_warnings = _apply_result.text_fit_warnings
-            reencrypt = bool(encrypt_choice == "protect" and self._pdf_password)
-            if reencrypt:
-                perms = self._fitz_permissions_of(doc)
-                save_opts = dict(
-                    garbage=4, deflate=True,
-                    encryption=fitz.PDF_ENCRYPT_AES_256,
-                    user_pw=self._pdf_password,
-                    owner_pw=self._pdf_password,
-                    permissions=perms,
-                )
-            else:
-                save_opts = dict(garbage=4, deflate=True)
+            QMessageBox.warning(self, t("msg.warning"), t("msg.no_pending"))
+            return
 
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
-            if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out):
-                viewer._canvas.close_doc()
-                if viewer._fitz_doc:
-                    with contextlib.suppress(Exception):
-                        viewer._fitz_doc.close()
-                    viewer._fitz_doc = None
-                viewer._thumbnails._stop_all_workers()
-
-            atomic_pdf_write(doc, out, save_opts=save_opts, close_writer=True)
-            if reencrypt:
-                _log.info("Re-encrypted output with user password as owner")
-            self._pending.clear(); self._pending_list.clear()
-            self._status(t("edit.status.saved", path=out))
-
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
-
-            if text_fit_warnings:
-                QMessageBox.warning(self, t("msg.warning"),
-                                    t("msg.pdf_saved", path=out))
-            else:
-                QMessageBox.information(self, t("msg.done"),
-                                        t("msg.pdf_saved", path=out))
-            self._load_pdf(out)
-        except Exception as e:
-            show_error(self, e)
-
-    @staticmethod
-    def _fitz_permissions_of(doc) -> int:
-        try:
-            perms = getattr(doc, "permissions", -1)
-            return int(perms) if perms is not None else -1
-        except Exception:
-            return -1
-
-    def _apply_forms(self, out):
-        try:
-            from pypdf import PdfWriter, PdfReader
-            with open(self._doc_path, "rb") as _src:
-                _r = PdfReader(_src)
-                was_encrypted = bool(_r.is_encrypted)
-                if was_encrypted and self._pdf_password:
-                    if decrypt_pypdf(_r, self._pdf_password) is None:
-                        raise WrongPasswordError(t("tool.err.wrong_password"))
-                encrypt_choice = "plaintext"
-                if was_encrypted and self._pdf_password:
-                    encrypt_choice = self._prompt_encryption_choice()
-                    if encrypt_choice is None:
-                        return
-                writer = PdfWriter(); writer.append(_r)
-                fields = {self._form_table.item(r, 0).text():
-                          (self._form_table.item(r, 1).text() if self._form_table.item(r, 1) else "")
-                          for r in range(self._form_table.rowCount())}
-                if "/AcroForm" not in writer._root_object:
-                    self._status(t("editor.forms.no_fields"))
-                    self._form_status.setText(t("editor.forms.no_fields"))
-                    return
-                try:
-                    _w_fields = _r.get_fields() or {}
-                except Exception:
-                    _w_fields = {}
-                if not _w_fields:
-                    self._status(t("editor.forms.no_fields"))
-                    self._form_status.setText(t("editor.forms.no_fields"))
-                    return
-                for page in writer.pages:
-                    writer.update_page_form_field_values(page, fields, auto_regenerate=True)
-                if encrypt_choice == "protect" and self._pdf_password:
-                    writer.encrypt(
-                        user_password=self._pdf_password,
-                        owner_password=self._pdf_password,
-                        algorithm="AES-256",
-                    )
-                    _log.info(
-                        "Re-encrypted forms output with user password as owner")
-
-                win = self.window()
-                viewer = getattr(win, "_viewer", None)
-                if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out):
-                    viewer._canvas.close_doc()
-                    if viewer._fitz_doc:
-                        with contextlib.suppress(Exception):
-                            viewer._fitz_doc.close()
-                        viewer._fitz_doc = None
-                    viewer._thumbnails._stop_all_workers()
-
-                atomic_pdf_write(writer, out, sources=[self._doc_path])
-
-            self._status(t("edit.status.form_saved", path=out))
-
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
-
-            QMessageBox.information(self, t("msg.done"), t("msg.form_saved", path=out))
-        except Exception as e:
-            show_error(self, e)
+        apply_visual_edits_and_save(self, out)

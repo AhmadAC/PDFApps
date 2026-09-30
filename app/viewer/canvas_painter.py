@@ -1,4 +1,3 @@
-
 # app/viewer/canvas_painter.py
 
 """PDFApps – Painting subsystem for _SelectCanvas (Pages, Notes, Crops, Signatures)."""
@@ -46,7 +45,7 @@ class CanvasPainter:
         p.drawLine(cx0, cy1, cx0 + k, cy1)
         p.drawLine(cx0, cy1, cx0, cy1 - k)
         p.drawLine(cx1, cy1, cx1 - k, cy1)
-        p.drawLine(cx1, cy1, cx1 - k, cy1)
+        p.drawLine(cx1, cy1, cx1, cy1 - k)
 
         z = zoom or 1.0
         pt_w = int(round((cx1 - cx0) / z))
@@ -85,15 +84,24 @@ class CanvasPainter:
         for i in range(first, last + 1):
             e = canvas._entries[i]
             x = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
-            if e.pixmap:
+            page_rect = QRect(x, e.y_off, e.w, e.h)
+
+            if e.pixmap and not e.pixmap.isNull():
                 p.drawPixmap(x, e.y_off, e.pixmap)
+            elif getattr(e, "prev_pixmap", None) is not None and not e.prev_pixmap.isNull():
+                p.save()
+                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                p.drawPixmap(page_rect, e.prev_pixmap)
+                p.restore()
             else:
-                p.fillRect(x, e.y_off, e.w, e.h, QColor("#2B2B2B"))
+                blank_bg = QColor("#1E1E1E") if canvas._night_mode else QColor("#FFFFFF")
+                p.fillRect(page_rect, blank_bg)
                 p.setPen(QColor(TEXT_SEC))
                 f = QFont()
                 f.setPointSize(9)
                 p.setFont(f)
-                p.drawText(QRect(x, e.y_off, e.w, e.h), Qt.AlignmentFlag.AlignCenter, t("viewer.loading"))
+                p.drawText(page_rect, Qt.AlignmentFlag.AlignCenter, t("viewer.loading"))
+
             p.setPen(QPen(QColor("#151515"), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(x, e.y_off, e.w - 1, e.h - 1)

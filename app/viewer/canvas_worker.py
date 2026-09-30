@@ -1,11 +1,13 @@
-"""PDFApps – Background worker and data structures for canvas page rendering."""
 from __future__ import annotations
 
+"""PDFApps – Background worker and data structures for canvas page rendering."""
+
+import os
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 _PAGE_GAP       = 4    # px between pages
 _BUFFER_PGS     = 2    # extra pages to pre-render outside the visible area
-_MAX_THREADS    = 2    # simultaneous render workers
+_MAX_THREADS    = max(2, min(4, os.cpu_count() or 2))   # simultaneous render workers
 _NOTE_ICON_SIZE = 22   # note icon size in pixels
 
 
@@ -14,16 +16,17 @@ class _RenderSignals(QObject):
 
 
 class _PageEntry:
-    __slots__ = ("y_off", "w", "h", "pixmap", "words", "annots", "src_page")
+    __slots__ = ("y_off", "w", "h", "pixmap", "prev_pixmap", "words", "annots", "src_page")
 
     def __init__(self, y_off: int, w: int, h: int, src_page: int = 0):
-        self.y_off    = y_off
-        self.w        = w
-        self.h        = h
-        self.src_page = src_page
-        self.pixmap   = None   # QPixmap | None — filled by worker
-        self.words    = None   # list | None   — filled by worker
-        self.annots   = None   # list | None   — [(rect, text), ...]
+        self.y_off       = y_off
+        self.w           = w
+        self.h           = h
+        self.src_page    = src_page
+        self.pixmap      = None   # QPixmap | None — filled by worker
+        self.prev_pixmap = None   # QPixmap | None — retained during zoom for smooth scaling
+        self.words       = None   # list | None   — filled by worker
+        self.annots      = None   # list | None   — [(rect, text), ...]
 
 
 class _PageJob(QRunnable):

@@ -1,0 +1,16 @@
+{
+    "dest_mode": 0,
+    "printer_queue": "4th",
+    "printer_ip": "172.31.2.14",
+    "convert_chk": true,
+    "user_id": "ali",
+    "passcode": "1688",
+    "account_id": "",
+    "last_pdf_path": "",
+    "page_scope": 0,
+    "custom_range": "",
+    "duplex": "2-Sided (Flip on Long Edge)",
+    "paper_size": "A4",
+    "color_mode": "Color",
+    "copies": 1
+}
