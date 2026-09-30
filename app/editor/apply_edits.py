@@ -1,5 +1,4 @@
-# app/editor/apply_edits.py
-
+# app/editor/apply_edits.py 
 """PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification support."""
 
 import os
@@ -102,8 +101,8 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                             ba = QByteArray()
                             buf = QBuffer(ba)
                             buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                            qimg.save(buf, "PNG")
-                            pg.insert_image(e["rect"], stream=bytes(ba))
+                            qimg.save(buf, b"PNG")
+                            pg.insert_image(e["rect"], stream=ba.data())
                         else:
                             pg.insert_image(e["rect"], filename=path)
                     except Exception:

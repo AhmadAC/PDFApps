@@ -9,6 +9,8 @@ import fitz
 from app.i18n import t
 from app.editor.tab_constants import _MAX_PENDING, _MAX_REDO, _MODE_FORMS
 
+_PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
+
 
 class TabHistoryManager:
     """Manages pending visual edits, annotation imports, and undo/redo stacks."""
@@ -154,7 +156,7 @@ class TabHistoryManager:
                 page = doc[page_idx]
                 for annot in page.annots() or []:
                     total_annots += 1
-                    if annot.type[0] == fitz.PDF_ANNOT_TEXT:
+                    if annot.type[0] == _PDF_ANNOT_TEXT:
                         r = annot.rect
                         txt = annot.info.get("content", "")
                         if txt:

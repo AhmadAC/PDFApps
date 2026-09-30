@@ -16,6 +16,8 @@ from app.pdf_password import decrypt_pypdf
 
 _log = logging.getLogger(__name__)
 
+_PDF_ENCRYPT_AES_256: int = getattr(fitz, "PDF_ENCRYPT_AES_256", 5)
+
 
 def prompt_encryption_choice(parent) -> str | None:
     """Prompt user whether to keep or remove PDF encryption upon saving."""
@@ -187,7 +189,7 @@ def apply_visual_edits_and_save(tab, out: str) -> None:
             perms = get_fitz_permissions(doc)
             save_opts = dict(
                 garbage=4, deflate=True,
-                encryption=fitz.PDF_ENCRYPT_AES_256,
+                encryption=_PDF_ENCRYPT_AES_256,
                 user_pw=tab._pdf_password,
                 owner_pw=tab._pdf_password,
                 permissions=perms,

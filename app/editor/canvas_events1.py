@@ -13,6 +13,9 @@ from app.constants import ACCENT
 from app.i18n import t
 from app.editor.canvas_overlay1 import CanvasOverlayManager
 
+# Safe fallback for PyMuPDF annotation constant to satisfy Pylance
+_PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
+
 
 class CanvasEventHandler:
     def __init__(self, canvas):
@@ -368,7 +371,7 @@ class CanvasEventHandler:
                 if c._doc and overlay.get("_existing"):
                     page = c._doc[overlay.get("page", 0)]
                     for annot in page.annots() or []:
-                        if annot.type[0] == fitz.PDF_ANNOT_TEXT:
+                        if annot.type[0] == _PDF_ANNOT_TEXT or annot.type[1] == "Text":
                             txt = annot.info.get("content", "") or ""
                             if txt.strip() == overlay.get("text", "").strip():
                                 page.delete_annot(annot)

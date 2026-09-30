@@ -8,10 +8,14 @@ import os
 import tempfile
 import fitz
 from PySide6.QtCore import Qt, QRect, QPoint
-from PySide6.QtGui import QPixmap
 
 from app.editor.dialogs import _SignatureDialog, load_signature_pixmap
 from app.editor.canvas_render1 import _NOTE_ICON_SIZE
+
+# Safe fallbacks for PyMuPDF annotation type constants to satisfy Pylance stubs
+_PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
+_PDF_ANNOT_STAMP: int = getattr(fitz, "PDF_ANNOT_STAMP", 13)
+_PDF_ANNOT_INK: int = getattr(fitz, "PDF_ANNOT_INK", 15)
 
 
 class CanvasOverlayManager:
@@ -192,7 +196,7 @@ class CanvasOverlayManager:
         # 2. Stamp / ink annotations
         try:
             for annot in page.annots() or []:
-                if annot.type[0] in (fitz.PDF_ANNOT_STAMP, fitz.PDF_ANNOT_INK):
+                if annot.type[0] in (_PDF_ANNOT_STAMP, _PDF_ANNOT_INK) or annot.type[1] in ("Stamp", "Ink"):
                     if annot.rect.contains(pdf_pt):
                         for ov in c._overlays:
                             if ov.get("_existing_annot") == annot.xref and ov.get("page") == page_idx:
@@ -245,7 +249,7 @@ class CanvasOverlayManager:
         pdf_pt = c._to_pdf(page_idx, lx, ly)
         page = c._doc[page_idx]
         for annot in page.annots() or []:
-            if annot.type[0] == fitz.PDF_ANNOT_TEXT:
+            if annot.type[0] == _PDF_ANNOT_TEXT or annot.type[1] == "Text":
                 expanded = annot.rect + fitz.Rect(-10, -10, 10, 10)
                 if expanded.contains(pdf_pt):
                     txt = annot.info.get("content", "") or annot.get_text() or ""

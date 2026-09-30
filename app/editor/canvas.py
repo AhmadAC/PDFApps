@@ -5,21 +5,56 @@
 from __future__ import annotations
 
 import contextlib
+from typing import cast
 import fitz
-from PySide6.QtCore import Qt, Signal, QRect, QPoint, QThreadPool
-from PySide6.QtGui import QPainter, QCursor
+from PySide6.QtCore import Qt, Signal, QPoint, QThreadPool
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QWidget, QSizePolicy
 
 from app.constants import BG_INNER, _LN
-from app.editor.canvas_render1 import (
-    _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
-    _EditRenderSignals, _EditPageJob,
-    _get_icon_cursor, _load_overlay_pixmap, clear_overlay_pixmap_cache
-)
-from app.editor.canvas_overlay1 import CanvasOverlayManager
-from app.editor.canvas_text1 import CanvasInlineTextManager
-from app.editor.canvas_painter1 import CanvasPainter
-from app.editor.canvas_events1 import CanvasEventHandler
+
+try:
+    from app.editor.canvas_render1 import (
+        _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
+        _EditRenderSignals, _EditPageJob,
+        _get_icon_cursor, clear_overlay_pixmap_cache,
+    )
+    from app.editor.canvas_overlay1 import CanvasOverlayManager
+    from app.editor.canvas_text1 import CanvasInlineTextManager
+    from app.editor.canvas_painter1 import CanvasPainter
+    from app.editor.canvas_events1 import CanvasEventHandler
+except ImportError:
+    try:
+        from .canvas_render1 import (  # type: ignore
+            _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
+            _EditRenderSignals, _EditPageJob,
+            _get_icon_cursor, clear_overlay_pixmap_cache,
+        )
+        from .canvas_overlay1 import CanvasOverlayManager  # type: ignore
+        from .canvas_text1 import CanvasInlineTextManager  # type: ignore
+        from .canvas_painter1 import CanvasPainter  # type: ignore
+        from .canvas_events1 import CanvasEventHandler  # type: ignore
+    except ImportError:
+        try:
+            from app.editor.canvas_render import (  # type: ignore
+                _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
+                _EditRenderSignals, _EditPageJob,
+                _get_icon_cursor, clear_overlay_pixmap_cache,
+            )
+            from app.editor.canvas_overlay import CanvasOverlayManager  # type: ignore
+            from app.editor.canvas_text import CanvasInlineTextManager  # type: ignore
+            from app.editor.canvas_painter import CanvasPainter  # type: ignore
+            from app.editor.canvas_events import CanvasEventHandler  # type: ignore
+        except ImportError:
+            from .canvas_render import (  # type: ignore
+                _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
+                _EditRenderSignals, _EditPageJob,
+                _get_icon_cursor, clear_overlay_pixmap_cache,
+            )
+            from .canvas_overlay import CanvasOverlayManager  # type: ignore
+            from .canvas_text import CanvasInlineTextManager  # type: ignore
+            from .canvas_painter import CanvasPainter  # type: ignore
+            from .canvas_events import CanvasEventHandler  # type: ignore
 
 
 class PdfEditCanvas(QWidget):
@@ -35,11 +70,11 @@ class PdfEditCanvas(QWidget):
     overlay_changed      = Signal()
     overlay_deleted      = Signal(int, dict)          # (index, overlay_dict)
 
-    HANDLE_NONE = CanvasOverlayManager.HANDLE_NONE
-    HANDLE_TL   = CanvasOverlayManager.HANDLE_TL
-    HANDLE_TR   = CanvasOverlayManager.HANDLE_TR
-    HANDLE_BL   = CanvasOverlayManager.HANDLE_BL
-    HANDLE_BR   = CanvasOverlayManager.HANDLE_BR
+    HANDLE_NONE = 0
+    HANDLE_TL   = 1
+    HANDLE_TR   = 2
+    HANDLE_BL   = 3
+    HANDLE_BR   = 4
 
     def __init__(self):
         super().__init__()
@@ -270,7 +305,8 @@ class PdfEditCanvas(QWidget):
         page = self._doc[page_idx]
         click = fitz.Point(pdf_pt.x, pdf_pt.y)
         found, best_dist = None, float(max_dist)
-        for block in page.get_text("dict")["blocks"]:
+        text_dict = cast(dict, page.get_text("dict"))
+        for block in text_dict.get("blocks", []):
             if block.get("type") != 0:
                 continue
             for line in block.get("lines", []):
