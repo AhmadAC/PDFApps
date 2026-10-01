@@ -1,37 +1,95 @@
 # app/viewer/panel_nav.py
 """PDFApps – Navigation, TOC generation, recent files, and theme rendering."""
+from __future__ import annotations
+
 import logging
 import os
+from typing import TYPE_CHECKING, Any
 
+import fitz
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QMessageBox, QDialog, QTreeWidgetItem
+    QFileDialog, QMessageBox, QDialog, QTreeWidgetItem,
+    QScrollArea, QSplitter, QTabWidget, QTreeWidget, QVBoxLayout,
 )
 import qtawesome as qta
-import fitz
 
 from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
 from app.pdf_password import authenticate_fitz
 from app.utils import _paint_bg
 from app.i18n import t
 
+if TYPE_CHECKING:
+    from app.viewer.canvas_1 import _SelectCanvas
+    from app.viewer.thumbnails import ThumbnailPanel
+    _Base = QWidget
+else:
+    _Base = object
+
 _log = logging.getLogger(__name__)
 
 
-class PanelNavMixin:
+class PanelNavMixin(_Base):
     """Mixin for navigation, recent list, TOC, zoom, and theme operations."""
 
+    _pages_sidebar_visible_pref: bool | None = None
+    _saved_sidebar_width_pref: int | None = None
+
+    if TYPE_CHECKING:
+        _current_path: str
+        _original_doc_path: str
+        _fitz_doc: fitz.Document | None
+        _pdf_password: str
+        _pages_sidebar_collapsed: bool
+        _saved_sidebar_width: int
+        _sidebar_panel: QWidget
+        _sidebar_tabs: QTabWidget
+        _viewer_splitter: QSplitter
+        _canvas_scroll: QScrollArea
+        _canvas: _SelectCanvas
+        _thumbnails: ThumbnailPanel
+        _toc_tree: QTreeWidget
+        _toc_tab_idx: int
+        _pages_tab_idx: int
+        _placeholder: QWidget
+        _name_lbl: QLabel
+        _page_lbl: QLabel
+        _zoom_lbl: QLabel
+        _open_btn: QPushButton
+        _toc_btn: QPushButton
+        _night_btn: QPushButton
+        _prev_btn: QPushButton
+        _next_btn: QPushButton
+        _zoom_out_btn: QPushButton
+        _zoom_in_btn: QPushButton
+        _fit_btn: QPushButton
+        _print_btn: QPushButton
+        _search_prev_btn: QPushButton
+        _search_next_btn: QPushButton
+        _search_close_btn: QPushButton
+        _recent_links: list[QPushButton]
+        _recent_del_btns: list[QPushButton]
+        _recents_layout: QVBoxLayout
+        _undo_stack: list[dict]
+        _redo_stack: list[dict]
+
+        def _cleanup_history_files(self) -> None: ...
+        def _reset_search_state(self) -> None: ...
+
     def _toggle_pages_sidebar(self):
+        from app.viewer.panel import PdfViewerPanel
+
         if not self._pages_sidebar_collapsed:
             self._saved_sidebar_width = max(70, self._sidebar_panel.width())
-            from app.viewer.panel import PdfViewerPanel
             PdfViewerPanel._saved_sidebar_width_pref = self._saved_sidebar_width
+            type(self)._saved_sidebar_width_pref = self._saved_sidebar_width
             self._pages_sidebar_collapsed = True
             self._sidebar_panel.setVisible(False)
             total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([0, total])
-            self.__class__._pages_sidebar_visible_pref = False
+            type(self)._pages_sidebar_visible_pref = False
+            PdfViewerPanel._pages_sidebar_visible_pref = False
         else:
             self._pages_sidebar_collapsed = False
             self._sidebar_panel.setVisible(True)
@@ -39,7 +97,8 @@ class PanelNavMixin:
             w = min(500, max(70, getattr(self, "_saved_sidebar_width", 220)))
             total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([w, max(300, total - w)])
-            self.__class__._pages_sidebar_visible_pref = True
+            type(self)._pages_sidebar_visible_pref = True
+            PdfViewerPanel._pages_sidebar_visible_pref = True
 
         try:
             from app.i18n import _update_config
@@ -154,9 +213,10 @@ class PanelNavMixin:
         lay = self._recents_layout
         while lay.count():
             item = lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+            if item:
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
         self._recent_links = []
         self._recent_del_btns = []
         recents = get_recent_files()
@@ -219,7 +279,7 @@ class PanelNavMixin:
                 self._remove_recent(path, row_widget)
             return
 
-        win = self.window()
+        win: Any = self.window()
         if win and hasattr(win, "_load_and_track"):
             win._load_and_track(resolved)
         else:
@@ -248,7 +308,7 @@ class PanelNavMixin:
         path, _ = QFileDialog.getOpenFileName(
             self.window(), t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
         if path:
-            win = self.window()
+            win: Any = self.window()
             if win and hasattr(win, "_load_and_track"):
                 win._load_and_track(path)
             else:
@@ -351,7 +411,7 @@ class PanelNavMixin:
             btn.setEnabled(False)
         self._refresh_recents()
 
-        win = self.window()
+        win: Any = self.window()
         if win:
             if hasattr(win, "_tab_bar") and hasattr(win, "_viewers"):
                 for idx, v in enumerate(win._viewers):
@@ -449,7 +509,7 @@ class PanelNavMixin:
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
 
-        show_pages = getattr(self.__class__, "_pages_sidebar_visible_pref", True)
+        show_pages = getattr(type(self), "_pages_sidebar_visible_pref", True)
         if show_pages is None:
             show_pages = True
         self._pages_sidebar_collapsed = not show_pages
@@ -463,7 +523,7 @@ class PanelNavMixin:
             self._viewer_splitter.setSizes([0, total])
 
         display_name = os.path.basename(self._original_doc_path or path)
-        win = self.window()
+        win: Any = self.window()
         if win and hasattr(win, "_pipeline_state"):
             ps = win._pipeline_state.get(id(self))
             if ps and ps.get("original_path"):
@@ -513,7 +573,8 @@ class PanelNavMixin:
             self._prev_btn.setEnabled(False)
             self._next_btn.setEnabled(False)
             return
-        sb_val = self._viewer._canvas_scroll.verticalScrollBar().value() if hasattr(self, "_viewer") else self._canvas_scroll.verticalScrollBar().value()
+        sb = self._canvas_scroll.verticalScrollBar()
+        sb_val = sb.value() if sb else 0
         idx = self._canvas.page_at_y(sb_val)
         total = len(pages)
         self._page_lbl.setText(f"{idx + 1} / {total}")

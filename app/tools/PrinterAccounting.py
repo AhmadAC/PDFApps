@@ -1,4 +1,3 @@
-
 # app/tools/PrinterAccounting.py
 """
 PDFApps – High-speed PDF Print Suite & Fuji Xerox ApeosPort Accounting Manager.
@@ -13,6 +12,7 @@ import json
 import socket
 import subprocess
 import tempfile
+from typing import Any
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
@@ -28,6 +28,7 @@ try:
     import fitz
     HAS_FITZ = True
 except Exception:
+    fitz = None  # type: ignore
     HAS_FITZ = False
 
 # Fallback pypdf check
@@ -35,6 +36,8 @@ try:
     from pypdf import PdfReader, PdfWriter
     HAS_PYPDF = True
 except Exception:
+    PdfReader = None  # type: ignore
+    PdfWriter = None  # type: ignore
     HAS_PYPDF = False
 
 # QtSvg check
@@ -42,6 +45,7 @@ try:
     from PySide6.QtSvg import QSvgRenderer
     HAS_SVG = True
 except Exception:
+    QSvgRenderer = None  # type: ignore
     HAS_SVG = False
 
 # QtPdf check
@@ -50,6 +54,8 @@ try:
     from PySide6.QtPdfWidgets import QPdfView
     HAS_QTPDF = True
 except Exception:
+    QPdfDocument = None  # type: ignore
+    QPdfView = None      # type: ignore
     HAS_QTPDF = False
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -121,7 +127,7 @@ def get_os_info() -> str:
         return "Windows Spooler"
     elif sys.platform == "darwin":
         return "macOS"
-    return sys.platform
+    return str(sys.platform)
 
 
 # -------------------------------------------------------------
@@ -172,13 +178,13 @@ SVG_BOLT = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="
 </svg>"""
 
 
-def get_svg_icon(svg_xml, color="#c0caf5", size=20):
-    if not HAS_SVG:
+def get_svg_icon(svg_xml: str, color: str = "#c0caf5", size: int = 20) -> QIcon:
+    if not HAS_SVG or QSvgRenderer is None:
         return QIcon()
     formatted = svg_xml.format(color=color)
     renderer = QSvgRenderer(QByteArray(formatted.encode("utf-8")))
     pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     renderer.render(painter)
     painter.end()
@@ -287,7 +293,7 @@ class BackgroundPrintWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(bool, str)
 
-    def __init__(self, target_ip, target_port, payload_bytes, job_name):
+    def __init__(self, target_ip: str, target_port: int, payload_bytes: bytes, job_name: str):
         super().__init__()
         self.target_ip = target_ip
         self.target_port = target_port
@@ -305,7 +311,7 @@ class BackgroundPrintWorker(QThread):
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
                 s.settimeout(15)
-                s.connect((self.target_ip, self.target_port))
+                s.connect((self.target_ip, int(self.target_port)))
 
                 total_len = len(self.payload_bytes)
                 chunk_size = 65536
@@ -337,7 +343,13 @@ class FujiAccountingManager(QWidget):
         self.total_pages = 0
         self.current_page = 1
         self.initial_pdf = initial_pdf
-        self.print_thread = None
+        self.print_thread: BackgroundPrintWorker | None = None
+
+        self.scroll_area: QScrollArea | None = None
+        self.preview_lbl: QLabel | None = None
+        self.pdf_doc: Any = None
+        self.pdf_view: Any = None
+        self.nav: Any = None
 
         self.setAcceptDrops(True)
         self.init_ui()
@@ -406,7 +418,7 @@ class FujiAccountingManager(QWidget):
     # -------------------------------------------------------------
     def init_preview_tab(self):
         layout = QHBoxLayout(self.tab_preview)
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -583,13 +595,13 @@ class FujiAccountingManager(QWidget):
         self.next_btn = QPushButton("Next")
         self.next_btn.setObjectName("NavBtn")
         self.next_btn.setIcon(get_svg_icon(SVG_CHEVRON_RIGHT, "#c0caf5", 14))
-        self.next_btn.setLayoutDirection(Qt.RightToLeft)
+        self.next_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.next_btn.clicked.connect(self.go_next_page)
         nav_bar.addWidget(self.next_btn)
 
         right_layout.addLayout(nav_bar)
 
-        if HAS_QTPDF:
+        if HAS_QTPDF and QPdfDocument is not None and QPdfView is not None:
             self.pdf_doc = QPdfDocument(self)
             self.pdf_view = QPdfView(self)
             self.pdf_view.setDocument(self.pdf_doc)
@@ -602,7 +614,7 @@ class FujiAccountingManager(QWidget):
         else:
             self.scroll_area = QScrollArea()
             self.preview_lbl = QLabel("Loading preview engine...")
-            self.preview_lbl.setAlignment(Qt.AlignCenter)
+            self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.scroll_area.setWidget(self.preview_lbl)
             self.scroll_area.setWidgetResizable(True)
             right_layout.addWidget(self.scroll_area)
@@ -653,14 +665,14 @@ class FujiAccountingManager(QWidget):
         c_layout.addWidget(QLabel("Passcode / PIN:"))
         self.pass_input = QLineEdit()
         self.pass_input.setPlaceholderText("Your printer accounting passcode")
-        self.pass_input.setEchoMode(QLineEdit.Password)
+        self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.pass_input.textChanged.connect(self.update_acct_banner)
 
         p_row = QHBoxLayout()
         p_row.addWidget(self.pass_input)
         toggle_pin = QPushButton("Show / Hide")
         toggle_pin.setCheckable(True)
-        toggle_pin.toggled.connect(lambda c: self.pass_input.setEchoMode(QLineEdit.Normal if c else QLineEdit.Password))
+        toggle_pin.toggled.connect(lambda c: self.pass_input.setEchoMode(QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password))
         p_row.addWidget(toggle_pin)
         c_layout.addLayout(p_row)
 
@@ -678,14 +690,14 @@ class FujiAccountingManager(QWidget):
 
         a_layout.addWidget(QLabel("Linux Sudo Password:"))
         self.sudo_input = QLineEdit()
-        self.sudo_input.setEchoMode(QLineEdit.Password)
+        self.sudo_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.sudo_input.setPlaceholderText("Enter Linux sudo password to modify CUPS PPD")
 
         s_row = QHBoxLayout()
         s_row.addWidget(self.sudo_input)
         toggle_sudo = QPushButton("Show / Hide")
         toggle_sudo.setCheckable(True)
-        toggle_sudo.toggled.connect(lambda c: self.sudo_input.setEchoMode(QLineEdit.Normal if c else QLineEdit.Password))
+        toggle_sudo.toggled.connect(lambda c: self.sudo_input.setEchoMode(QLineEdit.EchoMode.Normal if c else QLineEdit.EchoMode.Password))
         s_row.addWidget(toggle_sudo)
         a_layout.addLayout(s_row)
 
@@ -717,7 +729,7 @@ class FujiAccountingManager(QWidget):
             user_disp = u if u else "None"
             self.acct_banner_lbl.setText(f"Accounting: User [{user_disp}] | PIN [{pin_mask}]")
 
-    def on_dest_mode_changed(self, idx):
+    def on_dest_mode_changed(self, idx: int):
         is_direct = (idx == 0)
         self.ip_lbl.setVisible(is_direct)
         self.dest_ip_input.setVisible(is_direct)
@@ -856,7 +868,7 @@ class FujiAccountingManager(QWidget):
                 self.file_input.setText(files[0])
                 self.save_preferences()
 
-    def load_preview(self, file_path):
+    def load_preview(self, file_path: str):
         if not file_path or not os.path.isfile(file_path):
             self.doc_name_lbl.setText("No document loaded.")
             self.page_indicator_lbl.setText("Page: - / -")
@@ -867,12 +879,12 @@ class FujiAccountingManager(QWidget):
         filename = os.path.basename(file_path)
         self.doc_name_lbl.setText(f"<b>{filename}</b>")
 
-        if HAS_QTPDF:
+        if HAS_QTPDF and self.pdf_doc is not None:
             self.pdf_doc.load(file_path)
             self.total_pages = self.pdf_doc.pageCount()
             self.current_page = 1
             self.update_page_indicator()
-        elif HAS_FITZ:
+        elif HAS_FITZ and fitz is not None:
             try:
                 doc = fitz.open(file_path)
                 self.total_pages = doc.page_count
@@ -884,7 +896,7 @@ class FujiAccountingManager(QWidget):
         else:
             self.render_fallback_page(file_path, 1)
 
-    def on_qtpdf_page_changed(self, page_idx):
+    def on_qtpdf_page_changed(self, page_idx: int):
         self.current_page = page_idx + 1
         self.update_page_indicator()
 
@@ -901,34 +913,37 @@ class FujiAccountingManager(QWidget):
         if self.current_page < self.total_pages:
             self.jump_to_page(self.current_page + 1)
 
-    def jump_to_page(self, page_num):
+    def jump_to_page(self, page_num: int):
         self.current_page = page_num
         self.update_page_indicator()
 
-        if HAS_QTPDF:
+        if HAS_QTPDF and self.nav is not None:
             self.nav.jump(page_num - 1, QPointF(0, 0), self.nav.currentZoom())
         elif HAS_FITZ:
             self.render_fitz_page(self.file_input.text().strip(), page_num)
         else:
             self.render_fallback_page(self.file_input.text().strip(), page_num)
 
-    def render_fitz_page(self, file_path, page_num):
+    def render_fitz_page(self, file_path: str, page_num: int):
         """Instant in-memory rendering via PyMuPDF without spawning pdftoppm."""
+        if not HAS_FITZ or fitz is None:
+            return
         try:
             doc = fitz.open(file_path)
             if 1 <= page_num <= doc.page_count:
                 page = doc[page_num - 1]
-                target_w = max(400, self.scroll_area.width() - 40)
+                target_w = max(400, (self.scroll_area.width() - 40) if self.scroll_area else 400)
                 zoom = target_w / max(1.0, page.rect.width)
                 mat = fitz.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
-                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888).copy()
                 doc.close()
-                self.preview_lbl.setPixmap(QPixmap.fromImage(img))
+                if self.preview_lbl is not None:
+                    self.preview_lbl.setPixmap(QPixmap.fromImage(img))
         except Exception:
             pass
 
-    def render_fallback_page(self, file_path, page_num):
+    def render_fallback_page(self, file_path: str, page_num: int):
         try:
             res = subprocess.run(["pdfinfo", file_path], capture_output=True, text=True)
             m = re.search(r"Pages:\s+([0-9]+)", res.stdout)
@@ -943,13 +958,13 @@ class FujiAccountingManager(QWidget):
                 file_path, "/tmp/preview_pg"
             ], check=True)
             img_path = f"/tmp/preview_pg-{page_num}.png"
-            if os.path.exists(img_path):
+            if os.path.exists(img_path) and self.preview_lbl is not None:
                 pix = QPixmap(img_path)
-                self.preview_lbl.setPixmap(pix.scaledToWidth(720, Qt.SmoothTransformation))
+                self.preview_lbl.setPixmap(pix.scaledToWidth(720, Qt.TransformationMode.SmoothTransformation))
         except Exception:
             pass
 
-    def on_page_scope_changed(self, idx):
+    def on_page_scope_changed(self, idx: int):
         self.custom_range_input.setEnabled(idx == 2)
         if idx == 1:
             self.page_scope_combo.setItemText(1, f"Current Page Only (Page {self.current_page})")
@@ -971,7 +986,7 @@ class FujiAccountingManager(QWidget):
     # -------------------------------------------------------------
     # High-Speed Slicing & Direct Print Execution
     # -------------------------------------------------------------
-    def parse_pages(self, scope_idx, total_pages):
+    def parse_pages(self, scope_idx: int, total_pages: int) -> list[int]:
         if scope_idx == 0:
             return list(range(1, total_pages + 1))
         elif scope_idx == 1:
@@ -981,7 +996,7 @@ class FujiAccountingManager(QWidget):
             if not raw_text:
                 raise ValueError("Custom page range is empty. Enter pages like '1, 3, 5-8'.")
 
-            pages = set()
+            pages: set[int] = set()
             for part in raw_text.split(","):
                 part = part.strip()
                 if not part:
@@ -1001,14 +1016,15 @@ class FujiAccountingManager(QWidget):
             if not pages:
                 raise ValueError(f"No valid pages found in '{raw_text}' for a {total_pages}-page document.")
             return sorted(list(pages))
+        return list(range(1, total_pages + 1))
 
-    def extract_pdf_pages_fast(self, input_pdf, page_list):
+    def extract_pdf_pages_fast(self, input_pdf: str, page_list: list[int]) -> str:
         """Lightning-fast in-memory slicing via PyMuPDF or pypdf."""
         tmp_fd, out_path = tempfile.mkstemp(suffix=".pdf")
         os.close(tmp_fd)
 
         # 1. PyMuPDF (Fastest, zero process overhead)
-        if HAS_FITZ:
+        if HAS_FITZ and fitz is not None:
             doc = fitz.open(input_pdf)
             new_doc = fitz.open()
             for p in page_list:
@@ -1020,7 +1036,7 @@ class FujiAccountingManager(QWidget):
             return out_path
 
         # 2. pypdf
-        if HAS_PYPDF:
+        if HAS_PYPDF and PdfReader is not None and PdfWriter is not None:
             reader = PdfReader(input_pdf)
             writer = PdfWriter()
             for p in page_list:
@@ -1076,10 +1092,15 @@ class FujiAccountingManager(QWidget):
             return
 
         scope_idx = self.page_scope_combo.currentIndex()
+        pages_to_print: list[int] = []
         try:
             pages_to_print = self.parse_pages(scope_idx, self.total_pages or 9999)
         except Exception as e:
             QMessageBox.warning(self, "Page Range Error", str(e))
+            return
+
+        if not pages_to_print:
+            QMessageBox.warning(self, "Page Range Error", "No pages selected to print.")
             return
 
         needs_cleanup = False
@@ -1176,11 +1197,11 @@ class FujiAccountingManager(QWidget):
 
             self.print_thread = BackgroundPrintWorker(ip, 9100, payload, os.path.basename(pdf_path))
             
-            def on_progress(pct, msg):
+            def on_progress(pct: int, msg: str):
                 self.print_progress.setValue(pct)
                 self.status_badge.setText(msg)
 
-            def on_finished(success, message):
+            def on_finished(success: bool, message: str):
                 self.send_pdf_btn.setEnabled(True)
                 self.print_progress.setVisible(False)
                 self.status_badge.setText("Engine: Ready")
@@ -1190,7 +1211,7 @@ class FujiAccountingManager(QWidget):
 
                 if success:
                     self.save_preferences()
-                    page_desc = f"{len(pages_to_print)} page(s)"
+                    page_desc = f"{len(pages_to_print)} page(s)" if pages_to_print else "All pages"
                     QMessageBox.information(
                         self, "Print Sent (Port 9100)",
                         f"Job transmitted instantly to {ip}:9100!\n\n"
@@ -1252,7 +1273,7 @@ class FujiAccountingManager(QWidget):
         except Exception:
             pass
 
-    def run_sudo_cmd(self, cmd_args, input_data=None):
+    def run_sudo_cmd(self, cmd_args: list[str], input_data: str | None = None) -> str:
         sudo_pwd = self.sudo_input.text()
         if not sudo_pwd:
             raise ValueError("Please enter your Linux system (sudo) password in Tab 2.")
@@ -1271,7 +1292,7 @@ class FujiAccountingManager(QWidget):
         return proc.stdout
 
     def send_direct_socket_test(self):
-        ip = self.ip_input.text().strip()
+        ip = self.edit_ip.text().strip()
         username = self.user_input.text().strip() or "testuser"
         passcode = self.pass_input.text().strip()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QMouseEvent
@@ -18,6 +19,17 @@ from PySide6.QtWidgets import (
 from app.i18n import add_recent_file, t
 from app.utils import reveal_file
 from app.viewer.panel import PdfViewerPanel
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    from PySide6.QtWidgets import (
+        QMainWindow,
+        QStackedWidget,
+        QWidget,
+    )
+    _Base = QMainWindow
+else:
+    _Base = object
 
 __all__ = ["_ViewerTabBar", "WindowTabsMixin"]
 
@@ -48,15 +60,33 @@ class _ViewerTabBar(QTabBar):
         idx = self.tabAt(pos)
         if idx < 0:
             parent = self.window()
-            if hasattr(parent, "_open_pdf"):
-                parent._open_pdf()
+            open_fn = getattr(parent, "_open_pdf", None)
+            if callable(open_fn):
+                open_fn()
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
 
 
-class WindowTabsMixin:
+class WindowTabsMixin(_Base):
     """Mixin for MainWindow managing viewer tabs, document routing, and tab lifecycle."""
+
+    if TYPE_CHECKING:
+        _viewers: list[PdfViewerPanel]
+        _viewer_stack: QStackedWidget
+        _tab_bar: _ViewerTabBar
+        stack: QStackedWidget
+        _current_tool: int
+
+        def _handle_global_undo(self) -> None: ...
+        def _handle_global_redo(self) -> None: ...
+        def _update_page_nav(self) -> None: ...
+        def _update_breadcrumb(self) -> None: ...
+        def _viewer_has_unsaved(self, viewer: Any = ...) -> bool: ...
+        def _save_pipeline(self) -> None: ...
+        def _cleanup_pipeline(self, viewer_id: int) -> None: ...
+        def _crop_tool_idx(self) -> int: ...
+        def _setup_zoom_bar(self, active: bool, canvas: Any = ...) -> None: ...
 
     @property
     def _viewer(self) -> PdfViewerPanel | None:
@@ -175,8 +205,9 @@ class WindowTabsMixin:
             if getattr(self, "_current_tool", -1) >= 0:
                 tool_w = self.stack.widget(self._current_tool)
                 cur_path = viewer.current_path()
-                if cur_path and hasattr(tool_w, "auto_load"):
-                    tool_w.auto_load(cur_path)
+                fn = getattr(tool_w, "auto_load", None)
+                if cur_path and callable(fn):
+                    fn(cur_path)
             elif hasattr(self, "_setup_zoom_bar"):
                 self._setup_zoom_bar(True, canvas=viewer._canvas)
 
@@ -252,8 +283,9 @@ class WindowTabsMixin:
 
         if getattr(self, "_current_tool", -1) >= 0:
             tool_w = self.stack.widget(self._current_tool)
-            if hasattr(tool_w, "auto_load"):
-                tool_w.auto_load(norm_path)
+            fn = getattr(tool_w, "auto_load", None)
+            if callable(fn):
+                fn(norm_path)
         return target_v
 
     def _on_second_instance(self, paths: list[str]) -> None:
@@ -271,21 +303,23 @@ class WindowTabsMixin:
         crop_idx = self._crop_tool_idx() if hasattr(self, "_crop_tool_idx") else -1
         if crop_idx >= 0:
             crop_w = self.stack.widget(crop_idx)
-            if hasattr(crop_w, "on_canvas_crop_selected"):
-                crop_w.on_canvas_crop_selected(page_idx, rect)
+            fn = getattr(crop_w, "on_canvas_crop_selected", None)
+            if callable(fn):
+                fn(page_idx, rect)
 
     def _on_canvas_crop_applied(self) -> None:
         crop_idx = self._crop_tool_idx() if hasattr(self, "_crop_tool_idx") else -1
         if crop_idx >= 0:
             crop_w = self.stack.widget(crop_idx)
-            if hasattr(crop_w, "apply_crop_preview"):
-                crop_w.apply_crop_preview()
+            fn = getattr(crop_w, "apply_crop_preview", None)
+            if callable(fn):
+                fn()
 
     def _on_thumbnail_action_requested(self, action: str, pages_arg: object) -> None:
         if self._viewer and hasattr(self._viewer, "_on_thumbnail_action"):
             self._viewer._on_thumbnail_action(action, pages_arg)
 
-    def dragEnterEvent(self, event) -> None:
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 if url.toLocalFile().lower().endswith(".pdf"):
@@ -293,7 +327,7 @@ class WindowTabsMixin:
                     return
         super().dragEnterEvent(event)
 
-    def dropEvent(self, event) -> None:
+    def dropEvent(self, event: QDropEvent) -> None:
         urls = event.mimeData().urls()
         pdf_paths = [
             u.toLocalFile()

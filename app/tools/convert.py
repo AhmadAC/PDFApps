@@ -1,10 +1,13 @@
 """PDFApps – TabConverter: convert PDF to images, DOCX, TXT, PPTX, XLSX, HTML, EPUB."""
 
+from __future__ import annotations
+
 import contextlib
 import logging
 import os
 import re
 import tempfile
+from typing import Any, cast
 
 _log = logging.getLogger(__name__)
 
@@ -34,7 +37,7 @@ def _atomic_save(out_path: str, write_cb):
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QLabel, QFileDialog,
-    QMessageBox, QProgressDialog,
+    QMessageBox,
 )
 
 from app.base import BasePage
@@ -234,9 +237,10 @@ class TabConverter(BasePage):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 matrix = fitz.Matrix(dpi / 72, dpi / 72)
-                for i, page in enumerate(doc):
+                for i in range(len(doc)):
                     if worker.is_cancelled():
                         return None
+                    page = doc[i]
                     worker.progress.emit(i, f"{i + 1}/{total}…")
                     pix = page.get_pixmap(matrix=matrix)
                     if pix.alpha:
@@ -248,7 +252,7 @@ class TabConverter(BasePage):
                         pix.save(out_file)
                     else:
                         try:
-                            from PIL import Image
+                            from PIL import Image  # type: ignore
                             mode = "L" if pix.n == 1 else "RGB"
                             img = Image.frombytes(mode, (pix.width, pix.height), pix.samples)
                             img.save(out_file, "JPEG", quality=95)
@@ -279,7 +283,7 @@ class TabConverter(BasePage):
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.ocr.dep_pymupdf"))
             return
         try:
-            from docx import Document  # noqa: F401
+            from docx import Document  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.convert.dep_docx"))
             return
@@ -296,8 +300,8 @@ class TabConverter(BasePage):
 
         def do_work(worker):
             import fitz
-            from docx import Document
-            from docx.shared import Pt, RGBColor, Inches
+            from docx import Document  # type: ignore
+            from docx.shared import Pt, RGBColor, Inches  # type: ignore
             import io, re as _re
             from app.tools._pdf_extract import (
                 extract_page_assets,
@@ -589,14 +593,15 @@ class TabConverter(BasePage):
                 def _write_txt(tmp_path: str) -> None:
                     nonlocal cancelled
                     with open(tmp_path, 'w', encoding='utf-8') as f:
-                        for i, page in enumerate(doc):
+                        for i in range(len(doc)):
                             if worker.is_cancelled():
                                 cancelled = True
                                 raise CancelledError()
+                            page = doc[i]
                             if i > 0:
                                 f.write(t("tool.convert.txt.page_separator",
                                           n=i + 1))
-                            f.write(page.get_text())
+                            f.write(cast(str, page.get_text("text")))
                             worker.progress.emit(i, f"{i + 1}/{total}…")
                 try:
                     _atomic_save(out_path, _write_txt)
@@ -623,31 +628,31 @@ class TabConverter(BasePage):
         if not out_path:
             return
         try:
-            from pptx import Presentation  # noqa: F401
+            from pptx import Presentation  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.convert.dep_pptx"))
             return
         try:
             with self._open_fitz(pdf_path) as _probe:
                 total = _probe.page_count
-                first = _probe[0].rect if total else None
+                if total == 0:
+                    QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
+                    return
+                first = _probe[0].rect
+                slide_w_pt = first.width
+                slide_h_pt = first.height
         except Exception as e:
             show_error(self, e)
             return
-        if total == 0:
-            QMessageBox.warning(self, t("msg.warning"), t("msg.select_valid_pdf"))
-            return
-        slide_w_pt = first.width
-        slide_h_pt = first.height
         pwd = self._pdf_password
 
         def do_work(worker):
             import fitz, io
-            from pptx import Presentation
-            from pptx.util import Emu, Pt
-            from pptx.dml.color import RGBColor
-            from pptx.enum.shapes import MSO_SHAPE
-            from pptx.oxml.ns import qn
+            from pptx import Presentation  # type: ignore
+            from pptx.util import Emu, Pt  # type: ignore
+            from pptx.dml.color import RGBColor  # type: ignore
+            from pptx.enum.shapes import MSO_SHAPE  # type: ignore
+            from pptx.oxml.ns import qn  # type: ignore
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
                 if not (pwd and doc.authenticate(pwd)):
@@ -667,9 +672,10 @@ class TabConverter(BasePage):
                 prs.slide_width = Emu(int(slide_w_pt * 12700))
                 prs.slide_height = Emu(int(slide_h_pt * 12700))
                 blank = prs.slide_layouts[6]
-                for i, page in enumerate(doc):
+                for i in range(len(doc)):
                     if worker.is_cancelled():
                         return None
+                    page = doc[i]
                     slide = prs.slides.add_slide(blank)
 
                     try:
@@ -723,8 +729,11 @@ class TabConverter(BasePage):
                         except Exception:
                             pass
 
-                    blocks = page.get_text("dict").get("blocks", [])
+                    text_dict = cast(dict, page.get_text("dict"))
+                    blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
                     for block in blocks:
+                        if not isinstance(block, dict):
+                            continue
                         if block.get("type") == 1:
                             bbox = block.get("bbox")
                             img_data = block.get("image")
@@ -832,7 +841,7 @@ class TabConverter(BasePage):
         if not out_path:
             return
         try:
-            from openpyxl import Workbook  # noqa: F401
+            from openpyxl import Workbook  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.convert.dep_xlsx"))
             return
@@ -849,30 +858,35 @@ class TabConverter(BasePage):
 
         def do_work(worker):
             import fitz
-            from openpyxl import Workbook
+            from openpyxl import Workbook  # type: ignore
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
                 if not (pwd and doc.authenticate(pwd)):
                     raise WrongPasswordError(t("tool.err.wrong_password"))
             try:
                 wb = Workbook()
-                wb.remove(wb.active)
-                for i, page in enumerate(doc):
+                active_sheet = wb.active
+                if active_sheet is not None:
+                    wb.remove(active_sheet)
+                for i in range(len(doc)):
                     if worker.is_cancelled():
                         return None
+                    page = doc[i]
                     ws = wb.create_sheet(
                         title=t("tool.convert.xlsx.sheet_name", n=i + 1))
-                    blocks = page.get_text("blocks")
-                    for row_idx, block in enumerate(blocks):
-                        if block[6] != 0:
-                            continue
-                        text = _clean(block[4].strip())
-                        if text:
-                            cells = [c.strip() for c in text.replace("\t", "|").split("|") if c.strip()]
-                            if not cells:
-                                cells = [text]
-                            for col_idx, cell in enumerate(cells):
-                                ws.cell(row=row_idx + 1, column=col_idx + 1, value=cell)
+                    blocks = cast(list, page.get_text("blocks"))
+                    if isinstance(blocks, list):
+                        for row_idx, block in enumerate(blocks):
+                            if len(block) > 6 and block[6] != 0:
+                                continue
+                            raw_text = block[4] if len(block) > 4 else ""
+                            text = _clean(str(raw_text).strip())
+                            if text:
+                                cells = [c.strip() for c in text.replace("\t", "|").split("|") if c.strip()]
+                                if not cells:
+                                    cells = [text]
+                                for col_idx, cell in enumerate(cells):
+                                    ws.cell(row=row_idx + 1, column=col_idx + 1, value=cell)
                     worker.progress.emit(i, f"{i + 1}/{total}…")
                 if worker.is_cancelled():
                     return None
@@ -921,13 +935,15 @@ class TabConverter(BasePage):
                     ".page{margin-bottom:40px;padding-bottom:20px;border-bottom:1px solid #ccc;}</style>",
                     "</head><body>",
                 ]
-                for i, page in enumerate(doc):
+                for i in range(len(doc)):
                     if worker.is_cancelled():
                         return None
+                    page = doc[i]
                     parts.append('<div class="page">')
-                    blocks = page.get_text("dict")["blocks"]
+                    text_dict = cast(dict, page.get_text("dict"))
+                    blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
                     for block in blocks:
-                        if block.get("type") != 0:
+                        if not isinstance(block, dict) or block.get("type") != 0:
                             continue
                         for line in block.get("lines", []):
                             spans_html = ""
@@ -984,7 +1000,7 @@ class TabConverter(BasePage):
         if not out_path:
             return
         try:
-            from ebooklib import epub  # noqa: F401
+            from ebooklib import epub  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.convert.dep_epub"))
             return
@@ -1001,7 +1017,7 @@ class TabConverter(BasePage):
 
         def do_work(worker):
             import fitz
-            from ebooklib import epub
+            from ebooklib import epub  # type: ignore
             doc = fitz.open(pdf_path)
             if doc.needs_pass:
                 if not (pwd and doc.authenticate(pwd)):
@@ -1012,13 +1028,14 @@ class TabConverter(BasePage):
                 book.set_title(os.path.splitext(os.path.basename(pdf_path))[0])
                 book.set_language("en")
                 chapters = []
-                for i, page in enumerate(doc):
+                for i in range(len(doc)):
                     if worker.is_cancelled():
                         return None
+                    page = doc[i]
                     page_title = t("tool.convert.epub.page_title", n=i + 1)
                     ch = epub.EpubHtml(title=page_title,
                                        file_name=f"page_{i+1}.xhtml")
-                    text = page.get_text()
+                    text = cast(str, page.get_text("text"))
                     paragraphs = [f"<p>{_clean(p)}</p>" for p in text.split("\n") if p.strip()]
                     ch.content = f"<html><body><h2>{page_title}</h2>{''.join(paragraphs)}</body></html>"
                     book.add_item(ch)

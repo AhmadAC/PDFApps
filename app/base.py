@@ -40,10 +40,11 @@ class BasePage(QWidget):
         self._pipeline_supported = False
         self._pipeline_tmp_dir: str | None = None
         self._pdf_password: str = ""
+        self._toast_widget: QWidget | None = None
 
-        page_layout = QVBoxLayout(self)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
+        self._page_layout = QVBoxLayout(self)
+        self._page_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_layout.setSpacing(0)
 
         self._header = ToolHeader(icon, title, desc)
 
@@ -63,7 +64,7 @@ class BasePage(QWidget):
 
         scroll_area = scrolled(self._inner)
         scroll_area.setMinimumWidth(0)
-        page_layout.addWidget(scroll_area, 1)
+        self._page_layout.addWidget(scroll_area, 1)
         self.setMinimumWidth(0)
 
         self._compact_hidden: list = []
@@ -71,7 +72,7 @@ class BasePage(QWidget):
         self._compact_link: QPushButton | None = None
 
         self._action_bar, self.action_btn = ActionBar(action_text, self._run)
-        page_layout.addWidget(self._action_bar)
+        self._page_layout.addWidget(self._action_bar)
 
     def paintEvent(self, event):
         _paint_bg(self)
@@ -205,9 +206,8 @@ class BasePage(QWidget):
             btn_folder.clicked.connect(lambda: open_folder(file_path))
             h.addWidget(btn_folder)
 
-        layout = self.layout()
-        idx = layout.indexOf(self._action_bar)
-        layout.insertWidget(idx, toast)
+        idx = self._page_layout.indexOf(self._action_bar)
+        self._page_layout.insertWidget(idx, toast)
         self._toast_widget = toast
         if not with_save:
             QTimer.singleShot(

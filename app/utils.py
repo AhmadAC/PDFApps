@@ -1,8 +1,7 @@
-# app\utils.py
+# app/utils.py
 
 """PDFApps – utility functions and reusable UI factory helpers."""
 
-# app/utils.py
 import contextlib
 import logging
 import logging.handlers
@@ -15,7 +14,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPalette, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QFileDialog, QApplication,
+    QScrollArea, QFrame, QFileDialog, QApplication, QProgressBar,
 )
 import qtawesome as qta
 
@@ -252,10 +251,24 @@ def _action_progress_stylesheet(dark: bool) -> str:
     )
 
 
-def ActionBar(btn_text: str, slot) -> tuple:
+class _ActionBarWidget(QWidget):
+    """Action bar container widget holding a progress bar and theme update method."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.progress: QProgressBar | None = None
+
+    def update_theme(self, dark: bool) -> None:
+        if self.progress is not None:
+            try:
+                self.progress.setStyleSheet(_action_progress_stylesheet(dark))
+            except RuntimeError:
+                pass
+
+
+def ActionBar(btn_text: str, slot) -> tuple[_ActionBarWidget, QPushButton]:
     """Compact right-aligned action button row with seamless background."""
-    from PySide6.QtWidgets import QProgressBar
-    bar = QWidget()
+    bar = _ActionBarWidget()
     bar.setObjectName("action_bar")
     v = QVBoxLayout(bar)
     v.setContentsMargins(24, 4, 24, 14)
@@ -283,12 +296,6 @@ def ActionBar(btn_text: str, slot) -> tuple:
     v.addLayout(h)
     bar.progress = progress
 
-    def _update_theme(dark: bool) -> None:
-        try:
-            progress.setStyleSheet(_action_progress_stylesheet(dark))
-        except RuntimeError:
-            pass
-    bar.update_theme = _update_theme
     return bar, btn
 
 
@@ -405,7 +412,8 @@ def _is_valid_pdf(path: str) -> bool:
             return False
         return len(r.pages) > 0
     except Exception:
-        return False
+        pass
+    return False
 
 
 def _compress_pdf(src: str, dst: str, level: str = "recommended",
@@ -599,44 +607,6 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
         if p:
             try: os.unlink(p)
             except Exception: pass
-
-    # ── Pass C : pikepdf ─────────────────────────────────────────────────
-    _prog("passC")
-    pdf = None
-    p = None
-    try:
-        import pikepdf
-        best_so_far = min(temps, key=lambda f: os.path.getsize(f)) if temps else src
-        open_kw = {"password": password} if (best_so_far == src and password) else {}
-        pdf = pikepdf.open(best_so_far, **open_kw)
-        fd, p = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
-        _prog("passC")
-        pdf.save(p,
-                 object_stream_mode=pikepdf.ObjectStreamMode.generate,
-                 compress_streams=True,
-                 recompress_flate=True,
-                 linearize=True)
-        if _is_valid_pdf(p):
-            temps.append(p)
-            p = None
-    except CancelledError:
-        if pdf is not None:
-            try: pdf.close()
-            except Exception: pass
-            pdf = None
-        for _p in temps:
-            try: os.unlink(_p)
-            except Exception: pass
-        raise
-    except Exception:
-        pass
-    finally:
-        if pdf is not None:
-            with contextlib.suppress(Exception):
-                pdf.close()
-        if p:
-            with contextlib.suppress(Exception):
-                os.unlink(p)
 
     if not temps:
         raise RuntimeError(t("tool.compress.deps_missing"))

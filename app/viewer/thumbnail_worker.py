@@ -30,7 +30,8 @@ class _FlushFileHandler(logging.FileHandler):
         super().emit(record)
         with contextlib.suppress(Exception):
             self.flush()
-            os.fsync(self.stream.fileno())
+            if self.stream is not None:
+                os.fsync(self.stream.fileno())
 
 
 def _thumb_log_path() -> str:

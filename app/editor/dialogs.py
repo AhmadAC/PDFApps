@@ -1,4 +1,3 @@
-
 # app/editor/dialogs.py
 
 """PDFApps – editor dialogs: password, text edit, text insert, note, signature."""
@@ -569,7 +568,7 @@ class _SignatureDialog(QDialog):
                 return
             fd, tmp = tempfile.mkstemp(suffix=".png")
             os.close(fd)
-            img.save(tmp, "PNG")
+            img.save(tmp, b"PNG")
 
         elif sub_tab == 1:
             text = self._type_input.text().strip()
@@ -593,7 +592,7 @@ class _SignatureDialog(QDialog):
 
             fd, tmp = tempfile.mkstemp(suffix=".png")
             os.close(fd)
-            img.save(tmp, "PNG")
+            img.save(tmp, b"PNG")
 
         elif sub_tab == 2:
             if not self._imp_path or not os.path.isfile(self._imp_path):

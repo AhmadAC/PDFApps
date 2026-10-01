@@ -474,7 +474,8 @@ class ThumbnailPanel(QWidget):
     ) -> None:
         """Update preview crops in memory without saving to disk."""
         self._crops = {
-            int(k): tuple(float(x) for x in v) for k, v in crops.items()
+            int(k): (float(v[0]), float(v[1]), float(v[2]), float(v[3]))
+            for k, v in crops.items()
         }
         self._model.clear_cache()
         self._stop_all_workers()

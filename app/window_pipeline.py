@@ -1,19 +1,47 @@
 # app/window_pipeline.py
 """PDFApps – Pipeline processing, state saving, and security wiping mixin."""
+from __future__ import annotations
+
 import contextlib
 import logging
 import os
 import shutil
 import tempfile
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtWidgets import QFileDialog
 
 from app.base import BasePage
 from app.i18n import t
 
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import (
+        QMainWindow, QWidget, QStackedWidget, QStatusBar,
+    )
+    from app.viewer.panel import PdfViewerPanel
+    from app.window_tabs import _ViewerTabBar
+    _Base = QMainWindow
+else:
+    _Base = object
 
-class WindowPipelineMixin:
+
+class WindowPipelineMixin(_Base):
     """Mixin for managing pipeline processing, undo/redo, and worker lifecycles."""
+
+    if TYPE_CHECKING:
+        stack: QStackedWidget
+        _viewers: list[PdfViewerPanel]
+        _viewer: PdfViewerPanel | None
+        _viewer_stack: QStackedWidget
+        _tab_bar: _ViewerTabBar
+        _current_tool: int
+        _pipeline_state: dict[int, dict[str, Any]]
+        _sb: QStatusBar
+
+        def _edit_tool_idx(self) -> int: ...
+        def _crop_tool_idx(self) -> int: ...
+        def _rotate_tool_idx(self) -> int: ...
+        def _page_numbers_tool_idx(self) -> int: ...
 
     def _handle_global_undo(self):
         edit_idx = self._edit_tool_idx()
@@ -21,15 +49,22 @@ class WindowPipelineMixin:
         rotate_idx = self._rotate_tool_idx()
         page_numbers_idx = self._page_numbers_tool_idx()
 
+        target_idx = -1
         if self._current_tool == edit_idx:
-            self.stack.widget(edit_idx)._undo()
+            target_idx = edit_idx
         elif self._current_tool == crop_idx:
-            self.stack.widget(crop_idx)._undo()
+            target_idx = crop_idx
         elif self._current_tool == rotate_idx:
-            self.stack.widget(rotate_idx)._undo()
+            target_idx = rotate_idx
         elif self._current_tool == page_numbers_idx:
-            self.stack.widget(page_numbers_idx)._undo()
-        elif self._current_tool == -1:
+            target_idx = page_numbers_idx
+
+        if target_idx >= 0:
+            w = self.stack.widget(target_idx)
+            fn = getattr(w, "_undo", None)
+            if callable(fn):
+                fn()
+        elif self._current_tool == -1 and self._viewer:
             self._viewer.undo()
 
     def _handle_global_redo(self):
@@ -38,26 +73,35 @@ class WindowPipelineMixin:
         rotate_idx = self._rotate_tool_idx()
         page_numbers_idx = self._page_numbers_tool_idx()
 
+        target_idx = -1
         if self._current_tool == edit_idx:
-            self.stack.widget(edit_idx)._redo()
+            target_idx = edit_idx
         elif self._current_tool == crop_idx:
-            self.stack.widget(crop_idx)._redo()
+            target_idx = crop_idx
         elif self._current_tool == rotate_idx:
-            self.stack.widget(rotate_idx)._redo()
+            target_idx = rotate_idx
         elif self._current_tool == page_numbers_idx:
-            self.stack.widget(page_numbers_idx)._redo()
-        elif self._current_tool == -1:
+            target_idx = page_numbers_idx
+
+        if target_idx >= 0:
+            w = self.stack.widget(target_idx)
+            fn = getattr(w, "_redo", None)
+            if callable(fn):
+                fn()
+        elif self._current_tool == -1 and self._viewer:
             self._viewer.redo()
 
     def _on_pipeline_done(self, temp_path: str):
         viewer = self._viewer
+        if not viewer:
+            return
         vid = id(viewer)
         ps = self._pipeline_state.get(vid)
         if ps is None:
             ps = {"original_path": viewer.current_path(), "temp_path": None}
             self._pipeline_state[vid] = ps
         ps["temp_path"] = temp_path
-        viewer.load(temp_path, track=False)
+        viewer.load(temp_path, _is_history_step=True)
         idx = self._viewer_stack.currentIndex()
         orig_name = os.path.basename(ps["original_path"])
         self._tab_bar.setTabText(idx, f"● {orig_name}")
@@ -74,7 +118,10 @@ class WindowPipelineMixin:
                 fn(temp_path)
 
     def _save_pipeline(self):
-        vid = id(self._viewer)
+        viewer = self._viewer
+        if not viewer:
+            return
+        vid = id(viewer)
         ps = self._pipeline_state.get(vid)
         if not ps or not ps.get("temp_path"):
             return
@@ -114,7 +161,7 @@ class WindowPipelineMixin:
             shutil.copy2(ps["temp_path"], path)
 
         self._cleanup_pipeline(vid)
-        self._viewer.load(path)
+        viewer.load(path)
         idx = self._viewer_stack.currentIndex()
         self._tab_bar.setTabText(idx, os.path.basename(path))
         self._tab_bar.setTabToolTip(idx, path)
@@ -135,18 +182,24 @@ class WindowPipelineMixin:
 
     def _viewer_has_unsaved(self, viewer=None) -> bool:
         v = viewer or self._viewer
+        if not v:
+            return False
         ps = self._pipeline_state.get(id(v))
         return bool(ps and ps.get("temp_path"))
 
     def _save_current_tool(self):
-        vid = id(self._viewer)
+        viewer = self._viewer
+        if not viewer:
+            return
+        vid = id(viewer)
         ps = self._pipeline_state.get(vid)
         if ps and ps.get("temp_path"):
             self._save_pipeline()
         elif self._current_tool >= 0:
             w = self.stack.widget(self._current_tool)
-            if hasattr(w, '_run'):
-                w._run()
+            fn = getattr(w, "_run", None)
+            if callable(fn):
+                fn()
 
     @staticmethod
     def _wipe_password_holder(holder) -> None:
@@ -158,13 +211,18 @@ class WindowPipelineMixin:
     def _wait_for_workers_on_all_pages(self) -> None:
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
-            with contextlib.suppress(Exception):
-                wait_fn = getattr(page, "wait_for_workers", None)
-                if callable(wait_fn):
-                    wait_fn()
+            if page is not None:
+                with contextlib.suppress(Exception):
+                    wait_fn = getattr(page, "wait_for_workers", None)
+                    if callable(wait_fn):
+                        wait_fn()
 
     def _wipe_all_pdf_passwords(self) -> None:
-        holders = [self.stack.widget(i) for i in range(self.stack.count())]
+        holders: list[Any] = [
+            self.stack.widget(i)
+            for i in range(self.stack.count())
+            if self.stack.widget(i) is not None
+        ]
         holders += list(self._viewers)
         for holder in holders:
             self._wipe_password_holder(holder)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from typing import Any
 
 import fitz
 from PySide6.QtCore import QPoint, QRect, Qt, QThreadPool, Signal
@@ -24,6 +25,9 @@ from app.viewer.canvas_worker import (
     _PageJob,
     _RenderSignals,
 )
+
+# Safe fallback for PyMuPDF annotation constant to satisfy Pylance
+_PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
 
 
 class _SelectCanvas(QWidget):
@@ -52,7 +56,7 @@ class _SelectCanvas(QWidget):
         self._doc = None
         self._path = ""
         self._password = ""
-        self._entries: list[_PageEntry] = []
+        self._entries: list[Any] = []
         self._zoom = 1.0
         self._zoom_factor = 1.0
         self._base_avail = 300
@@ -367,16 +371,22 @@ class _SelectCanvas(QWidget):
             pw = round(w * self._zoom)
             ph = round(h * self._zoom)
 
-            entry = _PageEntry(y_off, pw, ph, src_page=src_idx)
+            entry: Any = _PageEntry(y_off, pw, ph, src_page=src_idx)
             if old_pixmaps and src_idx in old_pixmaps:
                 entry.prev_pixmap = old_pixmaps[src_idx]
 
             annots = []
             try:
                 for a in pg.annots() or []:
-                    if a.type[0] == fitz.PDF_ANNOT_TEXT:
-                        txt = a.info.get("content", "") or a.get_text() or ""
-                        annots.append((a.rect, txt.strip()))
+                    a_type = getattr(a, "type", (None, None))
+                    if (isinstance(a_type, (tuple, list)) and len(a_type) >= 2 and (a_type[0] == _PDF_ANNOT_TEXT or a_type[1] == "Text")) or a_type == _PDF_ANNOT_TEXT:
+                        info = getattr(a, "info", None) or {}
+                        content = info.get("content", "") if isinstance(info, dict) else ""
+                        if not content:
+                            raw_t = a.get_text()
+                            content = raw_t if isinstance(raw_t, str) else str(raw_t)
+                        txt = content.strip()
+                        annots.append((a.rect, txt))
             except Exception:
                 pass
             entry.annots = annots
@@ -458,7 +468,7 @@ class _SelectCanvas(QWidget):
             return
         self._pending.discard(pos)
         if 0 <= pos < len(self._entries):
-            entry = self._entries[pos]
+            entry: Any = self._entries[pos]
             entry.pixmap = pixmap
             entry.prev_pixmap = None
             entry.words = words

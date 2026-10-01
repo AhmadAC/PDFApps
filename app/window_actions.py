@@ -1,9 +1,12 @@
 # app/window_actions.py
 """PDFApps – Navigation, themes, UI interactions, and page control mixin."""
+from __future__ import annotations
+
 import contextlib
 import logging
 import os
 import sys
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt, QTimer, QProcess, QProcessEnvironment
 from PySide6.QtGui import QColor
@@ -24,9 +27,73 @@ from app.tools.page_numbers import TabPageNumbers
 from app.tools.reorder import TabReordenar
 from app.tools.rotate import TabRotar
 
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import (
+        QMainWindow, QWidget, QStackedWidget, QSplitter, QLabel,
+        QPushButton, QListWidget, QLineEdit, QHBoxLayout, QStatusBar,
+        QListWidgetItem,
+    )
+    from app.viewer.panel import PdfViewerPanel
+    from app.workspace_bar import WorkspaceBar
+    _Base = QMainWindow
+else:
+    _Base = object
 
-class WindowActionsMixin:
+
+class WindowActionsMixin(_Base):
     """Mixin for navigation, page transitions, themes, and presentation."""
+
+    if TYPE_CHECKING:
+        stack: QStackedWidget
+        nav: QListWidget
+        _viewers: list[PdfViewerPanel]
+        _viewer: PdfViewerPanel | None
+        _current_tool: int
+        _saved_right_width: int
+        _right_tool_container: QWidget
+        _splitter: QSplitter
+        _breadcrumb: QLabel
+        _undo_top_btn: QPushButton
+        _redo_top_btn: QPushButton
+        _tool_usage: dict[str, int]
+        _zoom_widget: QWidget
+        _zm_btn: QPushButton
+        _zp_btn: QPushButton
+        _z0_btn: QPushButton
+        _lbl_zoom: QLabel
+        _sidebar_collapsed: bool
+        _sidebar: QWidget
+        _brand_layout: QHBoxLayout
+        _brand_text_w: QWidget
+        _brand_title: QLabel
+        _brand_sub: QLabel
+        _nav_search: QLineEdit
+        _footer_w: QWidget
+        _sidebar_toggle_btn: QPushButton
+        _pages_toggle_btn: QPushButton
+        _right_pane_toggle_btn: QPushButton
+        _tab_container: QWidget
+        _page_nav_widget: QWidget
+        _first_pg_btn: QPushButton
+        _prev_pg_btn: QPushButton
+        _next_pg_btn: QPushButton
+        _last_pg_btn: QPushButton
+        _page_input: QLineEdit
+        _page_total_lbl: QLabel
+        _lang_btn: QPushButton
+        _toc_top_btn: QPushButton
+        _night_top_btn: QPushButton
+        _presentation: PresentationWidget | None
+        _dark_mode: bool
+        _qapp: QApplication
+        _workspace_bar: WorkspaceBar
+        _sb: QStatusBar
+        _fullscreen: bool
+
+        def _add_viewer_tab(self, path: str = ...) -> PdfViewerPanel: ...
+        def _update_tab_bar_visibility(self) -> None: ...
+        def _wait_for_workers_on_all_pages(self) -> None: ...
+        def _wipe_all_pdf_passwords(self) -> None: ...
 
     def _tool_idx_for_class(self, cls) -> int:
         for idx, (_, _, tool_cls) in enumerate(_NAV_KEYS):
@@ -61,7 +128,7 @@ class WindowActionsMixin:
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)
-            if hasattr(edit_w, "toggle_controls"):
+            if isinstance(edit_w, TabEditar):
                 edit_w.toggle_controls()
             return
         if self._right_tool_container.isVisible():
@@ -101,8 +168,9 @@ class WindowActionsMixin:
 
     def _update_breadcrumb(self):
         cur_file = ""
-        if self._viewer and self._viewer.current_path():
-            cur_file = os.path.basename(self._viewer._original_doc_path or self._viewer.current_path())
+        viewer = self._viewer
+        if viewer and viewer.current_path():
+            cur_file = os.path.basename(viewer._original_doc_path or viewer.current_path())
 
         file_part = f"  ›  {cur_file}" if cur_file else ""
         if getattr(self, "_current_tool", -1) >= 0 and self._current_tool < len(NAV_ITEMS):
@@ -113,8 +181,8 @@ class WindowActionsMixin:
         else:
             self._breadcrumb.setText(t("workspace.title"))
 
-        if self._viewer and self._viewer.current_path():
-            self._breadcrumb.setToolTip(self._viewer._original_doc_path or self._viewer.current_path())
+        if viewer and viewer.current_path():
+            self._breadcrumb.setToolTip(viewer._original_doc_path or viewer.current_path())
         else:
             self._breadcrumb.setToolTip("")
 
@@ -124,20 +192,25 @@ class WindowActionsMixin:
         edit_idx = self._edit_tool_idx()
         crop_idx = self._crop_tool_idx()
         page_numbers_idx = self._page_numbers_tool_idx()
+        viewer = self._viewer
 
         if getattr(self, "_current_tool", -1) == -1:
             self._undo_top_btn.setVisible(True)
             self._redo_top_btn.setVisible(True)
-            can_u = self._viewer.can_undo() if self._viewer and hasattr(self._viewer, "can_undo") else False
-            can_r = self._viewer.can_redo() if self._viewer and hasattr(self._viewer, "can_redo") else False
+            can_u = viewer.can_undo() if viewer and hasattr(viewer, "can_undo") else False
+            can_r = viewer.can_redo() if viewer and hasattr(viewer, "can_redo") else False
             self._undo_top_btn.setEnabled(can_u)
             self._redo_top_btn.setEnabled(can_r)
         elif self._current_tool == edit_idx:
             self._undo_top_btn.setVisible(True)
             self._redo_top_btn.setVisible(True)
             edit_w = self.stack.widget(edit_idx)
-            self._undo_top_btn.setEnabled(bool(getattr(edit_w, "_pending", None)))
-            self._redo_top_btn.setEnabled(bool(getattr(edit_w, "_redo_stack", None)))
+            if isinstance(edit_w, TabEditar):
+                self._undo_top_btn.setEnabled(bool(edit_w._pending))
+                self._redo_top_btn.setEnabled(bool(edit_w._redo_stack))
+            else:
+                self._undo_top_btn.setEnabled(False)
+                self._redo_top_btn.setEnabled(False)
         elif self._current_tool in (crop_idx, page_numbers_idx):
             self._undo_top_btn.setVisible(True)
             self._redo_top_btn.setVisible(True)
@@ -154,9 +227,10 @@ class WindowActionsMixin:
         for i, (name, _, _) in enumerate(NAV_ITEMS):
             if name == tool_name or t(name) == tool_name:
                 for r in range(self.nav.count()):
-                    if self.nav.item(r).data(Qt.ItemDataRole.UserRole) == i:
+                    item = self.nav.item(r)
+                    if item and item.data(Qt.ItemDataRole.UserRole) == i:
                         self.nav.setCurrentRow(r)
-                        self._on_nav_clicked(self.nav.item(r))
+                        self._on_nav_clicked(item)
                         return
                 self._activate_tool(i)
                 return
@@ -169,11 +243,14 @@ class WindowActionsMixin:
             usage = dict(self._tool_usage)
             _update_config(lambda cfg: cfg.__setitem__("tool_usage", usage))
         widget = self.stack.widget(index)
-        path = self._viewer.current_path() if self._viewer else ""
+        if widget is None:
+            return
+        viewer = self._viewer
+        path = viewer.current_path() if viewer else ""
         if path:
-            viewer_pwd = getattr(self._viewer, "_pdf_password", "")
+            viewer_pwd = getattr(viewer, "_pdf_password", "")
             if hasattr(widget, "_pdf_password"):
-                widget._pdf_password = viewer_pwd
+                setattr(widget, "_pdf_password", viewer_pwd)
             fn = getattr(widget, "auto_load", None)
             if callable(fn):
                 fn(path)
@@ -196,8 +273,9 @@ class WindowActionsMixin:
             edit_idx = self._edit_tool_idx()
             if edit_idx >= 0:
                 canvas = getattr(self.stack.widget(edit_idx), '_canvas', None)
-        if canvas is None and self._viewer:
-            canvas = getattr(self._viewer, '_canvas', None)
+        viewer = self._viewer
+        if canvas is None and viewer:
+            canvas = getattr(viewer, '_canvas', None)
         if canvas is None:
             return
         if active:
@@ -210,7 +288,7 @@ class WindowActionsMixin:
     def _activate_tool(self, tool_idx: int):
         for r in range(self.nav.count()):
             it = self.nav.item(r)
-            if it.data(Qt.ItemDataRole.UserRole) == tool_idx:
+            if it and it.data(Qt.ItemDataRole.UserRole) == tool_idx:
                 self.nav.setCurrentRow(r)
                 self._on_nav_clicked(it)
                 return
@@ -220,26 +298,27 @@ class WindowActionsMixin:
         visible_groups = set()
         for r in range(self.nav.count()):
             it = self.nav.item(r)
-            tool_idx = it.data(Qt.ItemDataRole.UserRole)
-            if tool_idx is not None and tool_idx >= 0:
-                match = not q or q in it.text().lower()
-                it.setHidden(not match)
-                if match:
-                    visible_groups.add(r)
+            if it:
+                tool_idx = it.data(Qt.ItemDataRole.UserRole)
+                if tool_idx is not None and tool_idx >= 0:
+                    match = not q or q in it.text().lower()
+                    it.setHidden(not match)
+                    if match:
+                        visible_groups.add(r)
         for r in range(self.nav.count()):
             it = self.nav.item(r)
-            if it.data(Qt.ItemDataRole.UserRole) == -1:
+            if it and it.data(Qt.ItemDataRole.UserRole) == -1:
                 has_visible = False
                 for r2 in range(r + 1, self.nav.count()):
                     it2 = self.nav.item(r2)
-                    if it2.data(Qt.ItemDataRole.UserRole) == -1:
+                    if it2 and it2.data(Qt.ItemDataRole.UserRole) == -1:
                         break
-                    if not it2.isHidden():
+                    if it2 and not it2.isHidden():
                         has_visible = True
                         break
                 it.setHidden(not has_visible)
 
-    def _on_nav_clicked(self, item):
+    def _on_nav_clicked(self, item: QListWidgetItem):
         row = item.data(Qt.ItemDataRole.UserRole)
         if row is None or row < 0:
             self.nav.clearSelection()
@@ -249,6 +328,7 @@ class WindowActionsMixin:
         crop_idx = self._crop_tool_idx()
         reorder_idx = self._reorder_tool_idx()
         page_numbers_idx = self._page_numbers_tool_idx()
+        viewer = self._viewer
 
         if row == self._current_tool:
             self.nav.clearSelection()
@@ -259,14 +339,14 @@ class WindowActionsMixin:
             self._pages_toggle_btn.setVisible(True)
             self._tab_container.setVisible(True)
             self._update_breadcrumb()
-            self._setup_zoom_bar(True, canvas=self._viewer._canvas if self._viewer else None)
-            if self._viewer:
-                self._viewer.set_page_rotations({})
-                self._viewer.set_crop_mode(False)
-                self._viewer.set_crop_preview(None)
-                self._viewer.set_numbers_preview(None)
-                self._viewer.set_page_crops({})
-                self._viewer.set_page_order(None)
+            self._setup_zoom_bar(True, canvas=viewer._canvas if viewer else None)
+            if viewer:
+                viewer.set_page_rotations({})
+                viewer.set_crop_mode(False)
+                viewer.set_crop_preview(None)
+                viewer.set_numbers_preview(None)
+                viewer.set_page_crops({})
+                viewer.set_page_order(None)
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
@@ -284,15 +364,15 @@ class WindowActionsMixin:
                 self._pages_toggle_btn.setVisible(False)
                 self._setup_zoom_bar(True)
                 edit_w = self.stack.widget(edit_idx)
-                if hasattr(edit_w, "_ctrl_scroll"):
+                if isinstance(edit_w, TabEditar):
                     edit_w._ctrl_scroll.setVisible(True)
-                if self._viewer:
-                    self._viewer.set_page_rotations({})
-                    self._viewer.set_crop_mode(False)
-                    self._viewer.set_crop_preview(None)
-                    self._viewer.set_numbers_preview(None)
-                    self._viewer.set_page_crops({})
-                    self._viewer.set_page_order(None)
+                if viewer:
+                    viewer.set_page_rotations({})
+                    viewer.set_crop_mode(False)
+                    viewer.set_crop_preview(None)
+                    viewer.set_numbers_preview(None)
+                    viewer.set_page_crops({})
+                    viewer.set_page_order(None)
             else:
                 self._pages_toggle_btn.setVisible(True)
                 self.stack.setMinimumWidth(320)
@@ -306,38 +386,40 @@ class WindowActionsMixin:
 
                 if row == rotate_idx:
                     rot_w = self.stack.widget(rotate_idx)
-                    rots = getattr(rot_w, "_rotations", {})
-                    if self._viewer:
-                        self._viewer.set_page_rotations(rots)
-                elif self._viewer:
-                    self._viewer.set_page_rotations({})
+                    if isinstance(rot_w, TabRotar) and viewer:
+                        viewer.set_page_rotations(rot_w._rotations)
+                elif viewer:
+                    viewer.set_page_rotations({})
 
                 if row == crop_idx:
                     crop_w = self.stack.widget(crop_idx)
-                    active = crop_w.btn_draw_crop.isChecked()
-                    if self._viewer:
-                        self._viewer.set_crop_mode(active)
-                        crop_w._emit_preview()
-                        self._viewer.set_page_crops(crop_w._applied_crops)
-                elif self._viewer:
-                    self._viewer.set_crop_mode(False)
-                    self._viewer.set_crop_preview(None)
-                    self._viewer.set_page_crops({})
+                    if isinstance(crop_w, TabCortar):
+                        active = crop_w.btn_draw_crop.isChecked()
+                        if viewer:
+                            viewer.set_crop_mode(active)
+                            crop_w._emit_preview()
+                            viewer.set_page_crops(crop_w._applied_crops)
+                elif viewer:
+                    viewer.set_crop_mode(False)
+                    viewer.set_crop_preview(None)
+                    viewer.set_page_crops({})
 
                 if row == page_numbers_idx:
                     pn_w = self.stack.widget(page_numbers_idx)
-                    pn_w._emit_preview()
-                    pn_w._update_undo_redo_state()
-                elif self._viewer:
-                    self._viewer.set_numbers_preview(None)
+                    if isinstance(pn_w, TabPageNumbers):
+                        pn_w._emit_preview()
+                        pn_w._update_undo_redo_state()
+                elif viewer:
+                    viewer.set_numbers_preview(None)
 
                 if row == reorder_idx:
                     reorder_w = self.stack.widget(reorder_idx)
-                    order = getattr(reorder_w, "get_order", lambda: [])()
-                    if order and self._viewer:
-                        self._viewer.set_page_order(order)
-                elif self._viewer:
-                    self._viewer.set_page_order(None)
+                    if isinstance(reorder_w, TabReordenar):
+                        order = reorder_w.get_order()
+                        if order and viewer:
+                            viewer.set_page_order(order)
+                elif viewer:
+                    viewer.set_page_order(None)
 
             self._update_breadcrumb()
             self._try_auto_load(row)
@@ -351,11 +433,12 @@ class WindowActionsMixin:
 
     def _load_and_track(self, path: str):
         path = os.path.abspath(os.path.normpath(path))
-        if self._viewer and self._viewer.current_path():
+        viewer = self._viewer
+        if viewer and viewer.current_path():
             self._add_viewer_tab(path)
-        elif self._viewer:
-            self._viewer.load(path)
-        if self._viewer and self._viewer.current_path():
+        elif viewer:
+            viewer.load(path)
+        if viewer and viewer.current_path():
             add_recent_file(path)
         for v in self._viewers:
             refresh = getattr(v, "_refresh_recents", None)
@@ -363,10 +446,8 @@ class WindowActionsMixin:
                 with contextlib.suppress(Exception):
                     refresh()
         self._refresh_viewer_top_buttons()
-        if hasattr(self, "_update_tab_bar_visibility"):
-            self._update_tab_bar_visibility()
-        if hasattr(self, "_update_breadcrumb"):
-            self._update_breadcrumb()
+        self._update_tab_bar_visibility()
+        self._update_breadcrumb()
 
     def _on_second_instance(self, paths: list):
         _wlog = logging.getLogger(__name__)
@@ -398,16 +479,18 @@ class WindowActionsMixin:
 
     # ── Page navigation ───────────────────────────────────────────────────
     def _update_page_nav(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             self._page_nav_widget.setVisible(False)
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         entries = canvas._entries
         if not entries:
             self._page_nav_widget.setVisible(False)
             return
         self._page_nav_widget.setVisible(True)
-        sb_val = self._viewer._canvas_scroll.verticalScrollBar().value()
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        sb_val = sb.value() if sb else 0
         idx = canvas.page_at_y(sb_val)
         total = len(entries)
         self._page_input.setText(str(idx + 1))
@@ -419,49 +502,58 @@ class WindowActionsMixin:
         self._update_undo_redo_buttons()
 
     def _goto_first_page(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         if not canvas._entries:
             return
-        sb = self._viewer._canvas_scroll.verticalScrollBar()
-        sb.setValue(canvas.scroll_to_page(0))
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        if sb:
+            sb.setValue(canvas.scroll_to_page(0))
 
     def _goto_prev_page(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         if not canvas._entries:
             return
-        sb = self._viewer._canvas_scroll.verticalScrollBar()
-        idx = canvas.page_at_y(sb.value())
-        if idx > 0:
-            sb.setValue(canvas.scroll_to_page(idx - 1))
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        if sb:
+            idx = canvas.page_at_y(sb.value())
+            if idx > 0:
+                sb.setValue(canvas.scroll_to_page(idx - 1))
 
     def _goto_next_page(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         if not canvas._entries:
             return
-        sb = self._viewer._canvas_scroll.verticalScrollBar()
-        idx = canvas.page_at_y(sb.value())
-        if idx < len(canvas._entries) - 1:
-            sb.setValue(canvas.scroll_to_page(idx + 1))
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        if sb:
+            idx = canvas.page_at_y(sb.value())
+            if idx < len(canvas._entries) - 1:
+                sb.setValue(canvas.scroll_to_page(idx + 1))
 
     def _goto_last_page(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         if not canvas._entries:
             return
-        sb = self._viewer._canvas_scroll.verticalScrollBar()
-        sb.setValue(canvas.scroll_to_page(len(canvas._entries) - 1))
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        if sb:
+            sb.setValue(canvas.scroll_to_page(len(canvas._entries) - 1))
 
     def _goto_input_page(self):
-        if not self._viewer:
+        viewer = self._viewer
+        if not viewer:
             return
-        canvas = self._viewer._canvas
+        canvas = viewer._canvas
         if not canvas._entries:
             return
         try:
@@ -470,8 +562,9 @@ class WindowActionsMixin:
             return
         page_num = max(1, min(page_num, len(canvas._entries)))
         self._page_input.setText(str(page_num))
-        sb = self._viewer._canvas_scroll.verticalScrollBar()
-        sb.setValue(canvas.scroll_to_page(page_num - 1))
+        sb = viewer._canvas_scroll.verticalScrollBar()
+        if sb:
+            sb.setValue(canvas.scroll_to_page(page_num - 1))
 
     def _show_language_menu(self):
         _langs = [("en", "English"), ("pt", "Português"), ("es", "Español"), ("fr", "Français"),
@@ -480,7 +573,7 @@ class WindowActionsMixin:
         current = get_language()
         for code, name in _langs:
             action = menu.addAction(f"  {'● ' if code == current else '  '}{name}")
-            action.triggered.connect(lambda checked, c=code, n=name: self._set_language(c, n))
+            action.triggered.connect(lambda checked=False, c=code, n=name: self._set_language(c, n))
         menu.exec(self._lang_btn.mapToGlobal(self._lang_btn.rect().bottomLeft()))
 
     def _set_language(self, code: str, name: str):
@@ -517,9 +610,11 @@ class WindowActionsMixin:
         for _k in list(env.keys()):
             if _k.startswith("_PYI_") or _k.startswith("_MEIPASS"):
                 env.remove(_k)
-        proc.setEnvironment(env)
+        proc.setProcessEnvironment(env)
         proc.startDetached()
-        QApplication.instance().exit(0)
+        app = QApplication.instance()
+        if app is not None:
+            app.exit(0)
 
     def dragEnterEvent(self, e):
         if not e.mimeData().hasUrls():
@@ -559,9 +654,10 @@ class WindowActionsMixin:
                 self._load_and_track(path)
 
     def _toggle_night_mode_top(self):
-        if self._viewer:
+        viewer = self._viewer
+        if viewer:
             active = self._night_top_btn.isChecked()
-            self._viewer._canvas.set_night_mode(active)
+            viewer._canvas.set_night_mode(active)
 
     def _refresh_viewer_top_buttons(self):
         try:
@@ -597,7 +693,7 @@ class WindowActionsMixin:
             return
         canvas = viewer._canvas
         sb = viewer._canvas_scroll.verticalScrollBar()
-        start_page = canvas.page_at_y(sb.value()) if canvas.page_count() > 0 else 0
+        start_page = canvas.page_at_y(sb.value()) if canvas.page_count() > 0 and sb else 0
         try:
             pres = PresentationWidget(
                 viewer._current_path, getattr(viewer, "_pdf_password", ""),
@@ -622,9 +718,10 @@ class WindowActionsMixin:
             self._footer_w.setVisible(False)
             for r in range(self.nav.count()):
                 it = self.nav.item(r)
-                idx = it.data(Qt.ItemDataRole.UserRole)
-                if idx is not None and idx < 0:
-                    it.setHidden(True)
+                if it:
+                    idx = it.data(Qt.ItemDataRole.UserRole)
+                    if idx is not None and idx < 0:
+                        it.setHidden(True)
             self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_bars)
             self.nav.updateGeometries()
             self.nav.viewport().update()
@@ -645,9 +742,10 @@ class WindowActionsMixin:
             self._footer_w.setVisible(True)
             for r in range(self.nav.count()):
                 it = self.nav.item(r)
-                idx = it.data(Qt.ItemDataRole.UserRole)
-                if idx is not None and idx < 0:
-                    it.setHidden(False)
+                if it:
+                    idx = it.data(Qt.ItemDataRole.UserRole)
+                    if idx is not None and idx < 0:
+                        it.setHidden(False)
             self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_times)
             self.nav.updateGeometries()
             self.nav.viewport().update()
@@ -676,27 +774,29 @@ class WindowActionsMixin:
         self._workspace_bar.update_theme(self._dark_mode, self._sidebar_collapsed)
         for r in range(self.nav.count()):
             it = self.nav.item(r)
-            tool_idx = it.data(Qt.ItemDataRole.UserRole)
-            if tool_idx is not None and tool_idx >= 0:
-                _, icon_name, _ = _NAV_KEYS[tool_idx]
-                it.setIcon(qta.icon(icon_name, color=nav_color))
-            else:
-                it.setForeground(QColor(nav_color))
+            if it:
+                tool_idx = it.data(Qt.ItemDataRole.UserRole)
+                if tool_idx is not None and tool_idx >= 0:
+                    _, icon_name, _ = _NAV_KEYS[tool_idx]
+                    it.setIcon(qta.icon(icon_name, color=nav_color))
+                else:
+                    it.setForeground(QColor(nav_color))
         self.nav.viewport().update()
         for v in self._viewers:
             v.update_theme(self._dark_mode)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
-            if hasattr(w, 'update_theme'):
-                w.update_theme(self._dark_mode)
+            fn = getattr(w, "update_theme", None)
+            if callable(fn):
+                fn(self._dark_mode)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
             for cls in (DropFileEdit, MultiDropWidget):
                 for child in w.findChildren(cls):
-                    fn = getattr(child, "update_theme", None)
-                    if callable(fn):
+                    child_fn = getattr(child, "update_theme", None)
+                    if callable(child_fn):
                         try:
-                            fn(self._dark_mode)
+                            child_fn(self._dark_mode)
                         except RuntimeError:
                             pass
         pres = getattr(self, "_presentation", None)

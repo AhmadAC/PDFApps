@@ -1,8 +1,8 @@
-
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
 import json
+from typing import cast
 
 from PySide6.QtCore import Qt, QSize, QTimer, QRect, QModelIndex
 from PySide6.QtGui import (
@@ -63,7 +63,7 @@ class NavItemDelegate(QStyledItemDelegate):
 
     def _is_collapsed(self) -> bool:
         sidebar = self._nav.parent()
-        if sidebar is not None:
+        if isinstance(sidebar, QWidget):
             if sidebar.maximumWidth() <= 60 or sidebar.width() <= 60:
                 return True
         return self._nav.width() <= 60
@@ -367,7 +367,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
                 self._tool_usage = _cfg_data.get("tool_usage", {})
         except Exception:
             pass
-        self._qapp: QApplication = QApplication.instance()
+        self._qapp: QApplication = cast(QApplication, QApplication.instance())
 
         # ── Tool Stack & Right Tool Container ────────────────────────────────
         self.stack = QStackedWidget()

@@ -1,34 +1,66 @@
-
 # app/viewer/panel_history.py
 """PDFApps – Panel history, undo/redo state management, and temp pipeline persistence."""
+from __future__ import annotations
+
 import contextlib
 import os
 import tempfile
+from typing import TYPE_CHECKING, Any
 
 from app.utils import show_error
 from app.pdf_io import atomic_pdf_write
 from app.i18n import t
 
+if TYPE_CHECKING:
+    import fitz
+    from PySide6.QtWidgets import QWidget, QScrollArea, QTabWidget
+    from app.viewer.canvas_1 import _SelectCanvas
+    from app.viewer.thumbnails import ThumbnailPanel
+
 
 class PanelHistoryMixin:
     """Mixin providing undo/redo history and pipeline modification saving."""
 
+    if TYPE_CHECKING:
+        _original_doc_path: str
+        _current_path: str
+        _pdf_password: str
+        _undo_stack: list[dict[str, Any]]
+        _redo_stack: list[dict[str, Any]]
+        _history_temp_files: set[str]
+        _canvas_scroll: QScrollArea
+        _canvas: _SelectCanvas
+        _thumbnails: ThumbnailPanel
+        _sidebar_tabs: QTabWidget
+        _fitz_doc: fitz.Document | None
+
+        def window(self) -> Any: ...
+        def load(
+            self,
+            path: str,
+            target_page: int = 0,
+            target_scroll: int = -1,
+            selected_pages: list[int] | None = None,
+            active_sidebar_tab: Any = None,
+            _is_history_step: bool = False,
+        ) -> None: ...
+
     def _cleanup_history_files(self):
         for path in getattr(self, "_history_temp_files", set()):
-            if path and os.path.isfile(path) and path != self._original_doc_path:
+            if path and os.path.isfile(path) and path != getattr(self, "_original_doc_path", ""):
                 with contextlib.suppress(Exception):
                     os.unlink(path)
         self._history_temp_files = set()
 
     def can_undo(self) -> bool:
-        return len(self._undo_stack) > 0
+        return len(getattr(self, "_undo_stack", [])) > 0
 
     def can_redo(self) -> bool:
-        return len(self._redo_stack) > 0
+        return len(getattr(self, "_redo_stack", [])) > 0
 
     def undo(self):
-        if not self._undo_stack:
-            win = self.window()
+        if not getattr(self, "_undo_stack", None):
+            win: Any = self.window()
             if hasattr(win, "_set_status"):
                 win._set_status("ℹ Nothing to undo")
             return
@@ -65,7 +97,7 @@ class PanelHistoryMixin:
             _is_history_step=True,
         )
 
-        win = self.window()
+        win: Any = self.window()
         vid = id(self)
         if target_path == self._original_doc_path:
             if hasattr(win, "_pipeline_state"):
@@ -109,8 +141,8 @@ class PanelHistoryMixin:
             win._update_page_nav()
 
     def redo(self):
-        if not self._redo_stack:
-            win = self.window()
+        if not getattr(self, "_redo_stack", None):
+            win: Any = self.window()
             if hasattr(win, "_set_status"):
                 win._set_status("ℹ Nothing to redo")
             return
@@ -147,7 +179,7 @@ class PanelHistoryMixin:
             _is_history_step=True,
         )
 
-        win = self.window()
+        win: Any = self.window()
         vid = id(self)
         if target_path == self._original_doc_path:
             if hasattr(win, "_pipeline_state"):
@@ -191,11 +223,11 @@ class PanelHistoryMixin:
     def _save_and_reload(self, doc_to_save, target_page: int | None = None, selected_pages: list[int] | None = None, scroll_to_target: bool = False):
         """Persist modifications to a temporary pipeline file and reload live viewer without modifying original on disk."""
         try:
-            win = self.window()
+            win: Any = self.window()
             vid = id(self)
             ps = getattr(win, "_pipeline_state", None)
 
-            orig_path = self._original_doc_path or self._current_path
+            orig_path = getattr(self, "_original_doc_path", "") or getattr(self, "_current_path", "")
 
             # Preserve current state in undo history before applying new modification
             scroll_val = self._canvas_scroll.verticalScrollBar().value()
@@ -231,8 +263,10 @@ class PanelHistoryMixin:
             current_tab_widget = self._sidebar_tabs.currentWidget()
 
             thumb_scroll_val = 0
-            if hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
-                sb = self._thumbnails._view.verticalScrollBar()
+            thumbnails = getattr(self, "_thumbnails", None)
+            view = getattr(thumbnails, "_view", None) if thumbnails else None
+            if view is not None:
+                sb = view.verticalScrollBar()
                 if sb:
                     thumb_scroll_val = sb.value()
 
@@ -286,10 +320,13 @@ class PanelHistoryMixin:
                 orig_name = os.path.basename(orig_path)
                 win.setWindowTitle(f"{t('app.name')} - ● {orig_name}")
 
-            if not scroll_to_target and thumb_scroll_val > 0 and hasattr(self, "_thumbnails") and getattr(self._thumbnails, "_view", None) is not None:
-                sb = self._thumbnails._view.verticalScrollBar()
-                if sb:
-                    sb.setValue(min(thumb_scroll_val, sb.maximum()))
+            if not scroll_to_target and thumb_scroll_val > 0:
+                thumbnails = getattr(self, "_thumbnails", None)
+                view = getattr(thumbnails, "_view", None) if thumbnails else None
+                if view is not None:
+                    sb = view.verticalScrollBar()
+                    if sb:
+                        sb.setValue(min(thumb_scroll_val, sb.maximum()))
 
             if hasattr(win, "_update_page_nav"):
                 win._update_page_nav()

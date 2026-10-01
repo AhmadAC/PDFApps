@@ -1,20 +1,25 @@
+# app/tools/compress.py
 """PDFApps – TabComprimir: compress PDF tool."""
 
 import contextlib
 import os
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QLabel, QFileDialog, QMessageBox,
-    QProgressDialog,
+    QProgressDialog, QSizePolicy,
 )
+
 from app.base import BasePage
 from app.i18n import t
-from app.utils import (section, info_lbl, _compress_pdf, _find_gs,
-                        show_error, result_label_style,
-                        format_size_localized)
+from app.utils import (
+    section, info_lbl, _compress_pdf, _find_gs,
+    show_error, result_label_style,
+    format_size_localized,
+)
 from app.worker import TaskRunner, run_task
-from app.constants import DESKTOP, TEXT_SEC
+from app.constants import DESKTOP, TEXT_SEC, _LQ
 from app.widgets import DropFileEdit, FocusComboBox
 
 
@@ -30,15 +35,18 @@ class TabComprimir(BasePage):
         sec_src = section(t("tool.compress.source"))
         f.addWidget(sec_src)
         self.drop_in = DropFileEdit()
-        try: self.drop_in.btn.clicked.disconnect()
-        except RuntimeError: pass
+        try:
+            self.drop_in.btn.clicked.disconnect()
+        except RuntimeError:
+            pass
         self.drop_in.btn.clicked.connect(self._pick_input)
         self.drop_in.path_changed.connect(self._load_input)
         self.lbl_info = info_lbl()
-        f.addWidget(self.drop_in); f.addWidget(self.lbl_info)
+        f.addWidget(self.drop_in)
+        f.addWidget(self.lbl_info)
 
         grp = QGroupBox(t("tool.compress.section"))
-        gl  = QFormLayout(grp)
+        gl = QFormLayout(grp)
         gl.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.cmb_level = FocusComboBox()
         self._level_full = [
@@ -52,16 +60,17 @@ class TabComprimir(BasePage):
             self.cmb_level.setItemData(i, full, Qt.ItemDataRole.ToolTipRole)
         self.cmb_level.setCurrentIndex(1)
         self.cmb_level.setMinimumContentsLength(10)
-        from PySide6.QtWidgets import QSizePolicy
         self.cmb_level.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         gl.addRow(t("tool.compress.level_label"), self.cmb_level)
         self._lbl_level_hint = QLabel("")
         self._lbl_level_hint.setWordWrap(True)
         self._lbl_level_hint.setStyleSheet(f"color:{TEXT_SEC}; font-size:10pt;")
         gl.addRow("", self._lbl_level_hint)
+
         def _update_hint(i):
             parts = self._level_full[i].split("—", 1)
             self._lbl_level_hint.setText(parts[1].strip() if len(parts) > 1 else "")
+
         self.cmb_level.currentIndexChanged.connect(_update_hint)
         _update_hint(self.cmb_level.currentIndex())
         f.addWidget(grp)
@@ -81,24 +90,30 @@ class TabComprimir(BasePage):
 
     def update_theme(self, dark: bool) -> None:
         super().update_theme(dark)
-        from app.constants import _LQ
         sec = TEXT_SEC if dark else _LQ
-        try: self.lbl_result.setStyleSheet(result_label_style(dark))
-        except RuntimeError: pass
-        try: self._lbl_level_hint.setStyleSheet(f"color:{sec}; font-size:10pt;")
-        except RuntimeError: pass
+        try:
+            self.lbl_result.setStyleSheet(result_label_style(dark))
+        except RuntimeError:
+            pass
+        try:
+            self._lbl_level_hint.setStyleSheet(f"color:{sec}; font-size:10pt;")
+        except RuntimeError:
+            pass
 
     def _pick_input(self):
         p, _ = QFileDialog.getOpenFileName(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
-        if p: self._load_input(p)
+        if p:
+            self._load_input(p)
 
     def _load_input(self, p: str):
         self.drop_in.blockSignals(True)
         self.drop_in.set_path(p)
         self.drop_in.blockSignals(False)
         if not self._maybe_prompt_password(p):
-            self.drop_in.blockSignals(True); self.drop_in.set_path("")
-            self.drop_in.blockSignals(False); return
+            self.drop_in.blockSignals(True)
+            self.drop_in.set_path("")
+            self.drop_in.blockSignals(False)
+            return
         if not self.drop_out.path():
             base, ext = os.path.splitext(p)
             self.drop_out.set_path(base + "_compressed" + ext)
@@ -107,15 +122,17 @@ class TabComprimir(BasePage):
             r = self._open_reader(p)
             self.lbl_info.setText(t("tool.compress.pages_info", n=len(r.pages),
                                     size=format_size_localized(size / 1024)))
-        except Exception as e: self.lbl_info.setText(t("tool.split.error_info", e=e))
+        except Exception as e:
+            self.lbl_info.setText(t("tool.split.error_info", e=e))
 
     def auto_load(self, path: str):
-        if path and not self.drop_in.path(): self._load_input(path)
+        if path and not self.drop_in.path():
+            self._load_input(path)
 
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
@@ -169,15 +186,15 @@ class TabComprimir(BasePage):
                     _self.progress.emit(pct, label)
                     return True
                 try:
-                    win = self.window()
-                    viewer = getattr(win, "_viewer", None)
-                    if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
-                        viewer._canvas.close_doc()
-                        if viewer._fitz_doc:
+                    win_sub: Any = self.window()
+                    viewer_sub = getattr(win_sub, "_viewer", None)
+                    if viewer_sub and viewer_sub.current_path() and os.path.abspath(viewer_sub.current_path()) == os.path.abspath(out_path):
+                        viewer_sub._canvas.close_doc()
+                        if viewer_sub._fitz_doc:
                             with contextlib.suppress(Exception):
-                                viewer._fitz_doc.close()
-                            viewer._fitz_doc = None
-                        viewer._thumbnails._stop_all_workers()
+                                viewer_sub._fitz_doc.close()
+                            viewer_sub._fitz_doc = None
+                        viewer_sub._thumbnails._stop_all_workers()
 
                     return _compress_pdf(pdf_path, out_path, level,
                                          progress_fn=progress_fn,
@@ -208,13 +225,13 @@ class TabComprimir(BasePage):
             self.lbl_result.setText(msg)
             self._status(f"✔  {msg.strip()}")
 
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            win_done: Any = self.window()
+            viewer_done = getattr(win_done, "_viewer", None)
+            if win_done and hasattr(win_done, "_cleanup_pipeline") and viewer_done:
+                win_done._cleanup_pipeline(id(viewer_done))
 
-            if viewer:
-                viewer.load(out_path)
+            if viewer_done:
+                viewer_done.load(out_path)
 
             gs_hint = "" if _find_gs() else "\n\n" + t("tool.compress.gs_hint")
             QMessageBox.information(self, t("msg.done"),

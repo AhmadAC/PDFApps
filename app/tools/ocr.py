@@ -3,6 +3,7 @@
 import contextlib
 import os
 import tempfile
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -169,7 +170,8 @@ class TabOCR(BasePage):
 
     def _ensure_tesseract(self):
         """Locate Tesseract, set TESSDATA_PREFIX and update available languages."""
-        import pytesseract, sys
+        import sys
+        import pytesseract  # type: ignore
         tess_exe = _find_tesseract()
 
         if tess_exe:
@@ -218,7 +220,7 @@ class TabOCR(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
@@ -237,7 +239,7 @@ class TabOCR(BasePage):
         self.drop_out.set_path(out_path)
 
         try:
-            import pytesseract  # noqa: F401
+            import pytesseract  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.ocr.dep_pytesseract"))
             return
@@ -249,7 +251,7 @@ class TabOCR(BasePage):
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.ocr.dep_pymupdf"))
             return
         try:
-            from PIL import Image  # noqa: F401
+            from PIL import Image  # type: ignore # noqa: F401
         except ImportError:
             QMessageBox.critical(self, t("msg.missing_dep"), t("tool.ocr.dep_pillow"))
             return
@@ -280,8 +282,8 @@ class TabOCR(BasePage):
             def do_work(_self):
                 import io as _io
                 import fitz
-                from PIL import Image
-                import pytesseract
+                from PIL import Image  # type: ignore
+                import pytesseract  # type: ignore
                 doc = fitz.open(pdf_path)
                 if doc.needs_pass:
                     if not (pwd and doc.authenticate(pwd)):
@@ -289,9 +291,10 @@ class TabOCR(BasePage):
                 try:
                     if fmt == 1:
                         texts = []
-                        for i, page in enumerate(doc):
+                        for i in range(len(doc)):
                             if _self.is_cancelled():
                                 return None
+                            page = doc[i]
                             _self.progress.emit(
                                 i, t("progress.ocr.page",
                                      current=i + 1, total=n_pages))
@@ -319,9 +322,10 @@ class TabOCR(BasePage):
                             raise
                     else:
                         writer = PdfWriter()
-                        for i, page in enumerate(doc):
+                        for i in range(len(doc)):
                             if _self.is_cancelled():
                                 return None
+                            page = doc[i]
                             _self.progress.emit(
                                 i, t("progress.ocr.page",
                                      current=i + 1, total=n_pages))
@@ -334,13 +338,17 @@ class TabOCR(BasePage):
                                 "RGB", (pix.width, pix.height), pix.samples)
                             page_bytes = pytesseract.image_to_pdf_or_hocr(
                                 img, lang=lang, extension="pdf")
+                            page_data: bytes = (
+                                page_bytes if isinstance(page_bytes, bytes)
+                                else page_bytes.encode("latin-1")
+                            )
                             writer.append(
-                                PdfReader(_io.BytesIO(page_bytes)))
+                                PdfReader(_io.BytesIO(page_data)))
                             pix = None
                             img.close()
                             del page_bytes
 
-                        win = self.window()
+                        win: Any = self.window()
                         viewer = getattr(win, "_viewer", None)
                         if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                             viewer._canvas.close_doc()
@@ -365,12 +373,13 @@ class TabOCR(BasePage):
                 return
             self._status(t("tool.ocr.status.done", path=result))
 
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+            if callable(cleanup_fn) and viewer:
+                cleanup_fn(id(viewer))
 
-            if viewer and result.lower().endswith(".pdf"):
+            if viewer and isinstance(result, str) and result.lower().endswith(".pdf"):
                 viewer.load(result)
 
             QMessageBox.information(self, t("msg.done"),

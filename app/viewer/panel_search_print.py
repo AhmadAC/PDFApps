@@ -11,9 +11,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+from typing import TYPE_CHECKING
 
 import fitz
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
 from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 from PySide6.QtWidgets import (
@@ -42,6 +43,12 @@ import qtawesome as qta
 from app.constants import ACCENT, BG_CARD, BG_INNER, BORDER, TEXT_PRI, TEXT_SEC, _LQ
 from app.i18n import t
 from app.utils import parse_pages, show_error
+
+if TYPE_CHECKING:
+    from app.viewer.canvas_1 import _SelectCanvas
+    _Base = QWidget
+else:
+    _Base = object
 
 _log = logging.getLogger(__name__)
 
@@ -130,10 +137,14 @@ class _FastPrintWorker(QThread):
     def _run_socket(self):
         ip = self.target
         port = int(self.kwargs.get("port", 9100))
-        data = self.payload_or_pdf
-        if isinstance(data, str) and os.path.isfile(data):
-            with open(data, "rb") as f:
-                data = f.read()
+        if isinstance(self.payload_or_pdf, str):
+            if os.path.isfile(self.payload_or_pdf):
+                with open(self.payload_or_pdf, "rb") as f:
+                    data: bytes = f.read()
+            else:
+                data = self.payload_or_pdf.encode("latin-1")
+        else:
+            data = self.payload_or_pdf
 
         total = len(data)
         self.progress.emit(10, f"Connecting to {ip}:{port}...")
@@ -595,7 +606,6 @@ class _PdfPrintDialog(QDialog):
 
         # Discover system printers
         printers = QPrinterInfo.availablePrinters()
-        default_p = QPrinterInfo.defaultPrinterName()
 
         for p in printers:
             p_name = p.printerName()
@@ -875,8 +885,22 @@ class _PdfPrintDialog(QDialog):
         super().closeEvent(event)
 
 
-class PanelSearchPrintMixin:
+class PanelSearchPrintMixin(_Base):
     """Mixin for in-document text search bar and high-speed custom print dialog."""
+
+    if TYPE_CHECKING:
+        _current_path: str
+        _pdf_password: str
+        _fitz_doc: fitz.Document | None
+        _search_bar: QWidget
+        _search_input: QLineEdit
+        _search_lbl: QLabel
+        _search_results: list[tuple[int, list]]
+        _search_current: int
+        _search_debounce: QTimer
+        _pending_search_query: str
+        _canvas: _SelectCanvas
+        _canvas_scroll: QScrollArea
 
     def _toggle_search(self):
         if self._search_bar.isVisible():
@@ -976,7 +1000,9 @@ class PanelSearchPrintMixin:
             _, cur_rect = all_highlights[self._search_current]
             z = self._canvas._zoom
             y_target = entry.y_off + int(cur_rect.y0 * z) - 100
-            self._canvas_scroll.verticalScrollBar().setValue(max(0, y_target))
+            sb = self._canvas_scroll.verticalScrollBar()
+            if sb:
+                sb.setValue(max(0, y_target))
         self._canvas.update()
 
     def _reset_search_state(self):

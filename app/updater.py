@@ -8,10 +8,10 @@ import sys
 import tempfile
 import urllib.request
 
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt, Signal, QObject, QThread
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
-    QMessageBox, QTextEdit,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QProgressBar, QMessageBox, QTextEdit,
 )
 
 from app.constants import APP_VERSION, GITHUB_REPO, ACCENT, TEXT_SEC, _LQ
@@ -347,14 +347,14 @@ def _apply_update_windows(downloaded_installer: str):
         raise OSError(f"ShellExecuteW failed (code {ret})")
 
 
-
 def _apply_update_macos_dmg(dmg_path: str):
     """Open the DMG so the user can drag the new .app to Applications."""
     import subprocess
     subprocess.Popen(["open", dmg_path])
     # App should quit so user can replace it in /Applications
-    import PySide6.QtWidgets as _qw
-    _qw.QApplication.instance().quit()
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 def _apply_update_unix(downloaded: str):
@@ -508,7 +508,7 @@ class UpdateDialog(QDialog):
         # once the thread's C++ object is torn down (finished -> deleteLater)
         # so reject()/closeEvent never call .isRunning() on a dangling
         # wrapper (RuntimeError: Internal C++ object already deleted).
-        self._dl_thread = None
+        self._dl_thread: QThread | None = None
         self._dest = ""
         # Holder for the in-flight urlopen response so closeEvent/reject
         # can abort a blocked read() immediately (urlopen.read() blocks
@@ -518,8 +518,10 @@ class UpdateDialog(QDialog):
         self._cancel_holder: dict = {"resp": None, "cancelled": False}
 
     def _start_download(self):
+        if not self._asset:
+            return
+
         from app.i18n import t
-        from PySide6.QtCore import QThread
 
         self._update_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
@@ -566,28 +568,29 @@ class UpdateDialog(QDialog):
         self._signals.error.connect(self._on_error)
         self._signals.cancelled.connect(self._on_cancelled)
 
-        self._dl_thread = QThread()
+        thread = QThread()
+        self._dl_thread = thread
         self._dl_worker = _Worker(url, self._dest, self._signals,
                                   expected_hash, self._cancel_holder)
-        self._dl_worker.moveToThread(self._dl_thread)
-        self._dl_thread.started.connect(self._dl_worker.run)
-        self._signals.finished.connect(self._dl_thread.quit)
-        self._signals.error.connect(self._dl_thread.quit)
-        self._signals.cancelled.connect(self._dl_thread.quit)
+        self._dl_worker.moveToThread(thread)
+        thread.started.connect(self._dl_worker.run)
+        self._signals.finished.connect(thread.quit)
+        self._signals.error.connect(thread.quit)
+        self._signals.cancelled.connect(thread.quit)
         # Explicit cleanup so retries within the same dialog (e.g. after
         # an error toast) don't leak QThread and _Worker objects. Mirrors
         # the pattern in update_controller.py:_update_thread.finished -> deleteLater.
-        self._dl_thread.finished.connect(self._dl_thread.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         # Root-cause fix for the dangling-wrapper bug: once the thread is
         # done (success, error OR cancel) drop our Python reference so the
         # pending deleteLater can free the C++ object without leaving
         # reject()/closeEvent holding a stale wrapper. Mirrors the
         # release_worker pattern in update_controller.py.
-        self._dl_thread.finished.connect(self._on_dl_thread_finished)
+        thread.finished.connect(self._on_dl_thread_finished)
         self._signals.finished.connect(self._dl_worker.deleteLater)
         self._signals.error.connect(self._dl_worker.deleteLater)
         self._signals.cancelled.connect(self._dl_worker.deleteLater)
-        self._dl_thread.start()
+        thread.start()
 
     def _on_progress(self, pct: int):
         # Queued from the worker thread — by the time we run, the user
@@ -634,8 +637,9 @@ class UpdateDialog(QDialog):
                     self, "PDFApps",
                     t("update.restart"),
                 )
-                import PySide6.QtWidgets as _qw
-                _qw.QApplication.instance().quit()
+                app = QApplication.instance()
+                if app is not None:
+                    app.quit()
             else:
                 _apply_update_unix(path)
         except Exception as exc:
@@ -721,25 +725,27 @@ class UpdateDialog(QDialog):
     def closeEvent(self, event):
         """Clean up download thread if dialog is closed mid-download."""
         self._stop_dots_animation()
-        if self._dl_thread_running():
+        thread = self._dl_thread
+        if thread is not None and self._dl_thread_running():
             self._abort_download()
-            self._dl_thread.quit()
+            thread.quit()
             # Short wait — read() is already unblocked by _abort_download
             # so 500 ms is plenty for the worker to drop out and emit
             # cancelled. If something pathological keeps it running,
             # terminate() rather than hang the GUI for 3 s.
-            if not self._dl_thread.wait(500):
-                self._dl_thread.terminate()
-                self._dl_thread.wait(500)
+            if not thread.wait(500):
+                thread.terminate()
+                thread.wait(500)
         super().closeEvent(event)
 
     def reject(self):
         """Handle Cancel button — also cleans up thread."""
         self._stop_dots_animation()
-        if self._dl_thread_running():
+        thread = self._dl_thread
+        if thread is not None and self._dl_thread_running():
             self._abort_download()
-            self._dl_thread.quit()
-            if not self._dl_thread.wait(500):
-                self._dl_thread.terminate()
-                self._dl_thread.wait(500)
+            thread.quit()
+            if not thread.wait(500):
+                thread.terminate()
+                thread.wait(500)
         super().reject()

@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -133,7 +134,7 @@ class TabNUp(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
@@ -233,7 +234,7 @@ class TabNUp(BasePage):
                     if worker.is_cancelled():
                         return None
 
-                    win = self.window()
+                    win: Any = self.window()
                     viewer = getattr(win, "_viewer", None)
                     if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                         viewer._canvas.close_doc()
@@ -260,10 +261,11 @@ class TabNUp(BasePage):
             self._status(t("tool.nup.status.done", name=os.path.basename(saved)))
             msg = t("tool.nup.done", path=saved)
 
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+            if callable(cleanup_fn) and viewer:
+                cleanup_fn(id(viewer))
 
             if viewer:
                 viewer.load(saved)

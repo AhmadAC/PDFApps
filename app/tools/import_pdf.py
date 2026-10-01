@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+from typing import Any, cast
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -205,7 +206,7 @@ class TabImport(BasePage):
                 doc.close()
                 return _NoContent()
             try:
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -257,7 +258,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent(skipped)
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -321,7 +322,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -388,7 +389,8 @@ class TabImport(BasePage):
                     lines = []
                     for para in dx.paragraphs:
                         text = para.text.strip()
-                        style = (para.style.name or "").lower()
+                        p_style = para.style
+                        style = (p_style.name or "").lower() if p_style is not None else ""
                         if "heading 1" in style:
                             lines.append((text, 18, True))
                         elif "heading 2" in style:
@@ -415,7 +417,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -461,9 +463,12 @@ class TabImport(BasePage):
                         page = doc.new_page(width=slide_w, height=slide_h)
                         y = 40
                         for shape in slide.shapes:
-                            if not shape.has_text_frame:
+                            if not getattr(shape, "has_text_frame", False):
                                 continue
-                            for para in shape.text_frame.paragraphs:
+                            tf = getattr(shape, "text_frame", None)
+                            if tf is None:
+                                continue
+                            for para in tf.paragraphs:
                                 text = para.text.strip()
                                 if not text:
                                     continue
@@ -471,15 +476,17 @@ class TabImport(BasePage):
                                 bold = False
                                 if para.runs:
                                     r = para.runs[0]
-                                    if r.font.size:
-                                        size = min(36, r.font.size.pt)
-                                    bold = bool(r.font.bold)
-                                font = "hebo" if bold else "helv"
+                                    font = getattr(r, "font", None)
+                                    if font is not None and getattr(font, "size", None):
+                                        size = min(36, font.size.pt)
+                                    if font is not None:
+                                        bold = bool(getattr(font, "bold", False))
+                                font_name = "hebo" if bold else "helv"
                                 if y + size > slide_h - 20:
                                     break
                                 try:
                                     page.insert_text(fitz.Point(40, y), text,
-                                                     fontsize=size, fontname=font)
+                                                     fontsize=size, fontname=font_name)
                                 except Exception:
                                     page.insert_text(fitz.Point(40, y), text,
                                                      fontsize=size, fontname="helv")
@@ -492,7 +499,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -546,7 +553,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -592,7 +599,7 @@ class TabImport(BasePage):
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -641,44 +648,58 @@ class TabImport(BasePage):
         return lines
 
     def _convert_epub(self, sources: list, out_path: str):
-        try:
-            import ebooklib  # noqa: F401
-            from ebooklib import epub  # noqa: F401
-        except ImportError:
-            QMessageBox.critical(self, t("msg.missing_dep"), t("tool.convert.dep_epub"))
-            return
-        try:
-            from bs4 import BeautifulSoup  # noqa: F401
-        except ImportError:
-            QMessageBox.critical(self, t("msg.missing_dep"), t("tool.import.dep_bs4"))
-            return
         n = len(sources)
 
         def do_work(worker):
-            import ebooklib
-            from ebooklib import epub
-            from bs4 import BeautifulSoup
             import fitz
             doc = fitz.open()
             try:
                 for i, src in enumerate(sources):
                     if worker.is_cancelled():
                         return None
-                    book = epub.read_epub(src)
-                    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-                        if worker.is_cancelled():
-                            return None
-                        soup = BeautifulSoup(item.get_content(), "html.parser")
-                        lines = self._html_to_lines(soup)
-                        if lines:
-                            self._render_lines_to_doc(doc, lines)
+                    converted = False
+                    try:
+                        epub_doc = fitz.open(src)
+                        try:
+                            pdf_bytes = epub_doc.convert_to_pdf()
+                            pdf_part = fitz.open("pdf", pdf_bytes)
+                            try:
+                                doc.insert_pdf(pdf_part)
+                            finally:
+                                pdf_part.close()
+                            converted = True
+                        finally:
+                            epub_doc.close()
+                    except Exception:
+                        converted = False
+
+                    if not converted:
+                        try:
+                            epub_doc = fitz.open(src)
+                            try:
+                                lines = []
+                                for page in epub_doc:
+                                    raw_text = page.get_text("text")
+                                    text: str = cast(str, raw_text if isinstance(raw_text, str) else str(raw_text or ""))
+                                    for line in text.split("\n"):
+                                        if line.strip():
+                                            lines.append((line.strip(), 10, False))
+                                        else:
+                                            lines.append(("", 10, False))
+                                if lines:
+                                    self._render_lines_to_doc(doc, lines)
+                            finally:
+                                epub_doc.close()
+                        except Exception:
+                            pass
                     worker.progress.emit(i + 1, f"{i + 1}/{n}…")
+
                 if worker.is_cancelled():
                     return None
                 if doc.page_count == 0:
                     return _NoContent()
 
-                win = self.window()
+                win: Any = self.window()
                 viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path() and os.path.abspath(viewer.current_path()) == os.path.abspath(out_path):
                     viewer._canvas.close_doc()
@@ -734,10 +755,11 @@ class TabImport(BasePage):
         self.lbl_result.setText(f"  \u2192 {os.path.basename(out_path)}")
         self._status(t("tool.import.status.done", path=out_path))
 
-        win = self.window()
+        win: Any = self.window()
         viewer = getattr(win, "_viewer", None)
-        if win and hasattr(win, "_cleanup_pipeline") and viewer:
-            win._cleanup_pipeline(id(viewer))
+        cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+        if callable(cleanup_fn) and viewer:
+            cleanup_fn(id(viewer))
 
         if viewer:
             viewer.load(out_path)

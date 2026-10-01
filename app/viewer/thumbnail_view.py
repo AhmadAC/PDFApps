@@ -170,8 +170,9 @@ class ThumbnailListView(QListView):
             self.viewport().update()
 
     def _update_drop_target(self, pos: QPoint) -> int:
-        count = self.model().rowCount() if self.model() else 0
-        if count == 0:
+        m = self.model()
+        count = m.rowCount() if m is not None else 0
+        if count == 0 or m is None:
             self._drop_target_row = -1
             self.viewport().update()
             return -1
@@ -184,8 +185,8 @@ class ThumbnailListView(QListView):
             else:
                 target = idx.row() + 1
         else:
-            first_rect = self.visualRect(self.model().index(0))
-            last_rect = self.visualRect(self.model().index(count - 1))
+            first_rect = self.visualRect(m.index(0, 0))
+            last_rect = self.visualRect(m.index(count - 1, 0))
             if pos.y() <= first_rect.top():
                 target = 0
             elif pos.y() >= last_rect.bottom():
@@ -193,7 +194,7 @@ class ThumbnailListView(QListView):
             else:
                 target = count
                 for r in range(count):
-                    r_rect = self.visualRect(self.model().index(r))
+                    r_rect = self.visualRect(m.index(r, 0))
                     if pos.y() < r_rect.bottom():
                         target = r if pos.y() < r_rect.center().y() else r + 1
                         break
@@ -215,7 +216,8 @@ class ThumbnailListView(QListView):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-pdfapps-thumbnail-pages"):
-            if not self.model() or self.model().rowCount() <= 1:
+            m = self.model()
+            if not m or m.rowCount() <= 1:
                 event.ignore()
                 return
             event.acceptProposedAction()
@@ -291,18 +293,19 @@ class ThumbnailListView(QListView):
         super().paintEvent(event)
 
         # Draw insertion line when hovering during drag
+        m = self.model()
         if (
             self._drop_target_row >= 0
-            and self.model()
-            and self.model().rowCount() > 0
+            and m is not None
+            and m.rowCount() > 0
         ):
-            count = self.model().rowCount()
+            count = m.rowCount()
             target = max(0, min(self._drop_target_row, count))
             if target < count:
-                rect = self.visualRect(self.model().index(target))
+                rect = self.visualRect(m.index(target, 0))
                 y = rect.top()
             else:
-                rect = self.visualRect(self.model().index(count - 1))
+                rect = self.visualRect(m.index(count - 1, 0))
                 y = rect.bottom()
 
             y_draw = max(2, min(y, self.viewport().height() - 2))

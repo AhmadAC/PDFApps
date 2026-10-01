@@ -3,6 +3,7 @@
 """PDFApps – TabCortar: crop PDF pages tool."""
 import contextlib
 import os
+from typing import Sequence, Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -651,7 +652,7 @@ class TabCortar(BasePage):
         h_mm = h * 25.4 / 72.0
         self.lbl_dimensions.setText(f"📐  {w:.0f} × {h:.0f} pt  ({w_mm:.0f} × {h_mm:.0f} mm)")
 
-    def _on_controls_changed(self):
+    def _on_controls_changed(self, *_args: Any):
         if self._updating:
             return
         self._update_dim_label()
@@ -674,9 +675,9 @@ class TabCortar(BasePage):
     def apply_crop_preview(self):
         """Commit the current margin controls into the applied in-memory crop state."""
         pdf_path = self.drop_in.path()
+        win: Any = self.window()
+        viewer = getattr(win, "_viewer", None)
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -757,9 +758,9 @@ class TabCortar(BasePage):
 
     def _on_crop_history_changed(self):
         pdf_path = self.drop_in.path()
+        win: Any = self.window()
+        viewer = getattr(win, "_viewer", None)
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
         ref_idx = max(0, min(self.spin_current_page.value() - 1, self._page_count - 1))
@@ -790,18 +791,26 @@ class TabCortar(BasePage):
         self.btn_undo.setEnabled(len(self._undo_stack) > 0)
         self.btn_redo.setEnabled(len(self._redo_stack) > 0)
 
-    def on_canvas_crop_selected(self, page_idx: int, rect: tuple):
+    def on_canvas_crop_selected(self, page_idx: int, rect: Sequence[float]):
         """Called when the user drags a rubber-band rectangle on the viewer canvas."""
         if len(rect) >= 6:
-            p_x0, p_y0, p_x1, p_y1, pw, ph = rect[:6]
+            p_x0 = float(rect[0])
+            p_y0 = float(rect[1])
+            p_x1 = float(rect[2])
+            p_y1 = float(rect[3])
+            pw = float(rect[4])
+            ph = float(rect[5])
             self._ref_width = pw
             self._ref_height = ph
-        else:
-            p_x0, p_y0, p_x1, p_y1 = rect
+        elif len(rect) >= 4:
+            p_x0 = float(rect[0])
+            p_y0 = float(rect[1])
+            p_x1 = float(rect[2])
+            p_y1 = float(rect[3])
             doc_path = self.drop_in.path()
+            win: Any = self.window()
+            viewer = getattr(win, "_viewer", None)
             if not doc_path or not os.path.isfile(doc_path):
-                win = self.window()
-                viewer = getattr(win, "_viewer", None)
                 if viewer and viewer.current_path():
                     doc_path = viewer.current_path()
             if doc_path and os.path.isfile(doc_path):
@@ -818,6 +827,8 @@ class TabCortar(BasePage):
                     doc.close()
                 except Exception:
                     pass
+        else:
+            return
 
         left = max(0.0, p_x0)
         top = max(0.0, p_y0)
@@ -899,9 +910,9 @@ class TabCortar(BasePage):
 
     def _run(self):
         pdf_path = self.drop_in.path()
+        win: Any = self.window()
+        viewer = getattr(win, "_viewer", None)
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -953,9 +964,6 @@ class TabCortar(BasePage):
             return
         self.drop_out.set_path(out_path)
 
-        win = self.window()
-        viewer = getattr(win, "_viewer", None)
-
         try:
             doc = self._open_fitz(pdf_path)
             try:
@@ -986,8 +994,9 @@ class TabCortar(BasePage):
             self._status(t("tool.crop.status.done", name=os.path.basename(out_path)))
             msg = t("tool.crop.done", path=out_path)
 
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+            if callable(cleanup_fn) and viewer:
+                cleanup_fn(id(viewer))
 
             if viewer:
                 viewer.load(out_path)

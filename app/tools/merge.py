@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+from typing import Any
 
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
@@ -127,7 +128,7 @@ class TabJuntar(BasePage):
             return
         self.drop_out.set_path(out_path)
         
-        win = self.window()
+        win: Any = self.window()
         viewer = getattr(win, "_viewer", None)
 
         try:
@@ -156,8 +157,9 @@ class TabJuntar(BasePage):
             self._status(t("tool.merge.status.done", name=os.path.basename(out_path)))
             msg = t("tool.merge.done", path=out_path)
 
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+            if callable(cleanup_fn) and viewer:
+                cleanup_fn(id(viewer))
 
             if viewer:
                 viewer.load(out_path)

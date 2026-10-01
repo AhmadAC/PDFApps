@@ -1,3 +1,4 @@
+# app/viewer/presentation.py
 """PDFApps – Presentation mode: fullscreen single-page viewer with page transitions and auto-advance."""
 
 import contextlib
@@ -49,9 +50,9 @@ class PresentationWidget(QWidget):
         self._hud_last_shown_ms = 0.0
 
         # Zoom and Pan state
-        self._zoom_factor = 1.0
-        self._pan_x = 0
-        self._pan_y = 0
+        self._zoom_factor: float = 1.0
+        self._pan_x: int = 0
+        self._pan_y: int = 0
         self._is_panning = False
         self._pan_start_pos = QPoint()
         self._pan_start_offset = QPoint()
@@ -152,9 +153,9 @@ class PresentationWidget(QWidget):
         max_pan = max(0.0, (ph - sh) / 2.0) + (sh * 0.35 if ph > sh else sh * 0.45)
 
         if up:
-            self._pan_y = min(max_pan, self._pan_y + amount)
+            self._pan_y = int(round(min(max_pan, self._pan_y + amount)))
         else:
-            self._pan_y = max(-max_pan, self._pan_y - amount)
+            self._pan_y = int(round(max(-max_pan, self._pan_y - amount)))
 
         self.update()
 
@@ -518,7 +519,7 @@ class PresentationWidget(QWidget):
                  self._overlay.tool() == int(ToolMode.POINTER) and self._zoom_factor > 1.0)):
             self._is_panning = True
             self._pan_start_pos = e.position().toPoint()
-            self._pan_start_offset = QPoint(self._pan_x, self._pan_y)
+            self._pan_start_offset = QPoint(int(self._pan_x), int(self._pan_y))
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             e.accept()
             return
@@ -528,8 +529,8 @@ class PresentationWidget(QWidget):
         self._show_hud()
         if self._is_panning:
             delta = e.position().toPoint() - self._pan_start_pos
-            self._pan_x = self._pan_start_offset.x() + delta.x()
-            self._pan_y = self._pan_start_offset.y() + delta.y()
+            self._pan_x = int(self._pan_start_offset.x() + delta.x())
+            self._pan_y = int(self._pan_start_offset.y() + delta.y())
             self.update()
             e.accept()
             return

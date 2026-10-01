@@ -1,3 +1,4 @@
+# app\viewer\annotation_layer.py
 """PDFApps – Annotation overlay for presentation mode (pen, highlighter, eraser, laser, type)."""
 
 from __future__ import annotations
@@ -633,8 +634,9 @@ class AnnotationOverlay(QWidget):
         pos_f = QPointF(pos)
 
         parent = self.parentWidget()
-        if parent is not None and hasattr(parent, "_show_hud"):
-            parent._show_hud()
+        show_hud_fn = getattr(parent, "_show_hud", None)
+        if callable(show_hud_fn):
+            show_hud_fn()
 
         # Check resize handles on active box
         if self._active_box is not None:
@@ -737,8 +739,9 @@ class AnnotationOverlay(QWidget):
 
     def mouseMoveEvent(self, e):
         parent = self.parentWidget()
-        if parent is not None and hasattr(parent, "_show_hud"):
-            parent._show_hud()
+        show_hud_fn = getattr(parent, "_show_hud", None)
+        if callable(show_hud_fn):
+            show_hud_fn()
         pos = e.position().toPoint()
         pos_f = QPointF(pos)
 

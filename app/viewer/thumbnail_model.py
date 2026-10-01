@@ -41,10 +41,10 @@ class ThumbnailModel(QAbstractListModel):
         self._doc_path = ""
         self._page_order: list[int] | None = None
 
-    def rowCount(self, parent=QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self._page_count
 
-    def flags(self, index: QModelIndex) -> Qt.ItemFlags:
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         default_flags = super().flags(index)
         if index.isValid():
             return default_flags | Qt.ItemFlag.ItemIsDragEnabled
@@ -224,9 +224,8 @@ class ThumbnailDelegate(QStyledItemDelegate):
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "…")
 
         # Centered page number displaying "1 / N"
-        total = self._total_pages or (
-            index.model().rowCount() if index.model() else 0
-        )
+        m = index.model()
+        total = self._total_pages or (m.rowCount() if m else 0)
         label_text = (
             f"{page_idx + 1} / {total}" if total > 0 else str(page_idx + 1)
         )

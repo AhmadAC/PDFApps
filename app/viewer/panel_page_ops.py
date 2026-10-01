@@ -1,10 +1,12 @@
-#################### START OF FILE: app/viewer/panel_page_ops.py ####################
-
 # app/viewer/panel_page_ops.py
 """PDFApps – Multi-page operations, drag/drop reordering, and thumbnail action handlers."""
+from __future__ import annotations
+
 import os
 import re
+from typing import TYPE_CHECKING, Any
 
+import fitz
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,20 +23,26 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QVBoxLayout,
+    QWidget,
 )
-import fitz
 
 from app.constants import DESKTOP
 from app.i18n import t
 from app.pdf_io import atomic_pdf_write
 from app.utils import parse_pages, show_error
 
+if TYPE_CHECKING:
+    _Base = QWidget
+else:
+    _Base = object
+
 
 class _PageTransitionsDialog(QDialog):
     """Dialog to configure presentation page transitions and auto-advance timing."""
 
-    def __init__(self, parent, pages: list[int], total_pages: int, current_info: dict | None = None):
+    def __init__(self, parent: QWidget | None, pages: list[int], total_pages: int, current_info: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle(t("viewer.transitions", default="Page Transitions"))
         self.setMinimumWidth(400)
@@ -210,8 +218,28 @@ class _PageTransitionsDialog(QDialog):
         }
 
 
-class PanelPageOpsMixin:
+class PanelPageOpsMixin(_Base):
     """Mixin for page modification, reordering, extraction, and insertion."""
+
+    if TYPE_CHECKING:
+        _current_path: str
+        _original_doc_path: str
+        _fitz_doc: fitz.Document | None
+        _pdf_password: str
+        _pages_sidebar_collapsed: bool
+        _saved_sidebar_width: int
+        _viewer_splitter: QSplitter
+
+        def undo(self) -> None: ...
+        def redo(self) -> None: ...
+        def _save_and_reload(
+            self,
+            doc_to_save: fitz.Document,
+            target_page: int | None = None,
+            selected_pages: list[int] | None = None,
+            scroll_to_target: bool = False,
+        ) -> None: ...
+        def _print_pdf(self, page_indices: list[int] | None = None) -> None: ...
 
     def _set_sidebar_width(self, target_w: int) -> None:
         target_w = max(70, min(600, target_w))
@@ -308,7 +336,7 @@ class PanelPageOpsMixin:
             self._paste_page_content(pages[0])
 
     @staticmethod
-    def _get_page_transition_info(doc, page_idx: int) -> dict:
+    def _get_page_transition_info(doc: fitz.Document, page_idx: int) -> dict:
         info = {
             "effect": "None",
             "duration": 1.0,
@@ -413,8 +441,8 @@ class PanelPageOpsMixin:
                         doc.xref_set_key(page.xref, "Dur", "null")
 
             self._save_and_reload(doc, target_page=target_pages[0], selected_pages=target_pages)
-            win = self.window()
-            if hasattr(win, "_set_status"):
+            win: Any = self.window()
+            if win and hasattr(win, "_set_status"):
                 desc = "removed" if effect == "None" else f"'{effect}'"
                 win._set_status(f"✔ Page transition {desc} applied to {len(target_pages)} page(s)")
         except Exception as exc:
@@ -429,8 +457,8 @@ class PanelPageOpsMixin:
             for page in doc:
                 doc.xref_set_key(page.xref, "Thumb", "null")
             self._save_and_reload(doc)
-            win = self.window()
-            if hasattr(win, "_set_status"):
+            win: Any = self.window()
+            if win and hasattr(win, "_set_status"):
                 win._set_status("✔ Removed embedded page thumbnails")
             QMessageBox.information(self, t("msg.done"), "Removed all embedded page thumbnails.")
         except Exception as exc:
@@ -641,8 +669,8 @@ class PanelPageOpsMixin:
             target_view_page = dest_pos
             self._save_and_reload(new_doc, target_page=target_view_page, selected_pages=new_selected, scroll_to_target=True)
 
-            win = self.window()
-            if hasattr(win, "_set_status"):
+            win: Any = self.window()
+            if win and hasattr(win, "_set_status"):
                 win._set_status(f"✔ Moved {len(pages)} page(s)")
         except Exception as exc:
             show_error(self, exc)
@@ -706,21 +734,25 @@ class PanelPageOpsMixin:
     def _copy_page_content(self, pages: list[int]) -> None:
         if not self._fitz_doc:
             return
-        texts = []
+        texts: list[str] = []
         for p_idx in pages:
             if 0 <= p_idx < self._fitz_doc.page_count:
-                t_str = self._fitz_doc[p_idx].get_text("text").strip()
+                raw_text = self._fitz_doc[p_idx].get_text("text")
+                t_str = raw_text.strip() if isinstance(raw_text, str) else str(raw_text).strip()
                 if t_str:
                     texts.append(t_str)
         if texts:
             combined = "\n\n--- Page Break ---\n\n".join(texts)
-            QApplication.clipboard().setText(combined)
-            win = self.window()
-            if hasattr(win, "_set_status"):
+            cb = QApplication.clipboard()
+            if cb is not None:
+                cb.setText(combined)
+            win: Any = self.window()
+            if win and hasattr(win, "_set_status"):
                 win._set_status(f"✔ Copied text from {len(texts)} page(s) to clipboard")
 
     def _paste_page_content(self, page_idx: int) -> None:
-        text = QApplication.clipboard().text().strip()
+        cb = QApplication.clipboard()
+        text = cb.text().strip() if cb is not None else ""
         if not text:
             return
         try:
@@ -740,13 +772,13 @@ class PanelPageOpsMixin:
     def _show_properties_dialog(self) -> None:
         if not self._current_path or not os.path.isfile(self._current_path):
             return
-        win = self.window()
-        if hasattr(win, "_open_tool_by_name"):
+        win: Any = self.window()
+        if win and hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.info"))
 
     def _trigger_crop_tool(self, pages: list[int] | None = None) -> None:
-        win = self.window()
-        if hasattr(win, "_open_tool_by_name"):
+        win: Any = self.window()
+        if win and hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.crop"))
             if pages and hasattr(win, "stack") and hasattr(win, "_crop_tool_idx"):
                 crop_idx = win._crop_tool_idx()
@@ -757,8 +789,8 @@ class PanelPageOpsMixin:
                         crop_w.edit_custom_pages.setText(",".join(str(p + 1) for p in pages))
 
     def _trigger_page_numbers_tool(self, pages: list[int] | None = None) -> None:
-        win = self.window()
-        if hasattr(win, "_open_tool_by_name"):
+        win: Any = self.window()
+        if win and hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.page_numbers"))
             if pages and hasattr(win, "stack"):
                 for i in range(win.stack.count()):
@@ -768,6 +800,6 @@ class PanelPageOpsMixin:
                         break
 
     def _trigger_split_tool(self) -> None:
-        win = self.window()
-        if hasattr(win, "_open_tool_by_name"):
+        win: Any = self.window()
+        if win and hasattr(win, "_open_tool_by_name"):
             win._open_tool_by_name(t("nav.split"))

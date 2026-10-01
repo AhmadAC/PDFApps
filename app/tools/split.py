@@ -1,6 +1,7 @@
 """PDFApps – TabDividir: split PDF tool."""
 
 import os
+import re
 
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
@@ -94,7 +95,7 @@ class TabDividir(BasePage):
         for r in range(self.table.rowCount()):
             spn_s = self.table.cellWidget(r, 0)
             spn_e = self.table.cellWidget(r, 1)
-            if spn_s is None or spn_e is None:
+            if not isinstance(spn_s, QSpinBox) or not isinstance(spn_e, QSpinBox):
                 continue
             if spn_s.value() > total:
                 spn_s.setValue(total)
@@ -136,12 +137,17 @@ class TabDividir(BasePage):
         os.makedirs(out_dir, exist_ok=True)
         errors, generated = [], []
         for r in range(self.table.rowCount()):
-            start = self.table.cellWidget(r, 0).value()
-            end   = self.table.cellWidget(r, 1).value()
-            import re as _re
-            name  = self.table.item(r, 2).text().strip() or f"part_{r+1}.pdf"
+            spn_s = self.table.cellWidget(r, 0)
+            spn_e = self.table.cellWidget(r, 1)
+            if not isinstance(spn_s, QSpinBox) or not isinstance(spn_e, QSpinBox):
+                continue
+            start = spn_s.value()
+            end   = spn_e.value()
+            item = self.table.item(r, 2)
+            raw_name = item.text().strip() if item is not None else ""
+            name = raw_name or f"part_{r+1}.pdf"
             name = os.path.basename(name)  # prevent path traversal
-            name = _re.sub(r'[^\w\-. ]', '_', name)  # strip unsafe chars
+            name = re.sub(r'[^\w\-. ]', '_', name)  # strip unsafe chars
             if not name or name.startswith('.'):
                 name = f"part_{r+1}.pdf"
             if not name.lower().endswith(".pdf"): name += ".pdf"

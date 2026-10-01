@@ -1,3 +1,4 @@
+# app\tools\_pdf_extract.py
 """Shared PDF page asset extraction helpers.
 
 Provides dataclasses that capture text, images, drawings, widgets and
@@ -16,7 +17,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import fitz  # noqa: F401
@@ -288,18 +289,23 @@ def extract_page_assets(doc: "fitz.Document", page_idx: int) -> PageAssets:
 
     # -- Text blocks via rawdict ------------------------------------------------
     try:
-        raw = page.get_text("rawdict")
+        raw_val = page.get_text("rawdict")
+        raw: dict[str, Any] = raw_val if isinstance(raw_val, dict) else {"blocks": []}
     except Exception as exc:  # pragma: no cover - defensive
         _log.warning("rawdict failed on page %d: %s", page_idx, exc)
         raw = {"blocks": []}
 
     for b in raw.get("blocks", []):
-        if b.get("type", 0) != 0:
+        if not isinstance(b, dict) or b.get("type", 0) != 0:
             continue
         block_lines: list[TextLine] = []
         for ln in b.get("lines", []):
+            if not isinstance(ln, dict):
+                continue
             spans: list[TextSpan] = []
             for s in ln.get("spans", []):
+                if not isinstance(s, dict):
+                    continue
                 text = _span_text(s)
                 if not text:
                     continue

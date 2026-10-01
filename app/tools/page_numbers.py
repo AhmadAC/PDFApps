@@ -1,10 +1,9 @@
-#################### START OF FILE: app/tools/page_numbers.py ####################
-
 """PDFApps – TabPageNumbers: add page numbers to a PDF with live preview and undo/redo."""
 
 import contextlib
 import os
 import re
+from typing import Any, cast
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -140,9 +139,9 @@ class TabPageNumbers(BasePage):
 
     def _calc_preview(self) -> dict | None:
         pdf_path = self.drop_in.path()
+        win: Any = self.window()
+        viewer: Any = getattr(win, "_viewer", None)
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
-            viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
         if not pdf_path or not os.path.isfile(pdf_path):
@@ -199,8 +198,8 @@ class TabPageNumbers(BasePage):
         self.numbers_preview_changed.emit(preview)
 
     def _undo(self):
-        win = self.window()
-        viewer = getattr(win, "_viewer", None)
+        win: Any = self.window()
+        viewer: Any = getattr(win, "_viewer", None)
         if viewer and hasattr(viewer, "undo"):
             viewer.undo()
             self._update_undo_redo_state()
@@ -209,8 +208,8 @@ class TabPageNumbers(BasePage):
                 self._status("↩ " + t("tool.page_numbers.undone", default="Page numbers undone (Ctrl+Y to redo)"))
 
     def _redo(self):
-        win = self.window()
-        viewer = getattr(win, "_viewer", None)
+        win: Any = self.window()
+        viewer: Any = getattr(win, "_viewer", None)
         if viewer and hasattr(viewer, "redo"):
             viewer.redo()
             self._update_undo_redo_state()
@@ -219,8 +218,8 @@ class TabPageNumbers(BasePage):
                 self._status("↪ " + t("tool.page_numbers.redone", default="Page numbers redone"))
 
     def _update_undo_redo_state(self):
-        win = self.window()
-        viewer = getattr(win, "_viewer", None)
+        win: Any = self.window()
+        viewer: Any = getattr(win, "_viewer", None)
         can_u = viewer.can_undo() if viewer and hasattr(viewer, "can_undo") else False
         can_r = viewer.can_redo() if viewer and hasattr(viewer, "can_redo") else False
         self.btn_undo.setEnabled(can_u)
@@ -274,8 +273,8 @@ class TabPageNumbers(BasePage):
 
     def _run(self):
         pdf_path = self.drop_in.path()
-        win = self.window()
-        viewer = getattr(win, "_viewer", None)
+        win: Any = self.window()
+        viewer: Any = getattr(win, "_viewer", None)
         if not pdf_path or not os.path.isfile(pdf_path):
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
@@ -316,11 +315,17 @@ class TabPageNumbers(BasePage):
                     else:
                         band = fitz.Rect(0, rect.height - band_h, rect.width, rect.height)
                     hits = []
-                    for block in page.get_text("dict", clip=band).get("blocks", []):
-                        if block.get("type") != 0:
+                    text_dict = cast(dict, page.get_text("dict", clip=band))
+                    blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
+                    for block in blocks:
+                        if not isinstance(block, dict) or block.get("type") != 0:
                             continue
                         for line in block.get("lines", []):
+                            if not isinstance(line, dict):
+                                continue
                             for span in line.get("spans", []):
+                                if not isinstance(span, dict):
+                                    continue
                                 stxt = span.get("text", "").strip()
                                 if stxt and num_re.match(stxt):
                                     hits.append(tuple(span["bbox"]))
@@ -351,13 +356,11 @@ class TabPageNumbers(BasePage):
                 return
             replace = (ans == QMessageBox.StandardButton.Yes)
 
-        in_viewer_mode = bool(viewer and viewer.current_path())
-
         # If document is loaded in viewer / compact mode, apply directly in-memory with Undo/Redo
-        if in_viewer_mode:
+        if viewer is not None and viewer.current_path():
             try:
                 import fitz
-                active_path = viewer.current_path() if viewer and viewer.current_path() else pdf_path
+                active_path = viewer.current_path() or pdf_path
                 doc = fitz.open(active_path)
                 if doc.needs_pass and self._pdf_password:
                     doc.authenticate(self._pdf_password)
@@ -402,9 +405,10 @@ class TabPageNumbers(BasePage):
                 viewer._save_and_reload(doc, target_page=first_target)
 
                 # Keep the tool's drop_in in sync with the viewer's current path
-                if viewer.current_path():
+                cur_p = viewer.current_path()
+                if cur_p:
                     self.drop_in.blockSignals(True)
-                    self.drop_in.set_path(viewer.current_path())
+                    self.drop_in.set_path(cur_p)
                     self.drop_in.blockSignals(False)
 
                 self._status(t("tool.page_numbers.applied", default="✔ Page numbers added (Ctrl+Z to undo, Ctrl+S to save)"))

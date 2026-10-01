@@ -3,6 +3,7 @@
 """PDFApps – TabRotar: rotate PDF pages tool."""
 import contextlib
 import os
+from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -161,7 +162,7 @@ class TabRotar(BasePage):
                     except Exception:
                         pass
         if total <= 0:
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
             if viewer is not None:
                 doc = getattr(viewer, "_fitz_doc", None)
@@ -316,7 +317,7 @@ class TabRotar(BasePage):
     def _run(self):
         pdf_path = self.drop_in.path()
         if not pdf_path or not os.path.isfile(pdf_path):
-            win = self.window()
+            win: Any = self.window()
             viewer = getattr(win, "_viewer", None)
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
@@ -334,7 +335,7 @@ class TabRotar(BasePage):
             return
         self.drop_out.set_path(out_path)
 
-        win = self.window()
+        win: Any = self.window()
         viewer = getattr(win, "_viewer", None)
 
         try:
@@ -368,8 +369,9 @@ class TabRotar(BasePage):
             self._status(t("tool.rotate.status.done", name=os.path.basename(out_path)))
             msg = t("tool.rotate.done", path=out_path)
 
-            if win and hasattr(win, "_cleanup_pipeline") and viewer:
-                win._cleanup_pipeline(id(viewer))
+            cleanup_fn = getattr(win, "_cleanup_pipeline", None)
+            if callable(cleanup_fn) and viewer:
+                cleanup_fn(id(viewer))
 
             if viewer:
                 viewer.load(out_path)
