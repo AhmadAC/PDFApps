@@ -1,3 +1,6 @@
+
+
+
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -446,6 +449,9 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
             saved_thumb_scale = _saved.get("thumbnail_scale")
             if saved_thumb_scale is not None:
                 ThumbnailPanel._thumb_scale_pref = max(0.5, min(2.5, float(saved_thumb_scale)))
+            saved_zoom = _saved.get("viewer_zoom_factor")
+            if saved_zoom is not None:
+                _SelectCanvas._saved_zoom_factor_pref = max(0.2, min(5.0, float(saved_zoom)))
         except Exception:
             pass
 
@@ -567,4 +573,3 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         except Exception:
             pass
         super().closeEvent(event)
-

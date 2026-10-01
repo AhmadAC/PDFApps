@@ -1,3 +1,4 @@
+
 # app/viewer/canvas_interaction.py
 
 """PDFApps – Interaction handler for _SelectCanvas (Mouse, Keyboard, Context Menus, Signatures, Shortcuts)."""
@@ -194,6 +195,7 @@ class CanvasInteractionHandler:
                 full_ly1 = max(item[1][3] for item in line)
                 line_h = max(6.0, full_ly1 - full_ly0)
 
+                # Segment and merge consecutive words into continuous rectangles
                 segments: list[tuple[float, float]] = []
                 seg_x0 = sel_in_line[0][1][0]
                 seg_x1 = sel_in_line[0][1][2]
@@ -810,3 +812,4 @@ class CanvasInteractionHandler:
         act_sig.triggered.connect(lambda: c.start_add_signature_flow(pos))
 
         menu.exec(e.globalPos())
+

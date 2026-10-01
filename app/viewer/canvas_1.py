@@ -1,6 +1,6 @@
 # app/viewer/canvas_1.py
 
-"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas with smooth zooming, persistent zoom preference, and centered layout."""
+"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas with smooth zooming, persistent zoom preference, and screen-fit layout."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any
 import fitz
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
 
 from app.constants import BG_INNER, _LN
 from app.editor.dialogs import _SignatureDialog, load_signature_pixmap
@@ -76,7 +76,7 @@ class _SelectCanvas(QWidget):
 
         self._zoom_factor = _SelectCanvas._saved_zoom_factor_pref or 1.0
         self._zoom = 1.0
-        self._base_avail = 600
+        self._base_avail = 1000
         self._gen = 0
         self._pending: set[int] = set()
         self._bg_color = BG_INNER
@@ -128,6 +128,21 @@ class _SelectCanvas(QWidget):
             _update_config(lambda cfg: cfg.__setitem__("viewer_zoom_factor", val))
         except Exception:
             pass
+
+    def get_viewport_width(self) -> int:
+        """Determine true available viewport width, inspecting container and display geometry."""
+        sa = self._get_scroll_area()
+        if sa and sa.viewport() and sa.viewport().width() > 100:
+            return sa.viewport().width()
+        p = self.parentWidget()
+        while p:
+            if p.width() > 200:
+                return max(400, p.width() - 32)
+            p = p.parentWidget()
+        screen = QApplication.primaryScreen()
+        if screen:
+            return max(600, screen.availableGeometry().width() - 280)
+        return 1200
 
     # ── Display Modes and Themes ──────────────────────────────────────────
 
@@ -315,19 +330,12 @@ class _SelectCanvas(QWidget):
         self._invalidate_and_relayout(preserve_pixmaps=True)
 
     def _on_viewport_resized(self):
-        sa = self._get_scroll_area()
-        if not sa or not self._doc:
+        if not self._doc:
             return
-        vp_w = sa.viewport().width()
-        if vp_w > 50:
-            if self._zoom_factor == 1.0:
-                self._layout_and_schedule()
-            else:
-                max_w = max((e.w for e in self._entries), default=300)
-                canvas_w = max(max_w + 32, vp_w)
-                if canvas_w != self.width():
-                    self.setFixedWidth(canvas_w)
-                    self.update()
+        vp_w = self.get_viewport_width()
+        target_fit_w = max(400, vp_w - 36)
+        if abs(target_fit_w - self._base_avail) > 24 or self.width() < vp_w:
+            self._layout_and_schedule()
 
     def _invalidate_and_relayout(self, anchor_pos: Any = None, preserve_pixmaps: bool = True):
         self._gen += 1
@@ -378,8 +386,7 @@ class _SelectCanvas(QWidget):
         if not self._doc or self._doc.page_count <= 0:
             return
 
-        sa = self._get_scroll_area()
-        vp_w = sa.viewport().width() if sa else self.width()
+        vp_w = self.get_viewport_width()
 
         page0 = self._doc[0]
         rot0 = self._page_rotations.get(0, 0) % 360
@@ -387,10 +394,9 @@ class _SelectCanvas(QWidget):
         ref_w = r0.height if rot0 in (90, 270) else r0.width
         ref_w = max(ref_w, 1.0)
 
-        # In fit-width mode (zoom_factor == 1.0), use the full viewport width
-        if self._zoom_factor == 1.0:
-            avail = max(300, vp_w - 36) if vp_w > 50 else max(300, self.width())
-            self._base_avail = avail
+        # Baseline width is fitted to available viewport width (Fit to Screen Width)
+        target_fit_w = max(400, vp_w - 36)
+        self._base_avail = target_fit_w
         self._zoom = (self._base_avail / ref_w) * self._zoom_factor
 
         self._entries.clear()
@@ -446,10 +452,12 @@ class _SelectCanvas(QWidget):
             y_off += ph + _PAGE_GAP
 
         total_h = y_off - _PAGE_GAP if y_off > 0 else 400
+        # Canvas width always spans at least the full viewport width so pages center with equal margins
         canvas_w = max(max_w + 32, vp_w, 300)
         canvas_h = max(total_h, 400)
         self.setFixedSize(canvas_w, canvas_h)
 
+        sa = self._get_scroll_area()
         if anchor_ratio_y is not None and sa:
             new_scroll_y = int(round(anchor_ratio_y * canvas_h - anchor_vp_y))
             sb_v = sa.verticalScrollBar()
@@ -579,4 +587,3 @@ class _SelectCanvas(QWidget):
             e.accept()
         else:
             super().wheelEvent(e)
-

@@ -111,6 +111,8 @@ class PanelNavMixin(_Base):
         except Exception:
             pass
 
+        QTimer.singleShot(0, self._canvas._on_viewport_resized)
+
     def set_crop_mode(self, active: bool):
         if hasattr(self, "_canvas"):
             self._canvas.set_crop_mode(active)
@@ -496,14 +498,8 @@ class PanelNavMixin(_Base):
         self.set_numbers_preview(None)
         self.set_page_crops({})
         self.set_page_order(None)
-        self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)
-        if target_scroll >= 0:
-            self._canvas_scroll.verticalScrollBar().setValue(target_scroll)
-        elif 0 < target_page < doc.page_count:
-            self._canvas_scroll.verticalScrollBar().setValue(self._canvas.scroll_to_page(target_page))
-        else:
-            self._canvas_scroll.verticalScrollBar().setValue(0)
 
+        # Ensure container layout is active before canvas reads viewport width
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
 
@@ -520,9 +516,19 @@ class PanelNavMixin(_Base):
         else:
             self._viewer_splitter.setSizes([0, total])
 
-        # Automatically update canvas layout once the window/splitter has expanded
+        # Load document after viewport container is laid out
+        self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)
+        if target_scroll >= 0:
+            self._canvas_scroll.verticalScrollBar().setValue(target_scroll)
+        elif 0 < target_page < doc.page_count:
+            self._canvas_scroll.verticalScrollBar().setValue(self._canvas.scroll_to_page(target_page))
+        else:
+            self._canvas_scroll.verticalScrollBar().setValue(0)
+
+        # Trigger resize passes to ensure canvas expands to fill maximized screen width
         QTimer.singleShot(0, self._canvas._on_viewport_resized)
         QTimer.singleShot(50, self._canvas._on_viewport_resized)
+        QTimer.singleShot(150, self._canvas._on_viewport_resized)
 
         display_name = os.path.basename(self._original_doc_path or path)
         win: Any = self.window()
@@ -546,7 +552,7 @@ class PanelNavMixin(_Base):
             if hasattr(win, "setWindowTitle"):
                 win.setWindowTitle(f"{t('app.name')} - {display_name}")
 
-        self._zoom_lbl.setText(t("zoom.fit"))
+        self._zoom_lbl.setText(f"{round(self._canvas._zoom_factor * 100)}%")
         for btn in (self._zoom_out_btn, self._zoom_in_btn, self._fit_btn,
                     self._print_btn, self._night_btn):
             btn.setEnabled(True)
@@ -602,7 +608,7 @@ class PanelNavMixin(_Base):
 
     def _zoom_fit(self):
         self._canvas.zoom_reset()
-        self._zoom_lbl.setText(t("zoom.fit"))
+        self._zoom_lbl.setText(f"{round(self._canvas._zoom_factor * 100)}%")
 
     def _clear_pdf_password(self) -> None:
         from app.utils import wipe_pdf_password
