@@ -29,6 +29,52 @@ class _PageEntry:
         self.annots      = None   # list | None   — [(rect, text), ...]
 
 
+def sort_words_in_reading_order(raw_words: list) -> list:
+    """Sort words into visual natural reading order (top-to-bottom, left-to-right lines)."""
+    if not raw_words:
+        return []
+
+    lines: list[list] = []
+    sorted_by_y = sorted(raw_words, key=lambda w: (w[1], w[0]))
+
+    for w in sorted_by_y:
+        placed = False
+        w_h = max(6.0, w[3] - w[1])
+        w_mid_y = (w[1] + w[3]) / 2.0
+
+        for line in lines:
+            line_y0 = min(lw[1] for lw in line)
+            line_y1 = max(lw[3] for lw in line)
+            line_mid_y = (line_y0 + line_y1) / 2.0
+            line_h = max(6.0, line_y1 - line_y0)
+
+            overlap = min(w[3], line_y1) - max(w[1], line_y0)
+            if overlap > 0.40 * min(w_h, line_h) or abs(w_mid_y - line_mid_y) < min(w_h, line_h) * 0.40:
+                line.append(w)
+                placed = True
+                break
+
+        if not placed:
+            lines.append([w])
+
+    for line in lines:
+        line.sort(key=lambda w: w[0])
+
+    lines.sort(key=lambda line: sum((w[1] + w[3]) / 2.0 for w in line) / len(line))
+
+    result = []
+    for line_idx, line in enumerate(lines):
+        for word_idx, w in enumerate(line):
+            result.append((
+                w[0], w[1], w[2], w[3],
+                w[4],
+                w[5] if len(w) > 5 else 0,
+                line_idx,
+                word_idx,
+            ))
+    return result
+
+
 class _PageJob(QRunnable):
     """Renders a fitz page in a background thread with optional rotation and crop."""
 
@@ -65,14 +111,32 @@ class _PageJob(QRunnable):
                 if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
                     page.set_cropbox(crop_rect)
             rot = self._rotation % 360
+            if rot:
+                page.set_rotation((page.rotation + rot) % 360)
             rz = self._zoom * self._dpr
             mat = fitz.Matrix(rz, rz)
-            if rot:
-                mat = mat.prerotate(rot)
             pix = page.get_pixmap(matrix=mat, alpha=False, annots=False)
             if self._night_mode:
                 pix.invert_irect()
-            words = page.get_text("words")
+
+            raw_words = page.get_text("words")
+            rx0 = page.rect.x0
+            ry0 = page.rect.y0
+            norm_words = []
+            for w in raw_words:
+                norm_words.append((
+                    w[0] - rx0,
+                    w[1] - ry0,
+                    w[2] - rx0,
+                    w[3] - ry0,
+                    w[4],
+                    w[5] if len(w) > 5 else 0,
+                    w[6] if len(w) > 6 else 0,
+                    w[7] if len(w) > 7 else 0,
+                ))
+
+            words = sort_words_in_reading_order(norm_words)
+
             img = pix.tobytes("png")
             qp = QP()
             if not qp.loadFromData(img):

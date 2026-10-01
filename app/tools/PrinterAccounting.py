@@ -1292,7 +1292,7 @@ class FujiAccountingManager(QWidget):
         return proc.stdout
 
     def send_direct_socket_test(self):
-        ip = self.edit_ip.text().strip()
+        ip = self.ip_input.text().strip() or self.dest_ip_input.text().strip()
         username = self.user_input.text().strip() or "testuser"
         passcode = self.pass_input.text().strip()
 

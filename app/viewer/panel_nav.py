@@ -172,8 +172,8 @@ class PanelNavMixin(_Base):
                         self._canvas.zoom_out(anchor_pos=pos)
                     return True
             elif event.type() == QEvent.Type.Resize:
-                if self._canvas._doc and self._canvas._zoom_factor == 1.0:
-                    QTimer.singleShot(0, self._canvas._layout_and_schedule)
+                if self._canvas._doc:
+                    QTimer.singleShot(0, self._canvas._on_viewport_resized)
         return super().eventFilter(obj, event)
 
     @staticmethod
@@ -263,7 +263,6 @@ class PanelNavMixin(_Base):
             lay.addWidget(row)
 
     def _on_recent_clicked(self, path: str, row_widget=None):
-        print(f"[PDFApps] Recent file clicked: {path}")
         _log.info("Recent file clicked: %s", path)
         resolved = path
         if not os.path.isfile(resolved):
@@ -427,7 +426,6 @@ class PanelNavMixin(_Base):
                 win.setWindowTitle(t("app.name"))
 
     def load(self, path: str, target_page: int = 0, target_scroll: int = -1, selected_pages: list[int] | None = None, active_sidebar_tab: QWidget | int | None = None, _is_history_step: bool = False):
-        print(f"[PDFApps] Loading: {path}")
         _log.info("Loading PDF in panel: %s", path)
         if not path:
             return
@@ -521,6 +519,10 @@ class PanelNavMixin(_Base):
             self._viewer_splitter.setSizes([w, max(300, total - w)])
         else:
             self._viewer_splitter.setSizes([0, total])
+
+        # Automatically update canvas layout once the window/splitter has expanded
+        QTimer.singleShot(0, self._canvas._on_viewport_resized)
+        QTimer.singleShot(50, self._canvas._on_viewport_resized)
 
         display_name = os.path.basename(self._original_doc_path or path)
         win: Any = self.window()

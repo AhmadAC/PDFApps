@@ -1,20 +1,22 @@
 # app/viewer/canvas_1.py
 
-"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas with smooth zooming."""
+"""PDFApps – _SelectCanvas: continuous-scroll visual PDF viewer canvas with smooth zooming, persistent zoom preference, and centered layout."""
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from typing import Any
 
 import fitz
-from PySide6.QtCore import QPoint, QRect, Qt, QThreadPool, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QThreadPool, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from app.constants import BG_INNER, _LN
 from app.editor.dialogs import _SignatureDialog, load_signature_pixmap
+from app.i18n import _CONFIG_PATH, _update_config
 from app.viewer.canvas_interaction import CanvasInteractionHandler
 from app.viewer.canvas_painter import CanvasPainter
 from app.viewer.canvas_worker import (
@@ -44,12 +46,13 @@ class _SelectCanvas(QWidget):
     text_copied = Signal(str)
     signature_committed = Signal(int, object, str)  # (page_idx, fitz.Rect, sig_path)
 
-    # Resize handles identifiers
     HANDLE_NONE = 0
     HANDLE_TL = 1
     HANDLE_TR = 2
     HANDLE_BL = 3
     HANDLE_BR = 4
+
+    _saved_zoom_factor_pref: float | None = None
 
     def __init__(self):
         super().__init__()
@@ -57,9 +60,23 @@ class _SelectCanvas(QWidget):
         self._path = ""
         self._password = ""
         self._entries: list[Any] = []
+
+        if _SelectCanvas._saved_zoom_factor_pref is None:
+            try:
+                if os.path.isfile(_CONFIG_PATH):
+                    with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        val = cfg.get("viewer_zoom_factor")
+                        if val is not None:
+                            _SelectCanvas._saved_zoom_factor_pref = max(0.2, min(5.0, float(val)))
+            except Exception:
+                pass
+            if _SelectCanvas._saved_zoom_factor_pref is None:
+                _SelectCanvas._saved_zoom_factor_pref = 1.0
+
+        self._zoom_factor = _SelectCanvas._saved_zoom_factor_pref or 1.0
         self._zoom = 1.0
-        self._zoom_factor = 1.0
-        self._base_avail = 300
+        self._base_avail = 600
         self._gen = 0
         self._pending: set[int] = set()
         self._bg_color = BG_INNER
@@ -82,7 +99,6 @@ class _SelectCanvas(QWidget):
         self._numbers_preview: dict | None = None
         self._screen_signal_window = None
 
-        # Signature Placement & Resizing State
         self._placing_signature: bool = False
         self._placing_sig_path: str = ""
         self._placing_sig_pixmap = None
@@ -98,6 +114,20 @@ class _SelectCanvas(QWidget):
         self.setCursor(Qt.CursorShape.IBeamCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(300, 400)
+
+    def page_x_offset(self, entry) -> int:
+        """Calculate horizontal centering offset for a page within the canvas width."""
+        if not entry:
+            return 0
+        return max(0, (self.width() - entry.w) // 2)
+
+    def _save_zoom_pref(self) -> None:
+        type(self)._saved_zoom_factor_pref = self._zoom_factor
+        try:
+            val = self._zoom_factor
+            _update_config(lambda cfg: cfg.__setitem__("viewer_zoom_factor", val))
+        except Exception:
+            pass
 
     # ── Display Modes and Themes ──────────────────────────────────────────
 
@@ -149,7 +179,6 @@ class _SelectCanvas(QWidget):
     # ── Signature Flow & Placement Methods ────────────────────────────────
 
     def start_add_signature_flow(self, pos: QPoint | None = None):
-        """Open the signature selection dialog and enter cursor placement mode."""
         dlg = _SignatureDialog(self)
         if dlg.exec() == _SignatureDialog.DialogCode.Accepted:
             path = dlg.selected_signature_path()
@@ -157,7 +186,6 @@ class _SelectCanvas(QWidget):
                 self.begin_signature_placement(path)
 
     def begin_signature_placement(self, sig_path: str):
-        """Enter cursor placement mode where the signature follows the mouse."""
         if self._active_sig is not None:
             self.commit_active_signature()
         self._placing_signature = True
@@ -167,7 +195,6 @@ class _SelectCanvas(QWidget):
         self.update()
 
     def cancel_signature_placement(self):
-        """Remove signature from cursor (cancel placement)."""
         self._placing_signature = False
         self._placing_sig_path = ""
         self._placing_sig_pixmap = None
@@ -176,7 +203,6 @@ class _SelectCanvas(QWidget):
         self.update()
 
     def commit_active_signature(self):
-        """Commit the placed/resized signature into the PDF document."""
         if not self._active_sig:
             return
         sig = dict(self._active_sig)
@@ -189,7 +215,6 @@ class _SelectCanvas(QWidget):
         self.signature_committed.emit(page_idx, rect, path)
 
     def delete_active_signature(self):
-        """Discard the currently placed active signature."""
         self._active_sig = None
         self.setCursor(Qt.CursorShape.IBeamCursor)
         self.update()
@@ -200,7 +225,7 @@ class _SelectCanvas(QWidget):
         self._doc = doc
         self._path = path
         self._password = password
-        self._zoom_factor = 1.0
+        self._zoom_factor = type(self)._saved_zoom_factor_pref or 1.0
         self._gen += 1
         self._pending.clear()
         self._open_note = None
@@ -272,19 +297,39 @@ class _SelectCanvas(QWidget):
                 return i
         return max(0, len(self._entries) - 1)
 
-    def zoom_in(self, anchor_pos: QPoint | None = None):
+    def zoom_in(self, anchor_pos: Any = None):
+        pos = anchor_pos if isinstance(anchor_pos, (QPoint, QPointF)) else None
         self._zoom_factor = min(5.0, round(self._zoom_factor * 1.25, 4))
-        self._invalidate_and_relayout(anchor_pos=anchor_pos, preserve_pixmaps=True)
+        self._save_zoom_pref()
+        self._invalidate_and_relayout(anchor_pos=pos, preserve_pixmaps=True)
 
-    def zoom_out(self, anchor_pos: QPoint | None = None):
+    def zoom_out(self, anchor_pos: Any = None):
+        pos = anchor_pos if isinstance(anchor_pos, (QPoint, QPointF)) else None
         self._zoom_factor = max(0.2, round(self._zoom_factor / 1.25, 4))
-        self._invalidate_and_relayout(anchor_pos=anchor_pos, preserve_pixmaps=True)
+        self._save_zoom_pref()
+        self._invalidate_and_relayout(anchor_pos=pos, preserve_pixmaps=True)
 
     def zoom_reset(self):
         self._zoom_factor = 1.0
+        self._save_zoom_pref()
         self._invalidate_and_relayout(preserve_pixmaps=True)
 
-    def _invalidate_and_relayout(self, anchor_pos: QPoint | None = None, preserve_pixmaps: bool = True):
+    def _on_viewport_resized(self):
+        sa = self._get_scroll_area()
+        if not sa or not self._doc:
+            return
+        vp_w = sa.viewport().width()
+        if vp_w > 50:
+            if self._zoom_factor == 1.0:
+                self._layout_and_schedule()
+            else:
+                max_w = max((e.w for e in self._entries), default=300)
+                canvas_w = max(max_w + 32, vp_w)
+                if canvas_w != self.width():
+                    self.setFixedWidth(canvas_w)
+                    self.update()
+
+    def _invalidate_and_relayout(self, anchor_pos: Any = None, preserve_pixmaps: bool = True):
         self._gen += 1
         self._pending.clear()
 
@@ -296,13 +341,14 @@ class _SelectCanvas(QWidget):
         if sa and self.height() > 0:
             sb_v = sa.verticalScrollBar()
             vp_h = sa.viewport().height()
-            anchor_vp_y = float(anchor_pos.y()) if anchor_pos is not None else vp_h / 2.0
+            valid_anchor = isinstance(anchor_pos, (QPoint, QPointF))
+            anchor_vp_y = float(anchor_pos.y()) if valid_anchor else vp_h / 2.0
             doc_y = sb_v.value() + anchor_vp_y
             anchor_ratio_y = doc_y / max(1.0, float(self.height()))
 
             sb_h = sa.horizontalScrollBar()
             vp_w = sa.viewport().width()
-            anchor_vp_x = float(anchor_pos.x()) if anchor_pos is not None else vp_w / 2.0
+            anchor_vp_x = float(anchor_pos.x()) if valid_anchor else vp_w / 2.0
             doc_x = sb_h.value() + anchor_vp_x
             anchor_ratio_x = doc_x / max(1.0, float(self.width()))
 
@@ -332,18 +378,19 @@ class _SelectCanvas(QWidget):
         if not self._doc or self._doc.page_count <= 0:
             return
 
-        if self._zoom_factor == 1.0:
-            from PySide6.QtWidgets import QScrollArea as _SA
-            vp = self.parent()
-            sa = vp.parent() if vp else None
-            avail = sa.viewport().width() - 4 if isinstance(sa, _SA) else self.width()
-            self._base_avail = max(avail, 300)
+        sa = self._get_scroll_area()
+        vp_w = sa.viewport().width() if sa else self.width()
 
         page0 = self._doc[0]
         rot0 = self._page_rotations.get(0, 0) % 360
         r0 = page0.rect
         ref_w = r0.height if rot0 in (90, 270) else r0.width
         ref_w = max(ref_w, 1.0)
+
+        # In fit-width mode (zoom_factor == 1.0), use the full viewport width
+        if self._zoom_factor == 1.0:
+            avail = max(300, vp_w - 36) if vp_w > 50 else max(300, self.width())
+            self._base_avail = avail
         self._zoom = (self._base_avail / ref_w) * self._zoom_factor
 
         self._entries.clear()
@@ -377,6 +424,8 @@ class _SelectCanvas(QWidget):
 
             annots = []
             try:
+                rx0 = pg.rect.x0
+                ry0 = pg.rect.y0
                 for a in pg.annots() or []:
                     a_type = getattr(a, "type", (None, None))
                     if (isinstance(a_type, (tuple, list)) and len(a_type) >= 2 and (a_type[0] == _PDF_ANNOT_TEXT or a_type[1] == "Text")) or a_type == _PDF_ANNOT_TEXT:
@@ -386,7 +435,8 @@ class _SelectCanvas(QWidget):
                             raw_t = a.get_text()
                             content = raw_t if isinstance(raw_t, str) else str(raw_t)
                         txt = content.strip()
-                        annots.append((a.rect, txt))
+                        norm_rect = fitz.Rect(a.rect.x0 - rx0, a.rect.y0 - ry0, a.rect.x1 - rx0, a.rect.y1 - ry0)
+                        annots.append((norm_rect, txt))
             except Exception:
                 pass
             entry.annots = annots
@@ -396,20 +446,18 @@ class _SelectCanvas(QWidget):
             y_off += ph + _PAGE_GAP
 
         total_h = y_off - _PAGE_GAP if y_off > 0 else 400
-        new_w = max(max_w, 300)
-        new_h = max(total_h, 400)
-        self.setFixedSize(new_w, new_h)
+        canvas_w = max(max_w + 32, vp_w, 300)
+        canvas_h = max(total_h, 400)
+        self.setFixedSize(canvas_w, canvas_h)
 
-        if anchor_ratio_y is not None:
-            sa = self._get_scroll_area()
-            if sa:
-                new_scroll_y = int(round(anchor_ratio_y * new_h - anchor_vp_y))
-                sb_v = sa.verticalScrollBar()
-                sb_v.setValue(max(0, min(new_scroll_y, sb_v.maximum())))
-                if anchor_ratio_x is not None:
-                    new_scroll_x = int(round(anchor_ratio_x * new_w - anchor_vp_x))
-                    sb_h = sa.horizontalScrollBar()
-                    sb_h.setValue(max(0, min(new_scroll_x, sb_h.maximum())))
+        if anchor_ratio_y is not None and sa:
+            new_scroll_y = int(round(anchor_ratio_y * canvas_h - anchor_vp_y))
+            sb_v = sa.verticalScrollBar()
+            sb_v.setValue(max(0, min(new_scroll_y, sb_v.maximum())))
+            if anchor_ratio_x is not None:
+                new_scroll_x = int(round(anchor_ratio_x * canvas_w - anchor_vp_x))
+                sb_h = sa.horizontalScrollBar()
+                sb_h.setValue(max(0, min(new_scroll_x, sb_h.maximum())))
 
         self.zoom_changed.emit(round(self._zoom_factor * 100))
         self.update()
@@ -531,3 +579,4 @@ class _SelectCanvas(QWidget):
             e.accept()
         else:
             super().wheelEvent(e)
+

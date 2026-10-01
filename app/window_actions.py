@@ -95,6 +95,45 @@ class WindowActionsMixin(_Base):
         def _wait_for_workers_on_all_pages(self) -> None: ...
         def _wipe_all_pdf_passwords(self) -> None: ...
 
+    def _zoom_in_current(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_in"):
+                canvas.zoom_in()
+                return
+        if self._viewer:
+            canvas = getattr(self._viewer, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_in"):
+                canvas.zoom_in()
+
+    def _zoom_out_current(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_out"):
+                canvas.zoom_out()
+                return
+        if self._viewer:
+            canvas = getattr(self._viewer, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_out"):
+                canvas.zoom_out()
+
+    def _zoom_reset_current(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_reset"):
+                canvas.zoom_reset()
+                return
+        if self._viewer:
+            canvas = getattr(self._viewer, "_canvas", None)
+            if canvas is not None and hasattr(canvas, "zoom_reset"):
+                canvas.zoom_reset()
+
     def _tool_idx_for_class(self, cls) -> int:
         for idx, (_, _, tool_cls) in enumerate(_NAV_KEYS):
             if tool_cls is cls:
@@ -279,9 +318,9 @@ class WindowActionsMixin(_Base):
         if canvas is None:
             return
         if active:
-            self._zm_btn.clicked.connect(canvas.zoom_out)
-            self._zp_btn.clicked.connect(canvas.zoom_in)
-            self._z0_btn.clicked.connect(canvas.zoom_reset)
+            self._zm_btn.clicked.connect(lambda: canvas.zoom_out())
+            self._zp_btn.clicked.connect(lambda: canvas.zoom_in())
+            self._z0_btn.clicked.connect(lambda: canvas.zoom_reset())
             canvas.zoom_changed.connect(lambda pct: self._lbl_zoom.setText(f"{pct}%"))
             self._lbl_zoom.setText(f"{round(canvas._zoom_factor * 100)}%")
 
@@ -483,13 +522,17 @@ class WindowActionsMixin(_Base):
         if not viewer:
             self._page_nav_widget.setVisible(False)
             return
-        canvas = viewer._canvas
-        entries = canvas._entries
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
+            self._page_nav_widget.setVisible(False)
+            return
+        entries = getattr(canvas, "_entries", None)
         if not entries:
             self._page_nav_widget.setVisible(False)
             return
         self._page_nav_widget.setVisible(True)
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         sb_val = sb.value() if sb else 0
         idx = canvas.page_at_y(sb_val)
         total = len(entries)
@@ -505,10 +548,14 @@ class WindowActionsMixin(_Base):
         viewer = self._viewer
         if not viewer:
             return
-        canvas = viewer._canvas
-        if not canvas._entries:
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
             return
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        entries = getattr(canvas, "_entries", None)
+        if not entries:
+            return
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         if sb:
             sb.setValue(canvas.scroll_to_page(0))
 
@@ -516,10 +563,14 @@ class WindowActionsMixin(_Base):
         viewer = self._viewer
         if not viewer:
             return
-        canvas = viewer._canvas
-        if not canvas._entries:
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
             return
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        entries = getattr(canvas, "_entries", None)
+        if not entries:
+            return
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         if sb:
             idx = canvas.page_at_y(sb.value())
             if idx > 0:
@@ -529,40 +580,52 @@ class WindowActionsMixin(_Base):
         viewer = self._viewer
         if not viewer:
             return
-        canvas = viewer._canvas
-        if not canvas._entries:
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
             return
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        entries = getattr(canvas, "_entries", None)
+        if not entries:
+            return
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         if sb:
             idx = canvas.page_at_y(sb.value())
-            if idx < len(canvas._entries) - 1:
+            if idx < len(entries) - 1:
                 sb.setValue(canvas.scroll_to_page(idx + 1))
 
     def _goto_last_page(self):
         viewer = self._viewer
         if not viewer:
             return
-        canvas = viewer._canvas
-        if not canvas._entries:
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
             return
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        entries = getattr(canvas, "_entries", None)
+        if not entries:
+            return
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         if sb:
-            sb.setValue(canvas.scroll_to_page(len(canvas._entries) - 1))
+            sb.setValue(canvas.scroll_to_page(len(entries) - 1))
 
     def _goto_input_page(self):
         viewer = self._viewer
         if not viewer:
             return
-        canvas = viewer._canvas
-        if not canvas._entries:
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
+            return
+        entries = getattr(canvas, "_entries", None)
+        if not entries:
             return
         try:
             page_num = int(self._page_input.text())
         except ValueError:
             return
-        page_num = max(1, min(page_num, len(canvas._entries)))
+        page_num = max(1, min(page_num, len(entries)))
         self._page_input.setText(str(page_num))
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         if sb:
             sb.setValue(canvas.scroll_to_page(page_num - 1))
 
@@ -657,14 +720,17 @@ class WindowActionsMixin(_Base):
         viewer = self._viewer
         if viewer:
             active = self._night_top_btn.isChecked()
-            viewer._canvas.set_night_mode(active)
+            canvas = getattr(viewer, "_canvas", None)
+            if canvas:
+                canvas.set_night_mode(active)
 
     def _refresh_viewer_top_buttons(self):
         try:
             v = self._viewer
             if v:
                 self._toc_top_btn.setVisible(v._toc_tree.topLevelItemCount() > 0)
-                self._night_top_btn.setChecked(v._canvas._night_mode)
+                canvas = getattr(v, "_canvas", None)
+                self._night_top_btn.setChecked(bool(getattr(canvas, "_night_mode", False)))
             else:
                 self._toc_top_btn.setVisible(False)
                 self._night_top_btn.setChecked(False)
@@ -691,8 +757,11 @@ class WindowActionsMixin(_Base):
         viewer = self._viewer
         if not viewer or not viewer._current_path:
             return
-        canvas = viewer._canvas
-        sb = viewer._canvas_scroll.verticalScrollBar()
+        canvas = getattr(viewer, "_canvas", None)
+        if canvas is None:
+            return
+        sb_scroll = getattr(viewer, "_canvas_scroll", None)
+        sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         start_page = canvas.page_at_y(sb.value()) if canvas.page_count() > 0 and sb else 0
         try:
             pres = PresentationWidget(
@@ -753,8 +822,9 @@ class WindowActionsMixin(_Base):
 
     def _relayout_viewer(self):
         for v in self._viewers:
-            if v._canvas._doc and v._canvas._zoom_factor == 1.0:
-                v._canvas._layout_and_schedule()
+            canvas = getattr(v, "_canvas", None)
+            if canvas and getattr(canvas, "_doc", None) and getattr(canvas, "_zoom_factor", 0.0) == 1.0:
+                canvas._layout_and_schedule()
 
     def _toggle_theme(self):
         self._dark_mode = not self._dark_mode

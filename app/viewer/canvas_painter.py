@@ -83,7 +83,7 @@ class CanvasPainter:
         first, last = canvas._visible_range()
         for i in range(first, last + 1):
             e = canvas._entries[i]
-            x = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
+            x = canvas.page_x_offset(e)
             page_rect = QRect(x, e.y_off, e.w, e.h)
 
             if e.pixmap and not e.pixmap.isNull():
@@ -112,13 +112,13 @@ class CanvasPainter:
             pg = sig.get("page", 0)
             if first <= pg <= last:
                 entry = canvas._entries[pg]
-                x_off = (max(canvas.width(), entry.w) - entry.w) // 2 if canvas.width() > entry.w else 0
+                x_off = canvas.page_x_offset(entry)
                 z = canvas._zoom
                 r = sig["rect"]
-                sx0 = x_off + int(r.x0 * z)
-                sy0 = entry.y_off + int(r.y0 * z)
-                sw = max(1, int(r.width * z))
-                sh = max(1, int(r.height * z))
+                sx0 = x_off + int(round(r.x0 * z))
+                sy0 = entry.y_off + int(round(r.y0 * z))
+                sw = max(1, int(round(r.width * z)))
+                sh = max(1, int(round(r.height * z)))
                 sig_rect = QRect(sx0, sy0, sw, sh)
 
                 pix = sig.get("pixmap")
@@ -161,15 +161,16 @@ class CanvasPainter:
                 p.drawRect(preview_r)
                 p.restore()
 
-        # Note icons
+        # ── Note Icons ────────────────────────────────────────────────
         z = canvas._zoom
         for page_idx in range(first, last + 1):
             entry = canvas._entries[page_idx]
             if not entry.annots:
                 continue
+            x_off = canvas.page_x_offset(entry)
             for annot_idx, (rect, txt) in enumerate(entry.annots):
-                px = int(rect.x0 * z)
-                py = entry.y_off + int(rect.y0 * z)
+                px = x_off + int(round(rect.x0 * z))
+                py = entry.y_off + int(round(rect.y0 * z))
                 icon_r = QRect(px, py, _NOTE_ICON_SIZE, _NOTE_ICON_SIZE)
                 p.setBrush(QColor("#FBBF24"))
                 p.setPen(QPen(QColor("#D97706"), 1))
@@ -208,33 +209,35 @@ class CanvasPainter:
                         txt,
                     )
 
-        # Search highlights
+        # ── Search Highlights ─────────────────────────────────────────
         for hi_idx, (pg_idx, fr) in enumerate(canvas._search_highlights):
             if pg_idx < first or pg_idx > last:
                 continue
-            ey = canvas._entries[pg_idx].y_off
-            rx = int(fr.x0 * z)
-            ry = ey + int(fr.y0 * z)
-            rw = int((fr.x1 - fr.x0) * z)
-            rh = int((fr.y1 - fr.y0) * z)
+            entry = canvas._entries[pg_idx]
+            x_off = canvas.page_x_offset(entry)
+            ey = entry.y_off
+            rx = x_off + int(round(fr.x0 * z))
+            ry = ey + int(round(fr.y0 * z))
+            rw = int(round((fr.x1 - fr.x0) * z))
+            rh = int(round((fr.y1 - fr.y0) * z))
             if hi_idx == canvas._search_current:
-                p.fillRect(rx, ry, rw, rh, QColor(0, 120, 212, 160))
+                p.fillRect(rx, ry, rw, rh, QColor(0, 120, 215, 160))
                 p.setPen(QPen(QColor("#60A5FA"), 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(rx, ry, rw, rh)
             else:
-                p.fillRect(rx, ry, rw, rh, QColor(250, 204, 21, 100))
+                p.fillRect(rx, ry, rw, rh, QColor(250, 204, 21, 110))
 
-        # Selection
+        # ── Selection Rectangles (Foxit-style continuous highlights) ──
         for r in canvas._sel_rects:
-            p.fillRect(r, QColor(0, 120, 212, 100))
+            p.fillRect(r, QColor(0, 120, 215, 95))
 
-        # Crop preview
+        # ── Crop Preview ──────────────────────────────────────────────
         if (canvas._crop_mode and canvas._crop_drag_start and canvas._crop_drag_cur
                 and 0 <= canvas._crop_active_page < len(canvas._entries)):
             i = canvas._crop_active_page
             e = canvas._entries[i]
-            x = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
+            x = canvas.page_x_offset(e)
             start = canvas._crop_drag_start
             cur = canvas._crop_drag_cur
             cx0 = max(x, min(start.x(), cur.x()))
@@ -251,7 +254,7 @@ class CanvasPainter:
                     if targets is not None and i not in targets:
                         continue
                     e = canvas._entries[i]
-                    x = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
+                    x = canvas.page_x_offset(e)
                     cx0 = x + int(round(left_m * z))
                     cy0 = e.y_off + int(round(top_m * z))
                     cx1 = x + e.w - int(round(right_m * z))
@@ -259,7 +262,7 @@ class CanvasPainter:
                     if cx1 > cx0 and cy1 > cy0:
                         cls.draw_crop_box(p, canvas._zoom, x, e.y_off, e.w, e.h, cx0, cy0, cx1, cy1)
 
-        # Page numbers live preview
+        # ── Page Numbers Live Preview ─────────────────────────────────
         np = getattr(canvas, "_numbers_preview", None)
         if np:
             targets = np.get("targets", {})
@@ -276,7 +279,7 @@ class CanvasPainter:
                     continue
                 label = targets[i]
                 e = canvas._entries[i]
-                x_page = (max(canvas.width(), e.w) - e.w) // 2 if canvas.width() > e.w else 0
+                x_page = canvas.page_x_offset(e)
                 tw = fm.horizontalAdvance(label)
                 th = fm.height()
 

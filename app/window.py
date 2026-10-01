@@ -27,6 +27,7 @@ from app.single_instance import SingleInstanceServer
 from app.update_controller import UpdateController
 from app.viewer.panel import PdfViewerPanel
 from app.viewer.thumbnails import ThumbnailPanel
+from app.viewer.canvas_1 import _SelectCanvas
 from app.base import BasePage
 from app.tools.rotate import TabRotar
 from app.tools.crop import TabCortar
@@ -478,6 +479,15 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
         QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf() if self._viewer else None)
 
+        # Global Zoom Shortcuts (Ctrl++, Ctrl+=, Ctrl+-, Ctrl+_, Ctrl+0)
+        sc_zi1 = QShortcut(QKeySequence("Ctrl++"), self, self._zoom_in_current)
+        sc_zi2 = QShortcut(QKeySequence("Ctrl+="), self, self._zoom_in_current)
+        sc_zo1 = QShortcut(QKeySequence("Ctrl+-"), self, self._zoom_out_current)
+        sc_zo2 = QShortcut(QKeySequence("Ctrl+_"), self, self._zoom_out_current)
+        sc_zr = QShortcut(QKeySequence("Ctrl+0"), self, self._zoom_reset_current)
+        for sc in (sc_zi1, sc_zi2, sc_zo1, sc_zo2, sc_zr):
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+
         sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._handle_global_undo)
         sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._handle_global_redo)
         sc_redo2 = QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._handle_global_redo)
@@ -544,6 +554,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
             pages_open = getattr(PdfViewerPanel, "_pages_sidebar_visible_pref", True)
             sidebar_w = getattr(PdfViewerPanel, "_saved_sidebar_width_pref", 220)
             thumb_scale = getattr(ThumbnailPanel, "_thumb_scale_pref", 1.0)
+            zoom_factor = getattr(_SelectCanvas, "_saved_zoom_factor_pref", 1.0)
 
             def _mutate(cfg: dict) -> None:
                 cfg["splitter_sizes"] = sizes
@@ -551,7 +562,9 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
                 cfg["pages_sidebar_open"] = bool(pages_open)
                 cfg["sidebar_panel_width"] = int(sidebar_w)
                 cfg["thumbnail_scale"] = float(thumb_scale)
+                cfg["viewer_zoom_factor"] = float(zoom_factor)
             _update_config(_mutate)
         except Exception:
             pass
         super().closeEvent(event)
+
