@@ -44,8 +44,8 @@ class PresentationWidget(QWidget):
         self._password = password
         self._current = start_page
         self._total = total_pages
-        self._pixmap = None
-        self._prev_pixmap = None
+        self._pixmap: QPixmap | None = None
+        self._prev_pixmap: QPixmap | None = None
         self._ready = False
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
@@ -358,18 +358,20 @@ class PresentationWidget(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("#000000"))
 
-        if self._pixmap:
-            dpr = self._pixmap.devicePixelRatio() or 1.0
-            pw = self._pixmap.width() / dpr
-            ph = self._pixmap.height() / dpr
+        pixmap = self._pixmap
+        if pixmap is not None and not pixmap.isNull():
+            dpr = pixmap.devicePixelRatio() or 1.0
+            pw = pixmap.width() / dpr
+            ph = pixmap.height() / dpr
             x = (self.width() - pw) / 2 + self._pan_x
             y = (self.height() - ph) / 2 + self._pan_y
 
             t = self._trans_progress
-            if self._prev_pixmap is not None and t < 1.0 and self._trans_style:
-                old_dpr = self._prev_pixmap.devicePixelRatio() or 1.0
-                old_w = self._prev_pixmap.width() / old_dpr
-                old_h = self._prev_pixmap.height() / old_dpr
+            prev_pixmap = self._prev_pixmap
+            if prev_pixmap is not None and not prev_pixmap.isNull() and t < 1.0 and self._trans_style:
+                old_dpr = prev_pixmap.devicePixelRatio() or 1.0
+                old_w = prev_pixmap.width() / old_dpr
+                old_h = prev_pixmap.height() / old_dpr
                 old_x = (self.width() - old_w) / 2
                 old_y = (self.height() - old_h) / 2
 
@@ -378,23 +380,23 @@ class PresentationWidget(QWidget):
                     di = self._trans_direction
                     if di == 90:    # bottom to top
                         dy = int(self.height() * t)
-                        p.drawPixmap(int(old_x), int(old_y - dy), self._prev_pixmap)
-                        p.drawPixmap(int(x), int(y + self.height() - dy), self._pixmap)
+                        p.drawPixmap(int(old_x), int(old_y - dy), prev_pixmap)
+                        p.drawPixmap(int(x), int(y + self.height() - dy), pixmap)
                     elif di == 180: # right to left
                         dx = int(self.width() * t)
-                        p.drawPixmap(int(old_x + dx), int(old_y), self._prev_pixmap)
-                        p.drawPixmap(int(x - self.width() + dx), int(y), self._pixmap)
+                        p.drawPixmap(int(old_x + dx), int(old_y), prev_pixmap)
+                        p.drawPixmap(int(x - self.width() + dx), int(y), pixmap)
                     elif di == 270: # top to bottom
                         dy = int(self.height() * t)
-                        p.drawPixmap(int(old_x), int(old_y + dy), self._prev_pixmap)
-                        p.drawPixmap(int(x - self.height() + dy), self._pixmap)
+                        p.drawPixmap(int(old_x), int(old_y + dy), prev_pixmap)
+                        p.drawPixmap(int(x), int(y - self.height() + dy), pixmap)
                     else:           # left to right (0)
                         dx = int(self.width() * t)
-                        p.drawPixmap(int(old_x - dx), int(old_y), self._prev_pixmap)
-                        p.drawPixmap(int(x + self.width() - dx), int(y), self._pixmap)
+                        p.drawPixmap(int(old_x - dx), int(old_y), prev_pixmap)
+                        p.drawPixmap(int(x + self.width() - dx), int(y), pixmap)
 
                 elif style in ("Wipe", "Cover"):
-                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.drawPixmap(int(old_x), int(old_y), prev_pixmap)
                     di = self._trans_direction
                     p.save()
                     if di == 90:
@@ -409,35 +411,35 @@ class PresentationWidget(QWidget):
                     else:
                         split_x = int(self.width() * t)
                         p.setClipRect(QRect(0, 0, split_x, self.height()))
-                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.drawPixmap(int(x), int(y), pixmap)
                     p.restore()
 
                 elif style in ("Fade", "Dissolve"):
                     p.setOpacity(max(0.0, 1.0 - t))
-                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.drawPixmap(int(old_x), int(old_y), prev_pixmap)
                     p.setOpacity(min(1.0, t))
-                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.drawPixmap(int(x), int(y), pixmap)
                     p.setOpacity(1.0)
 
                 elif style == "Box":
-                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.drawPixmap(int(old_x), int(old_y), prev_pixmap)
                     bw = int(self.width() * t)
                     bh = int(self.height() * t)
                     bx = (self.width() - bw) // 2
                     by = (self.height() - bh) // 2
                     p.save()
                     p.setClipRect(QRect(bx, by, bw, bh))
-                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.drawPixmap(int(x), int(y), pixmap)
                     p.restore()
 
                 else:
                     p.setOpacity(max(0.0, 1.0 - t))
-                    p.drawPixmap(int(old_x), int(old_y), self._prev_pixmap)
+                    p.drawPixmap(int(old_x), int(old_y), prev_pixmap)
                     p.setOpacity(min(1.0, t))
-                    p.drawPixmap(int(x), int(y), self._pixmap)
+                    p.drawPixmap(int(x), int(y), pixmap)
                     p.setOpacity(1.0)
             else:
-                p.drawPixmap(int(x), int(y), self._pixmap)
+                p.drawPixmap(int(x), int(y), pixmap)
         p.end()
 
     def keyPressEvent(self, e):
