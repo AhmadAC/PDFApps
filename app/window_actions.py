@@ -1,3 +1,4 @@
+
 # app/window_actions.py
 """PDFApps – Navigation, themes, UI interactions, and page control mixin."""
 from __future__ import annotations
@@ -96,6 +97,9 @@ class WindowActionsMixin(_Base):
         def _wipe_all_pdf_passwords(self) -> None: ...
 
     def _zoom_in_current(self):
+        pres = getattr(self, "_presentation", None)
+        if pres is not None and isValid(pres) and pres.isVisible():
+            return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)
@@ -109,6 +113,9 @@ class WindowActionsMixin(_Base):
                 canvas.zoom_in()
 
     def _zoom_out_current(self):
+        pres = getattr(self, "_presentation", None)
+        if pres is not None and isValid(pres) and pres.isVisible():
+            return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)
@@ -122,6 +129,9 @@ class WindowActionsMixin(_Base):
                 canvas.zoom_out()
 
     def _zoom_reset_current(self):
+        pres = getattr(self, "_presentation", None)
+        if pres is not None and isValid(pres) and pres.isVisible():
+            return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)

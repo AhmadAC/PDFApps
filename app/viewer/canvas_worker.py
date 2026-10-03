@@ -1,3 +1,4 @@
+# app/viewer/canvas_worker.py
 from __future__ import annotations
 
 """PDFApps – Background worker and data structures for canvas page rendering."""
@@ -113,7 +114,13 @@ class _PageJob(QRunnable):
             rot = self._rotation % 360
             if rot:
                 page.set_rotation((page.rotation + rot) % 360)
+
             rz = self._zoom * self._dpr
+            # Cap maximum rendered dimension to prevent memory allocation spikes
+            max_d = max(page.rect.width, page.rect.height)
+            if max_d * rz > 8192:
+                rz = 8192.0 / max_d
+
             mat = fitz.Matrix(rz, rz)
             pix = page.get_pixmap(matrix=mat, alpha=False, annots=False)
             if self._night_mode:
@@ -137,12 +144,13 @@ class _PageJob(QRunnable):
 
             words = sort_words_in_reading_order(norm_words)
 
-            img = pix.tobytes("png")
-            qp = QP()
-            if not qp.loadFromData(img):
-                qi = QImage(pix.samples_mv, pix.width, pix.height,
-                            pix.stride, QImage.Format.Format_RGB888)
-                qp = QP.fromImage(qi.copy())
+            if pix.n != 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+
+            # Direct buffer conversion avoids heavy PNG compression and Qt 256MB image limits
+            qi = QImage(pix.samples, pix.width, pix.height,
+                        pix.stride, QImage.Format.Format_RGB888).copy()
+            qp = QP.fromImage(qi)
             qp.setDevicePixelRatio(self._dpr)
             self.signals.page_ready.emit(self._gen, self._pos, qp, words)
         except Exception:

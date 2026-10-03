@@ -525,10 +525,8 @@ class PanelNavMixin(_Base):
         else:
             self._canvas_scroll.verticalScrollBar().setValue(0)
 
-        # Trigger resize passes to ensure canvas expands to fill maximized screen width
-        QTimer.singleShot(0, self._canvas._on_viewport_resized)
+        # Single deferred resize check to ensure canvas scales cleanly
         QTimer.singleShot(50, self._canvas._on_viewport_resized)
-        QTimer.singleShot(150, self._canvas._on_viewport_resized)
 
         display_name = os.path.basename(self._original_doc_path or path)
         win: Any = self.window()

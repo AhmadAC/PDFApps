@@ -7,7 +7,7 @@ import re
 import time
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from shiboken6 import isValid
 
@@ -39,6 +39,7 @@ class PresentationWidget(QWidget):
     def __init__(self, path: str, password: str, start_page: int,
                  total_pages: int, dark_mode: bool = True):
         super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._path = path
         self._password = password
         self._current = start_page
@@ -114,6 +115,17 @@ class PresentationWidget(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.setWindowState(Qt.WindowState.WindowFullScreen)
+
+        # Scoped presentation-only zoom shortcuts
+        for seq, fn in [
+            ("Ctrl++", self._zoom_in),
+            ("Ctrl+=", self._zoom_in),
+            ("Ctrl+-", self._zoom_out),
+            ("Ctrl+_", self._zoom_out),
+            ("Ctrl+0", self._zoom_reset),
+        ]:
+            sc = QShortcut(QKeySequence(seq), self, fn)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
         self._ready = True
         QTimer.singleShot(0, lambda: self._render(transition=False))
@@ -213,9 +225,18 @@ class PresentationWidget(QWidget):
             base_zoom = min(sw / page.rect.width, sh / page.rect.height)
             zoom = base_zoom * self._zoom_factor
             rz = zoom * dpr
+
+            max_d = max(page.rect.width, page.rect.height)
+            if max_d * rz > 8192:
+                rz = 8192.0 / max_d
+
             pix = page.get_pixmap(matrix=fitz.Matrix(rz, rz))
-            qp = QPixmap()
-            qp.loadFromData(pix.tobytes("png"))
+            if pix.n != 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+
+            qi = QImage(pix.samples, pix.width, pix.height,
+                        pix.stride, QImage.Format.Format_RGB888).copy()
+            qp = QPixmap.fromImage(qi)
             qp.setDevicePixelRatio(dpr)
             self._pixmap = qp
 
@@ -366,7 +387,7 @@ class PresentationWidget(QWidget):
                     elif di == 270: # top to bottom
                         dy = int(self.height() * t)
                         p.drawPixmap(int(old_x), int(old_y + dy), self._prev_pixmap)
-                        p.drawPixmap(int(x), int(y - self.height() + dy), self._pixmap)
+                        p.drawPixmap(int(x - self.height() + dy), self._pixmap)
                     else:           # left to right (0)
                         dx = int(self.width() * t)
                         p.drawPixmap(int(old_x - dx), int(old_y), self._prev_pixmap)
@@ -423,6 +444,12 @@ class PresentationWidget(QWidget):
         key = e.key()
         modifiers = e.modifiers()
 
+        if self._overlay._active_box is not None:
+            self._overlay.keyPressEvent(e)
+            self._sync_hud_text_options()
+            if e.isAccepted():
+                return
+
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
                 self._zoom_in()
@@ -436,14 +463,6 @@ class PresentationWidget(QWidget):
                 self._zoom_reset()
                 e.accept()
                 return
-
-        if self._overlay._active_box is not None:
-            self._overlay.keyPressEvent(e)
-            self._sync_hud_text_options()
-            if e.isAccepted():
-                return
-
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
             if key == Qt.Key.Key_Z:
                 if modifiers & Qt.KeyboardModifier.ShiftModifier:
                     self._overlay.redo()

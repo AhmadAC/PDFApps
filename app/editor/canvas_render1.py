@@ -100,13 +100,16 @@ class _EditPageJob(QRunnable):
                 doc.authenticate(self._password)
             page = doc[self._idx]
             rz = self._zoom * self._dpr
+            max_d = max(page.rect.width, page.rect.height)
+            if max_d * rz > 8192:
+                rz = 8192.0 / max_d
+
             pix = page.get_pixmap(matrix=fitz.Matrix(rz, rz), annots=False)
-            img = pix.tobytes("png")
-            qp = QP()
-            if not qp.loadFromData(img):
-                qi = QImage(pix.samples_mv, pix.width, pix.height,
-                            pix.stride, QImage.Format.Format_RGB888)
-                qp = QP.fromImage(qi.copy())
+            if pix.n != 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            qi = QImage(pix.samples, pix.width, pix.height,
+                        pix.stride, QImage.Format.Format_RGB888).copy()
+            qp = QP.fromImage(qi)
             qp.setDevicePixelRatio(self._dpr)
             self.signals.page_ready.emit(self._gen, self._idx, qp)
         except Exception:

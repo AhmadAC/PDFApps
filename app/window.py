@@ -1,6 +1,3 @@
-
-
-
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -485,14 +482,14 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
         QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf() if self._viewer else None)
 
-        # Global Zoom Shortcuts (Ctrl++, Ctrl+=, Ctrl+-, Ctrl+_, Ctrl+0)
+        # Scoped to WindowShortcut so presentation mode receives and isolates its own zoom
         sc_zi1 = QShortcut(QKeySequence("Ctrl++"), self, self._zoom_in_current)
         sc_zi2 = QShortcut(QKeySequence("Ctrl+="), self, self._zoom_in_current)
         sc_zo1 = QShortcut(QKeySequence("Ctrl+-"), self, self._zoom_out_current)
         sc_zo2 = QShortcut(QKeySequence("Ctrl+_"), self, self._zoom_out_current)
         sc_zr = QShortcut(QKeySequence("Ctrl+0"), self, self._zoom_reset_current)
         for sc in (sc_zi1, sc_zi2, sc_zo1, sc_zo2, sc_zr):
-            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
 
         sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self, self._handle_global_undo)
         sc_redo1 = QShortcut(QKeySequence("Ctrl+Y"), self, self._handle_global_redo)

@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 try:
@@ -152,6 +152,10 @@ def main():
         if send_to_existing(pdf_files):
             # Paths delivered to the existing instance — quit silently.
             sys.exit(0)
+
+    # Disable Qt's default 256 MB memory allocation limit for image readers,
+    # preventing crashes and "Rejecting image as it exceeds current allocation limit" errors.
+    QImageReader.setAllocationLimit(0)
 
     app = QApplication(sys.argv)
 
