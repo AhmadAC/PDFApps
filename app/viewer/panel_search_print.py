@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -208,7 +209,6 @@ class _FastPrintWorker(QThread):
         self.finished.emit(True, f"Sent to CUPS printer '{queue}'!\n{res.stdout.strip()}")
 
     def _run_qprinter(self):
-        # Native Windows GDI fallback with adaptive DPI rendering
         printer_name = self.target
         pdf_path = self.payload_or_pdf
         page_indices = self.kwargs.get("page_indices", [])
@@ -289,16 +289,19 @@ class _PdfPrintDialog(QDialog):
         self.temp_slice_path = None
         self.worker = None
 
+        self.setObjectName("print_dialog")
         self.setWindowTitle(f"Print — {os.path.basename(doc_path)}")
-        self.setMinimumSize(880, 580)
-        self.resize(960, 640)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
+        self.setMinimumSize(960, 620)
         self.setModal(True)
 
         self._load_accounting_history()
         self._init_doc_metrics()
         self._build_ui()
+        self._apply_dialog_stylesheet()
         self._populate_printers()
-        self._update_preview()
+
+        QTimer.singleShot(0, self.showMaximized)
 
     def _init_doc_metrics(self):
         try:
@@ -362,19 +365,111 @@ class _PdfPrintDialog(QDialog):
         except Exception:
             pass
 
+    def _apply_dialog_stylesheet(self):
+        self.setStyleSheet("""
+            QDialog#print_dialog {
+                background-color: #1E1F22;
+                color: #F0F0F0;
+            }
+            QDialog#print_dialog QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QDialog#print_dialog QGroupBox {
+                background-color: #26282D;
+                border: 1px solid #3E4249;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 14px 14px 12px 14px;
+                font-weight: 600;
+                color: #A0A0A0;
+            }
+            QDialog#print_dialog QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 4px;
+                background-color: #26282D;
+                color: #CCCCCC;
+            }
+            QDialog#print_dialog QLineEdit,
+            QDialog#print_dialog QComboBox,
+            QDialog#print_dialog QSpinBox {
+                background-color: #1E1F22;
+                border: 1px solid #3E4249;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #F0F0F0;
+                min-height: 26px;
+            }
+            QDialog#print_dialog QLineEdit:focus,
+            QDialog#print_dialog QComboBox:focus,
+            QDialog#print_dialog QSpinBox:focus {
+                border: 1px solid #0078D4;
+            }
+            QDialog#print_dialog QPushButton {
+                background-color: #383A40;
+                border: 1px solid #4E5157;
+                border-radius: 4px;
+                padding: 5px 14px;
+                color: #F0F0F0;
+                min-height: 26px;
+                font-size: 10pt;
+            }
+            QDialog#print_dialog QPushButton:hover {
+                background-color: #43464D;
+                border-color: #0078D4;
+            }
+            QDialog#print_dialog QPushButton#btn_primary {
+                background-color: #0078D4;
+                border: 1px solid #106EBE;
+                color: #FFFFFF;
+                font-weight: bold;
+                font-size: 10.5pt;
+            }
+            QDialog#print_dialog QPushButton#btn_primary:hover {
+                background-color: #106EBE;
+            }
+            QDialog#print_dialog QRadioButton,
+            QDialog#print_dialog QCheckBox {
+                color: #F0F0F0;
+                spacing: 8px;
+                background: transparent;
+            }
+            QDialog#print_dialog QLabel {
+                background: transparent;
+                color: #F0F0F0;
+            }
+            QDialog#print_dialog QScrollBar:vertical {
+                width: 8px;
+                background: transparent;
+                margin: 0;
+            }
+            QDialog#print_dialog QScrollBar::handle:vertical {
+                background: #4E5157;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QDialog#print_dialog QScrollBar::handle:vertical:hover {
+                background: #636770;
+            }
+            QDialog#print_dialog QScrollBar::add-line:vertical,
+            QDialog#print_dialog QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
     def _build_ui(self):
         main_lay = QHBoxLayout(self)
-        main_lay.setContentsMargins(14, 14, 14, 14)
-        main_lay.setSpacing(14)
+        main_lay.setContentsMargins(16, 16, 16, 16)
+        main_lay.setSpacing(16)
 
         # ── LEFT PANEL: Live Interactive Preview ──────────────────────
         left_box = QWidget()
-        left_box.setMinimumWidth(340)
         v_left = QVBoxLayout(left_box)
         v_left.setContentsMargins(0, 0, 0, 0)
-        v_left.setSpacing(8)
+        v_left.setSpacing(10)
 
-        # Document & OS Badge header
         top_hdr = QHBoxLayout()
         lbl_doc = QLabel(f"<b>{os.path.basename(self.doc_path)}</b>")
         lbl_doc.setStyleSheet(f"font-size: 11pt; color: {TEXT_PRI};")
@@ -383,63 +478,88 @@ class _PdfPrintDialog(QDialog):
 
         badge_txt = _get_os_badge()
         os_badge = QLabel(badge_txt)
-        os_badge.setStyleSheet(f"background: #24283B; color: {ACCENT}; border: 1px solid {BORDER}; border-radius: 4px; padding: 2px 6px; font-weight: bold; font-size: 8.5pt;")
+        os_badge.setStyleSheet(f"background: #24283B; color: {ACCENT}; border: 1px solid {BORDER}; border-radius: 4px; padding: 3px 8px; font-weight: bold; font-size: 8.5pt;")
         top_hdr.addWidget(os_badge)
         v_left.addLayout(top_hdr)
 
-        # Preview Scroll Frame
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
-        self.preview_scroll.setStyleSheet("background: #1A1B26; border: 1px solid #414868; border-radius: 6px;")
-        self.lbl_preview_img = QLabel("Generating preview...")
+        self.preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_scroll.setStyleSheet("background: #121316; border: 1px solid #333842; border-radius: 8px;")
+
+        self.lbl_preview_img = QLabel("Loading preview...")
         self.lbl_preview_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_preview_img.setStyleSheet("background: transparent;")
         self.preview_scroll.setWidget(self.lbl_preview_img)
         v_left.addWidget(self.preview_scroll, 1)
 
-        # Preview Navigation Bar
         nav_h = QHBoxLayout()
-        self.btn_prev_page = QPushButton("◀ Prev")
-        self.btn_prev_page.setFixedWidth(70)
+        self.btn_prev_page = QPushButton("Previous")
+        self.btn_prev_page.setFixedWidth(80)
+        self.btn_prev_page.setFixedHeight(30)
         self.btn_prev_page.clicked.connect(self._prev_preview_page)
         nav_h.addWidget(self.btn_prev_page)
 
         self.lbl_page_count = QLabel(f"Page 1 of {self.total_pages}")
         self.lbl_page_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_page_count.setStyleSheet(f"color: {ACCENT}; font-weight: bold;")
+        self.lbl_page_count.setStyleSheet(f"color: {ACCENT}; font-weight: bold; font-size: 10pt;")
         nav_h.addWidget(self.lbl_page_count, 1)
 
-        self.btn_next_page = QPushButton("Next ▶")
-        self.btn_next_page.setFixedWidth(70)
+        self.btn_next_page = QPushButton("Next")
+        self.btn_next_page.setFixedWidth(80)
+        self.btn_next_page.setFixedHeight(30)
         self.btn_next_page.clicked.connect(self._next_preview_page)
         nav_h.addWidget(self.btn_next_page)
         v_left.addLayout(nav_h)
 
-        main_lay.addWidget(left_box, 1)
+        main_lay.addWidget(left_box, 6)
 
         # ── RIGHT PANEL: Settings, Accounting & Print Actions ─────────
+        right_container = QWidget()
+        right_container.setMinimumWidth(440)
+        right_container_layout = QVBoxLayout(right_container)
+        right_container_layout.setContentsMargins(0, 0, 0, 0)
+        right_container_layout.setSpacing(10)
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         right_box = QWidget()
-        right_box.setMinimumWidth(440)
+        right_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         v_right = QVBoxLayout(right_box)
-        v_right.setContentsMargins(0, 0, 0, 0)
-        v_right.setSpacing(10)
+        v_right.setContentsMargins(0, 0, 10, 0)
+        v_right.setSpacing(12)
 
         # 1. Destination Group
         grp_dest = QGroupBox("Printer Destination")
         f_dest = QFormLayout(grp_dest)
         f_dest.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        f_dest.setVerticalSpacing(10)
+        f_dest.setHorizontalSpacing(12)
+        f_dest.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
         self.cmb_printer = QComboBox()
+        self.cmb_printer.setMinimumHeight(30)
         self.cmb_printer.currentIndexChanged.connect(self._on_printer_changed)
         f_dest.addRow("Printer:", self.cmb_printer)
 
         ip_row = QHBoxLayout()
+        ip_row.setContentsMargins(0, 0, 0, 0)
+        ip_row.setSpacing(8)
         self.edit_ip = QLineEdit(self.saved_ip)
+        self.edit_ip.setMinimumHeight(30)
         self.edit_ip.setPlaceholderText("e.g. 172.31.2.14")
         ip_row.addWidget(self.edit_ip, 1)
+
         self.btn_test_ip = QPushButton("Test Port 9100")
+        self.btn_test_ip.setMinimumHeight(30)
         self.btn_test_ip.setToolTip("Verify high-speed port connectivity")
         self.btn_test_ip.clicked.connect(self._test_printer_ip)
         ip_row.addWidget(self.btn_test_ip)
+
         self.row_ip_widget = QWidget()
         self.row_ip_widget.setLayout(ip_row)
         f_dest.addRow("Network IP:", self.row_ip_widget)
@@ -450,35 +570,47 @@ class _PdfPrintDialog(QDialog):
         grp_acct = QGroupBox("Printer Accounting (Fuji Xerox ApeosPort / Auditron)")
         f_acct = QFormLayout(grp_acct)
         f_acct.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        f_acct.setVerticalSpacing(10)
+        f_acct.setHorizontalSpacing(12)
+        f_acct.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
         self.edit_acct_user = QLineEdit(self.acct_user)
+        self.edit_acct_user.setMinimumHeight(30)
         f_acct.addRow("User ID:", self.edit_acct_user)
 
         pin_row = QHBoxLayout()
+        pin_row.setContentsMargins(0, 0, 0, 0)
+        pin_row.setSpacing(8)
         self.edit_acct_pin = QLineEdit(self.acct_pin)
+        self.edit_acct_pin.setMinimumHeight(30)
         self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Password)
         pin_row.addWidget(self.edit_acct_pin, 1)
 
         self.btn_toggle_pin = QPushButton("Show")
-        self.btn_toggle_pin.setFixedWidth(54)
+        self.btn_toggle_pin.setFixedWidth(64)
+        self.btn_toggle_pin.setMinimumHeight(30)
         self.btn_toggle_pin.setCheckable(True)
         self.btn_toggle_pin.toggled.connect(
-            lambda checked: self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password)
+            lambda checked: (
+                self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password),
+                self.btn_toggle_pin.setText("Hide" if checked else "Show")
+            )
         )
         pin_row.addWidget(self.btn_toggle_pin)
+
         pin_widget = QWidget()
         pin_widget.setLayout(pin_row)
         f_acct.addRow("Passcode / PIN:", pin_widget)
 
         self.edit_acct_id = QLineEdit(self.acct_id)
+        self.edit_acct_id.setMinimumHeight(30)
         self.edit_acct_id.setPlaceholderText("Optional Account ID")
         f_acct.addRow("Account ID:", self.edit_acct_id)
 
-        # If standalone PrinterAccounting script is installed, offer 1-click launch
         script_path = _find_printer_accounting_script()
         if script_path:
             btn_launch_acct = QPushButton("Open Fuji Xerox Manager (Standalone)...")
-            btn_launch_acct.setIcon(qta.icon("fa5s.external-link-alt", color=TEXT_PRI))
+            btn_launch_acct.setMinimumHeight(30)
             btn_launch_acct.clicked.connect(self._launch_standalone_accounting)
             f_acct.addRow("", btn_launch_acct)
 
@@ -487,11 +619,14 @@ class _PdfPrintDialog(QDialog):
         # 3. Page Range Group
         grp_range = QGroupBox("Page Range")
         v_range = QVBoxLayout(grp_range)
-        v_range.setSpacing(6)
+        v_range.setSpacing(10)
 
         self.rad_all = QRadioButton(f"All Pages (1 - {self.total_pages})")
+        self.rad_all.setMinimumHeight(24)
         self.rad_current = QRadioButton(f"Current Page (Page {self.current_preview_page + 1})")
+        self.rad_current.setMinimumHeight(24)
         self.rad_custom = QRadioButton("Custom Range:")
+        self.rad_custom.setMinimumHeight(24)
 
         self.bg_range = QButtonGroup(self)
         self.bg_range.addButton(self.rad_all, 0)
@@ -506,8 +641,11 @@ class _PdfPrintDialog(QDialog):
         v_range.addWidget(self.rad_current)
 
         custom_h = QHBoxLayout()
+        custom_h.setContentsMargins(0, 0, 0, 0)
+        custom_h.setSpacing(8)
         custom_h.addWidget(self.rad_custom)
         self.edit_range = QLineEdit()
+        self.edit_range.setMinimumHeight(30)
         self.edit_range.setPlaceholderText("e.g. 1-3, 5, 8")
         if self.initial_pages:
             self.edit_range.setText(", ".join(str(p + 1) for p in self.initial_pages))
@@ -515,9 +653,13 @@ class _PdfPrintDialog(QDialog):
         v_range.addLayout(custom_h)
 
         quick_row = QHBoxLayout()
+        quick_row.setContentsMargins(0, 0, 0, 0)
+        quick_row.setSpacing(8)
         btn_odd = QPushButton("Odd Pages")
+        btn_odd.setMinimumHeight(28)
         btn_odd.clicked.connect(self._set_range_odd)
         btn_even = QPushButton("Even Pages")
+        btn_even.setMinimumHeight(28)
         btn_even.clicked.connect(self._set_range_even)
         quick_row.addWidget(btn_odd)
         quick_row.addWidget(btn_even)
@@ -529,96 +671,123 @@ class _PdfPrintDialog(QDialog):
 
         v_right.addWidget(grp_range)
 
-        # 4. Layout & Options
+        # 4. Layout & Finishing
         grp_opts = QGroupBox("Layout & Finishing")
         f_opts = QFormLayout(grp_opts)
         f_opts.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        f_opts.setVerticalSpacing(10)
+        f_opts.setHorizontalSpacing(12)
+        f_opts.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
         copies_h = QHBoxLayout()
+        copies_h.setContentsMargins(0, 0, 0, 0)
+        copies_h.setSpacing(10)
         self.spin_copies = QSpinBox()
+        self.spin_copies.setMinimumHeight(30)
         self.spin_copies.setRange(1, 999)
         self.spin_copies.setValue(1)
         copies_h.addWidget(self.spin_copies)
+
         self.chk_collate = QCheckBox("Collate")
+        self.chk_collate.setMinimumHeight(30)
         self.chk_collate.setChecked(True)
         copies_h.addWidget(self.chk_collate)
         copies_h.addStretch()
-        copies_w = QWidget(); copies_w.setLayout(copies_h)
+
+        copies_w = QWidget()
+        copies_w.setLayout(copies_h)
         f_opts.addRow("Copies:", copies_w)
 
         self.cmb_duplex = QComboBox()
+        self.cmb_duplex.setMinimumHeight(30)
         self.cmb_duplex.addItems(["1-Sided (Simplex)", "2-Sided (Flip on Long Edge)", "2-Sided (Flip on Short Edge)"])
         idx_dup = self.cmb_duplex.findText(self.saved_duplex)
-        if idx_dup >= 0: self.cmb_duplex.setCurrentIndex(idx_dup)
+        if idx_dup >= 0:
+            self.cmb_duplex.setCurrentIndex(idx_dup)
         f_opts.addRow("Duplex:", self.cmb_duplex)
 
         self.cmb_paper = QComboBox()
+        self.cmb_paper.setMinimumHeight(30)
         self.cmb_paper.addItems(["A4", "A3", "Letter", "Legal", "A5"])
         idx_paper = self.cmb_paper.findText(self.saved_paper)
-        if idx_paper >= 0: self.cmb_paper.setCurrentIndex(idx_paper)
+        if idx_paper >= 0:
+            self.cmb_paper.setCurrentIndex(idx_paper)
         f_opts.addRow("Paper Size:", self.cmb_paper)
 
         self.cmb_color = QComboBox()
+        self.cmb_color.setMinimumHeight(30)
         self.cmb_color.addItems(["Color", "Black & White (Grayscale)"])
         idx_col = self.cmb_color.findText(self.saved_color)
-        if idx_col >= 0: self.cmb_color.setCurrentIndex(idx_col)
+        if idx_col >= 0:
+            self.cmb_color.setCurrentIndex(idx_col)
         self.cmb_color.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Color Mode:", self.cmb_color)
 
         self.cmb_orient = QComboBox()
+        self.cmb_orient.setMinimumHeight(30)
         self.cmb_orient.addItems(["Auto (Match PDF)", "Portrait", "Landscape"])
         self.cmb_orient.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Orientation:", self.cmb_orient)
 
         v_right.addWidget(grp_opts)
+        v_right.addStretch()
 
-        # 5. Progress and Action buttons
+        right_scroll.setWidget(right_box)
+        right_container_layout.addWidget(right_scroll, 1)
+
+        # 5. Fixed Bottom Action Row
+        bottom_box = QWidget()
+        bottom_layout = QVBoxLayout(bottom_box)
+        bottom_layout.setContentsMargins(0, 4, 10, 0)
+        bottom_layout.setSpacing(6)
+
         self.prog_bar = QProgressBar()
-        self.prog_bar.setFixedHeight(14)
+        self.prog_bar.setFixedHeight(12)
         self.prog_bar.setVisible(False)
-        v_right.addWidget(self.prog_bar)
+        bottom_layout.addWidget(self.prog_bar)
 
         self.lbl_status = QLabel("")
         self.lbl_status.setStyleSheet(f"color: {ACCENT}; font-size: 9pt;")
-        v_right.addWidget(self.lbl_status)
+        bottom_layout.addWidget(self.lbl_status)
 
         act_h = QHBoxLayout()
+        act_h.setContentsMargins(0, 0, 0, 0)
+        act_h.setSpacing(10)
         act_h.addStretch()
 
         self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setMinimumHeight(36)
+        self.btn_cancel.setFixedWidth(100)
         self.btn_cancel.clicked.connect(self.reject)
         act_h.addWidget(self.btn_cancel)
 
-        self.btn_print = QPushButton("⚡ Fast Print")
+        self.btn_print = QPushButton("Fast Print (Port 9100)")
         self.btn_print.setObjectName("btn_primary")
-        self.btn_print.setStyleSheet(f"background: {ACCENT}; color: white; font-weight: bold; padding: 8px 22px; border-radius: 6px;")
+        self.btn_print.setMinimumHeight(36)
         self.btn_print.clicked.connect(self._start_print_job)
         act_h.addWidget(self.btn_print)
 
-        v_right.addLayout(act_h)
-        main_lay.addWidget(right_box, 1)
+        bottom_layout.addLayout(act_h)
+        right_container_layout.addWidget(bottom_box)
+
+        main_lay.addWidget(right_container, 5)
 
     def _populate_printers(self):
         self.cmb_printer.clear()
+        self.cmb_printer.addItem("Direct Network Printer (Raw Port 9100 — JetDirect)", "socket")
 
-        # Always offer Direct Port 9100 Raw Socket option (instant Foxit-speed bypass)
-        self.cmb_printer.addItem("⚡ Direct Network Printer (Raw Port 9100 — Instant JetDirect)", "socket")
-
-        # Discover system printers
         printers = QPrinterInfo.availablePrinters()
-
         for p in printers:
             p_name = p.printerName()
-            self.cmb_printer.addItem(f"🖨️ {p_name}", ("cups" if _is_linux() else "qprinter", p_name))
+            self.cmb_printer.addItem(p_name, ("cups" if _is_linux() else "qprinter", p_name))
 
-        # Check CUPS queues specifically on Linux if QPrinterInfo returned few
         if _is_linux():
             try:
                 res = subprocess.run(["lpstat", "-e"], capture_output=True, text=True)
                 for q in res.stdout.splitlines():
                     q = q.strip()
                     if q and not any(q in self.cmb_printer.itemText(i) for i in range(self.cmb_printer.count())):
-                        self.cmb_printer.addItem(f"🖨️ {q} (CUPS)", ("cups", q))
+                        self.cmb_printer.addItem(f"{q} (CUPS)", ("cups", q))
             except Exception:
                 pass
 
@@ -632,9 +801,9 @@ class _PdfPrintDialog(QDialog):
         is_direct_socket = (data == "socket")
         self.row_ip_widget.setVisible(is_direct_socket)
         if is_direct_socket:
-            self.btn_print.setText("⚡ Fast Print (Port 9100)")
+            self.btn_print.setText("Fast Print (Port 9100)")
         else:
-            self.btn_print.setText("🖨️ Send Print Job")
+            self.btn_print.setText("Send Print Job")
 
     def _test_printer_ip(self):
         ip = self.edit_ip.text().strip()
@@ -643,7 +812,7 @@ class _PdfPrintDialog(QDialog):
             return
         try:
             with socket.create_connection((ip, 9100), timeout=1.5):
-                QMessageBox.information(self, "Online", f"Printer at {ip}:9100 is ONLINE and accepting raw connections!")
+                QMessageBox.information(self, "Online", f"Printer at {ip}:9100 is ONLINE and ready for Port 9100 printing.")
         except Exception as e:
             QMessageBox.critical(self, "Offline / Refused", f"Cannot connect to {ip}:9100:\n{e}")
 
@@ -675,6 +844,15 @@ class _PdfPrintDialog(QDialog):
             self.current_preview_page += 1
             self._update_preview()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.showMaximized()
+        QTimer.singleShot(50, self._update_preview)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(50, self._update_preview)
+
     def _update_preview(self):
         self.rad_current.setText(f"Current Page (Page {self.current_preview_page + 1})")
         self.lbl_page_count.setText(f"Page {self.current_preview_page + 1} of {self.total_pages}")
@@ -688,10 +866,19 @@ class _PdfPrintDialog(QDialog):
 
             if 0 <= self.current_preview_page < doc.page_count:
                 page = doc[self.current_preview_page]
-                target_w = max(260, self.preview_scroll.viewport().width() - 30)
-                zoom = target_w / max(1.0, page.rect.width)
+                vp = self.preview_scroll.viewport()
+                avail_w = max(100, vp.width() - 32)
+                avail_h = max(100, vp.height() - 32)
 
+                pw = page.rect.width
+                ph = page.rect.height
                 orient = self.cmb_orient.currentText()
+                if ("Landscape" in orient and pw < ph) or ("Portrait" in orient and pw > ph):
+                    pw, ph = ph, pw
+
+                zoom = min(avail_w / max(1.0, pw), avail_h / max(1.0, ph))
+                zoom = max(0.05, zoom * 0.95)
+
                 mat = fitz.Matrix(zoom, zoom)
                 if "Landscape" in orient and page.rect.width < page.rect.height:
                     mat = mat.prerotate(90)
@@ -741,7 +928,6 @@ class _PdfPrintDialog(QDialog):
         p_idx = self.cmb_printer.currentIndex()
         p_data = self.cmb_printer.itemData(p_idx)
 
-        # Slice in memory if not printing full document
         target_file = self.doc_path
         self.temp_slice_path = None
 
@@ -766,7 +952,6 @@ class _PdfPrintDialog(QDialog):
                 QMessageBox.critical(self, "Page Slicing Error", f"Failed to prepare pages:\n{ex}")
                 return
 
-        # Prepare payload or parameters
         copies = self.spin_copies.value()
         duplex = self.cmb_duplex.currentText()
         paper = self.cmb_paper.currentText()
