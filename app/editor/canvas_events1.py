@@ -178,6 +178,8 @@ class CanvasEventHandler:
                     ov["rect"] = r
                 elif "bbox" in ov:
                     ov["bbox"] = [r.x0, r.y0, r.x1, r.y1]
+                if "point" in ov:
+                    ov["point"] = fitz.Point(r.x0, r.y0 + ov.get("size", 12) * 0.82)
                 c.overlay_changed.emit()
                 c.update()
                 e.accept()
@@ -196,6 +198,8 @@ class CanvasEventHandler:
                     ov["bbox"] = [new_r.x0, new_r.y0, new_r.x1, new_r.y1]
                     if "origin" in ov:
                         ov["origin"] = [new_r.x0, new_r.y1]
+                if "point" in ov:
+                    ov["point"] = fitz.Point(new_r.x0, new_r.y0 + ov.get("size", 12) * 0.82)
                 c.overlay_changed.emit()
                 c.update()
                 e.accept()
@@ -253,7 +257,7 @@ class CanvasEventHandler:
             c._stroke_page = -1
             c.update()
             return
-        if c._drag_rect and c._drag_rect.width() > 3 and c._drag_rect.height() > 3:
+        if c._drag_rect and c._drag_rect.width() > 6 and c._drag_rect.height() > 6:
             page_idx, lx, ly = c._page_and_local(c._drag_rect.left(), c._drag_rect.top())
             yo = c._page_offsets[page_idx][0] if page_idx < len(c._page_offsets) else 0
             local_rect = QRect(c._drag_rect.left(), c._drag_rect.top() - yo,
@@ -313,11 +317,15 @@ class CanvasEventHandler:
             if "rect" in ov:
                 r = ov["rect"]
                 ov["rect"] = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+                if "point" in ov:
+                    ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
             elif "bbox" in ov:
                 b = ov["bbox"]
                 ov["bbox"] = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]
                 if "origin" in ov:
                     ov["origin"] = [b[0] + dx, b[3] + dy]
+            elif "point" in ov:
+                ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
             c.overlay_changed.emit()
             c.update()
             e.accept()

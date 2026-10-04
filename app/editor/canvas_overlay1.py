@@ -86,9 +86,15 @@ class CanvasOverlayManager:
             if "rect" in new_overlay:
                 r = fitz.Rect(new_overlay["rect"])
                 new_overlay["rect"] = fitz.Rect(r.x0 + 15, r.y0 + 15, r.x1 + 15, r.y1 + 15)
+                if "point" in new_overlay:
+                    pt = new_overlay["point"]
+                    new_overlay["point"] = fitz.Point(pt.x + 15, pt.y + 15)
             elif "bbox" in new_overlay:
                 bb = new_overlay["bbox"]
                 new_overlay["bbox"] = [bb[0] + 15, bb[1] + 15, bb[2] + 15, bb[3] + 15]
+            elif "point" in new_overlay:
+                pt = new_overlay["point"]
+                new_overlay["point"] = fitz.Point(pt.x + 15, pt.y + 15)
             c._overlays.append(new_overlay)
             c._selected_overlay_idx = len(c._overlays) - 1
             c.overlay_changed.emit()
@@ -102,7 +108,7 @@ class CanvasOverlayManager:
         if e.get("_deleted"):
             return self.HANDLE_NONE
         etype = e.get("type")
-        if etype not in ("signature", "image", "text_edit", "redact"):
+        if etype not in ("signature", "image", "text_edit", "text", "redact"):
             return self.HANDLE_NONE
         pg = e.get("page", 0)
         if pg >= len(c._page_offsets):
@@ -110,7 +116,20 @@ class CanvasOverlayManager:
         yo = c._page_offsets[pg][0]
         z = c._zoom
 
-        r = e.get("rect") if "rect" in e else fitz.Rect(e.get("bbox", (0, 0, 0, 0)))
+        if "rect" in e:
+            r = e["rect"]
+        elif "bbox" in e:
+            r = fitz.Rect(e.get("bbox", (0, 0, 0, 0)))
+        elif etype == "text" and "point" in e:
+            pt = e["point"]
+            sz = float(e.get("size", 12))
+            txt = e.get("text", "")
+            tw = max(16.0, len(txt) * sz * 0.65)
+            r = fitz.Rect(pt.x, pt.y - sz * 0.85, pt.x + tw, pt.y + sz * 0.25)
+            e["rect"] = r
+        else:
+            return self.HANDLE_NONE
+
         sx0 = int(r.x0 * z)
         sy0 = yo + int(r.y0 * z)
         sx1 = int(r.x1 * z)
@@ -145,14 +164,26 @@ class CanvasOverlayManager:
             sy0 = yo + int(r.y0 * z)
             sx1 = int(r.x1 * z)
             sy1 = yo + int(r.y1 * z)
-            return QRect(sx0, sy0, max(4, sx1 - sx0), max(4, sy1 - sy0)).contains(pos)
+            return QRect(sx0 - 4, sy0 - 4, max(12, sx1 - sx0 + 8), max(12, sy1 - sy0 + 8)).contains(pos)
         elif "bbox" in e:
             b = e["bbox"]
             sx0 = int(b[0] * z)
             sy0 = yo + int(b[1] * z)
             sx1 = int(b[2] * z)
             sy1 = yo + int(b[3] * z)
-            return QRect(sx0 - 2, sy0 - 2, max(6, sx1 - sx0 + 4), max(6, sy1 - sy0 + 4)).contains(pos)
+            return QRect(sx0 - 4, sy0 - 4, max(12, sx1 - sx0 + 8), max(12, sy1 - sy0 + 8)).contains(pos)
+        elif e.get("type") == "text" and "point" in e:
+            pt = e["point"]
+            sz = float(e.get("size", 12))
+            txt = e.get("text", "")
+            tw = max(16.0, len(txt) * sz * 0.65)
+            r = fitz.Rect(pt.x, pt.y - sz * 0.85, pt.x + tw, pt.y + sz * 0.25)
+            e["rect"] = r
+            sx0 = int(r.x0 * z)
+            sy0 = yo + int(r.y0 * z)
+            sx1 = int(r.x1 * z)
+            sy1 = yo + int(r.y1 * z)
+            return QRect(sx0 - 4, sy0 - 4, max(12, sx1 - sx0 + 8), max(12, sy1 - sy0 + 8)).contains(pos)
         return False
 
     def detect_existing_media_at(self, page_idx: int, pdf_pt: fitz.Point) -> dict | None:

@@ -299,7 +299,7 @@ class PdfEditCanvas(QWidget):
                 return i
         return max(0, len(self._page_offsets) - 1)
 
-    def get_span_at(self, page_idx: int, pdf_pt: fitz.Point, max_dist: float = 18.0):
+    def get_span_at(self, page_idx: int, pdf_pt: fitz.Point, max_dist: float = 6.0):
         if not self._doc or not (0 <= page_idx < self._doc.page_count):
             return None
         page = self._doc[page_idx]
@@ -312,7 +312,7 @@ class PdfEditCanvas(QWidget):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
                     bbox = fitz.Rect(span["bbox"])
-                    if bbox.contains(click):
+                    if bbox.contains(click) or (bbox + fitz.Rect(-2, -2, 2, 2)).contains(click):
                         return span
                     cx = max(bbox.x0, min(click.x, bbox.x1))
                     cy = max(bbox.y0, min(click.y, bbox.y1))

@@ -27,14 +27,13 @@ def setup_editor_ui(tab) -> None:
     root = QVBoxLayout(tab)
     root.setContentsMargins(0, 0, 0, 0)
     root.setSpacing(0)
-    root.addWidget(ToolHeader("fa5s.edit", t("edit.title"), t("edit.subtitle")))
 
     body = QWidget()
     body_h = QHBoxLayout(body)
     body_h.setContentsMargins(0, 0, 0, 0)
     body_h.setSpacing(0)
 
-    # Canvas Scroll Area
+    # Canvas Scroll Area (Left window - full height)
     tab._canvas = PdfEditCanvas()
     canvas_scroll = QScrollArea()
     canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -49,13 +48,16 @@ def setup_editor_ui(tab) -> None:
     tab._canvas_scroll = canvas_scroll
     body_h.addWidget(canvas_scroll, 1)
 
-    # Control Sidebar
+    # Control Sidebar (Right window)
     ctrl_inner = QWidget()
     ctrl_inner.setObjectName("scroll_inner")
     ctrl_inner.setFixedWidth(380)
     cv = QVBoxLayout(ctrl_inner)
     cv.setContentsMargins(10, 10, 10, 10)
     cv.setSpacing(8)
+
+    # Banner header placed exclusively inside the right sidebar
+    cv.addWidget(ToolHeader("fa5s.edit", t("edit.title"), t("edit.subtitle")))
 
     # 1. PDF File Group
     tab._grp_file = QGroupBox(t("edit.pdf_file"))
@@ -203,6 +205,28 @@ def _build_mode_options(tab) -> None:
 
     # 1 - Text & Typography Options
     w1 = QWidget(); v1 = QVBoxLayout(w1); v1.setContentsMargins(0, 4, 0, 0); v1.setSpacing(6)
+
+    mode_btn_row = QHBoxLayout()
+    mode_btn_row.setSpacing(4)
+    tab._btn_text_add = QPushButton("➕ " + t("tool.text.add_mode", default="Add Text"))
+    tab._btn_text_add.setCheckable(True)
+    tab._btn_text_add.setChecked(True)
+    tab._btn_text_add.setFixedHeight(28)
+    tab._btn_text_add.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    tab._btn_text_edit = QPushButton("✏ " + t("tool.text.edit_mode", default="Edit Text"))
+    tab._btn_text_edit.setCheckable(True)
+    tab._btn_text_edit.setChecked(False)
+    tab._btn_text_edit.setFixedHeight(28)
+    tab._btn_text_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    tab._btn_text_add.clicked.connect(lambda: tab._set_text_submode("add"))
+    tab._btn_text_edit.clicked.connect(lambda: tab._set_text_submode("edit"))
+
+    mode_btn_row.addWidget(tab._btn_text_add)
+    mode_btn_row.addWidget(tab._btn_text_edit)
+    v1.addLayout(mode_btn_row)
+
     font_row = QHBoxLayout()
     font_row.addWidget(QLabel("Font:"))
     tab._text_font = FocusComboBox()
@@ -246,7 +270,7 @@ def _build_mode_options(tab) -> None:
     row_col.addWidget(tab._btn_del_text)
     v1.addLayout(row_col)
 
-    tab._text_hint = QLabel("💡 Click any text to edit or delete it. Change font, size, and styling above.")
+    tab._text_hint = QLabel("💡 Click anywhere on the page to insert new text exactly where you click.")
     tab._text_hint.setWordWrap(True)
     tab._text_hint.setStyleSheet(f"color:{ACCENT}; font-size:11px;")
     v1.addWidget(tab._text_hint); v1.addStretch()

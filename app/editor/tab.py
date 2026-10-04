@@ -140,7 +140,7 @@ class TabEditar(QWidget):
         self._doc_path: str | None = None
         self._pdf_password: str = ""
         self._mode_idx: int = _MODE_TEXT
-        self._text_submode: str = "add"
+        self._text_submode: str = "edit"
         self._dark_mode: bool = True
         self._signature_path: str | None = None
         self._page_idx: int = 0
@@ -160,7 +160,7 @@ class TabEditar(QWidget):
         self._canvas.overlay_changed.connect(self.update)
         self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
 
-        self._set_text_submode("add")
+        self._set_text_submode("edit")
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()
 
@@ -279,12 +279,12 @@ class TabEditar(QWidget):
             if is_add:
                 self._text_hint.setText("💡 Click anywhere on the page to insert new text exactly where you click.")
             else:
-                self._text_hint.setText("💡 Click any text to edit or delete it. Change font, size, and styling above.")
+                self._text_hint.setText("💡 Click any text to edit or delete it. Click empty space to add text.")
 
     def _update_text_submode_styles(self):
         if not hasattr(self, "_btn_text_add") or not hasattr(self, "_btn_text_edit"):
             return
-        is_add = getattr(self, "_text_submode", "add") == "add"
+        is_add = getattr(self, "_text_submode", "edit") == "add"
         active_style = (
             f"background:#264F78; border:1px solid {ACCENT}; color:#FFFFFF; border-radius:4px; font-weight:600; padding:3px 8px;"
             if self._dark_mode else
@@ -560,13 +560,15 @@ class TabEditar(QWidget):
                             return
         mode = self._mode_idx
         if mode == _MODE_TEXT:
-            submode = getattr(self, "_text_submode", "add")
-            if submode == "edit":
-                hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=2.0)
+            submode = getattr(self, "_text_submode", "edit")
+            # In edit mode (or default), if user clicks on existing text, edit it in-place
+            if submode != "add":
+                hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=6.0)
                 if hit:
                     self._canvas.begin_inline_text_edit(hit, page_idx)
                     return
 
+            # If in 'add' mode, or clicking in blank space, insert new text where clicked:
             size = float(self._text_size.value())
             color = self._text_color.color_tuple()
             font = self._text_font.currentText()

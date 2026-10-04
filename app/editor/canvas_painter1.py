@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import fitz
 from PySide6.QtCore import Qt, QRect, QPoint
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPixmap
 
@@ -69,10 +70,40 @@ class CanvasPainter:
             elif etype == "text":
                 pt = e["point"]; c = e["color"]
                 p.setPen(QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255)))
-                f2 = QFont(e.get("font", "Helvetica"))
+                fname = e.get("font", "Helvetica")
+                f2 = QFont(fname)
                 f2.setPointSizeF(max(4.0, float(e.get("size", 12)) * z * 0.75))
+                flags = int(e.get("flags", 0) or 0)
+                if (flags & 16) or "bold" in fname.lower():
+                    f2.setBold(True)
+                if (flags & 2) or "italic" in fname.lower() or "oblique" in fname.lower():
+                    f2.setItalic(True)
                 p.setFont(f2)
                 p.drawText(int(pt.x*z), yo+int(pt.y*z), e["text"])
+
+                if is_selected:
+                    r = e.get("rect")
+                    if not r:
+                        sz = float(e.get("size", 12))
+                        tw = max(16.0, len(e.get("text", "")) * sz * 0.65)
+                        r = fitz.Rect(pt.x, pt.y - sz * 0.85, pt.x + tw, pt.y + sz * 0.25)
+                        e["rect"] = r
+                    qr = QRect(int(r.x0*z) - 2, yo+int(r.y0*z) - 2, max(1,int(r.width*z)) + 4, max(1,int(r.height*z)) + 4)
+                    p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawRect(qr)
+
+                    hs = 8
+                    p.setBrush(QColor("#FFFFFF"))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
+                    for hpt in [
+                        QPoint(qr.left(), qr.top()),
+                        QPoint(qr.right(), qr.top()),
+                        QPoint(qr.left(), qr.bottom()),
+                        QPoint(qr.right(), qr.bottom()),
+                    ]:
+                        p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))
+
             elif etype in ("image", "signature"):
                 r = e["rect"]
                 qr = QRect(int(r.x0*z), yo+int(r.y0*z), max(1,int(r.width*z)), max(1,int(r.height*z)))

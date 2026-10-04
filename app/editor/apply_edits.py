@@ -56,6 +56,8 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
             pg.apply_redactions()
 
         elif etype == "text":
+            if e.get("_deleted"):
+                continue
             fname = (e.get("font", "") or "").lower()
             if "times" in fname or "serif" in fname or "roman" in fname:
                 fontname = "tiro"
@@ -63,6 +65,18 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                 fontname = "cour"
             else:
                 fontname = "helv"
+            flags = int(e.get("flags", 0) or 0)
+            if (flags & 16) or "bold" in fname:
+                if fontname == "helv": fontname = "hebo"
+                elif fontname == "tiro": fontname = "tibo"
+                elif fontname == "cour": fontname = "cobo"
+            if (flags & 2) or "italic" in fname or "oblique" in fname:
+                if fontname == "helv": fontname = "heit"
+                elif fontname == "hebo": fontname = "hebi"
+                elif fontname == "tiro": fontname = "tiit"
+                elif fontname == "tibo": fontname = "tibi"
+                elif fontname == "cour": fontname = "coit"
+                elif fontname == "cobo": fontname = "cobi"
             c = e.get("color", (0, 0, 0))
             if isinstance(c, (list, tuple)) and len(c) >= 3:
                 color = tuple(float(x) for x in c[:3])

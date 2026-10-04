@@ -19,6 +19,7 @@ class CanvasInlineTextManager:
         self.edit.hide()
         self.edit.installEventFilter(canvas)
         self.edit.returnPressed.connect(self.commit)
+        self.edit.textChanged.connect(lambda _: self.reposition() if self.mode == "insert" else None)
 
         self.mode: str | None = None
         self.span: dict | None = None
@@ -67,7 +68,7 @@ class CanvasInlineTextManager:
             "text": self.original_text,
         })
 
-    def begin_insert(self, page_idx: int, pdf_point, size: float, color: tuple, font: str = ""):
+    def begin_insert(self, page_idx: int, pdf_point, size: float, color: tuple, font: str = "", bold: bool = False, italic: bool = False):
         if self.edit.isVisible():
             self.commit()
         self.mode = "insert"
@@ -78,7 +79,7 @@ class CanvasInlineTextManager:
         self.insert_size = float(size)
         self.insert_color = tuple(color)
         self.insert_font = font or "Helvetica"
-        self.insert_flags = 0
+        self.insert_flags = (16 if bold else 0) | (2 if italic else 0)
         self.edit.setText("")
         self._style_inline_insert()
         self.reposition()
@@ -90,8 +91,8 @@ class CanvasInlineTextManager:
             "font": self.insert_font,
             "size": self.insert_size,
             "color": self.insert_color,
-            "bold": False,
-            "italic": False,
+            "bold": bold,
+            "italic": italic,
             "text": "",
         })
 
@@ -129,6 +130,7 @@ class CanvasInlineTextManager:
                 ov["font"] = font
                 ov["size"] = size
                 ov["color"] = color
+                ov["flags"] = flags
                 c.overlay_changed.emit()
                 c.update()
 
@@ -203,10 +205,13 @@ class CanvasInlineTextManager:
         elif self.mode == "insert" and self.insert_point is not None:
             px, py = self.insert_point
             size = self.insert_size
-            x = int(px * z) - 3
-            y = yo + int((py - size * 0.85) * z) - 3
-            w = max(120, int(size * z * 8))
-            h = max(24, int(size * z * 1.4) + 6)
+            x = int(px * z) - 2
+            y = yo + int(py * z) - 2
+            fm = self.edit.fontMetrics()
+            txt = self.edit.text()
+            txt_w = fm.horizontalAdvance(txt) if txt else 0
+            w = max(140, int(txt_w + 30))
+            h = max(26, int(size * z * 1.3) + 4)
             self.edit.setGeometry(x, y, w, h)
 
     def commit(self):
@@ -220,6 +225,7 @@ class CanvasInlineTextManager:
         isize = self.insert_size
         icolor = self.insert_color
         ifont = self.insert_font
+        iflags = self.insert_flags
         original = self.original_text
 
         self.edit.hide()
@@ -255,14 +261,20 @@ class CanvasInlineTextManager:
         elif mode == "insert" and ipoint is not None:
             if not new_text.strip():
                 return
+            baseline_y = ipoint[1] + isize * 0.82
+            char_w = isize * 0.55
+            est_w = max(20.0, len(new_text) * char_w)
+            rect = fitz.Rect(ipoint[0], ipoint[1], ipoint[0] + est_w, ipoint[1] + isize * 1.1)
             edit = {
                 "type": "text",
                 "page": page_idx,
-                "point": fitz.Point(ipoint[0], ipoint[1]),
+                "point": fitz.Point(ipoint[0], baseline_y),
+                "rect": rect,
                 "text": new_text,
                 "size": isize,
                 "color": icolor,
                 "font": ifont,
+                "flags": iflags,
             }
             self.canvas.text_inserted.emit(page_idx, edit)
 
