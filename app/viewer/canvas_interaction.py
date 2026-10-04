@@ -1,4 +1,3 @@
-
 # app/viewer/canvas_interaction.py
 
 """PDFApps – Interaction handler for _SelectCanvas (Mouse, Keyboard, Context Menus, Signatures, Shortcuts)."""
@@ -17,7 +16,7 @@ import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_SEC
 from app.i18n import t
-from app.viewer.canvas_worker import _NOTE_ICON_SIZE
+from app.viewer.canvas_worker import _NOTE_ICON_SIZE, sort_words_in_reading_order
 
 if TYPE_CHECKING:
     from app.viewer.canvas_1 import _SelectCanvas
@@ -56,6 +55,103 @@ class CanvasInteractionHandler:
         c._drag_end   = None
         c._sel_rects  = []
         c._sel_text   = ""
+
+    def ensure_entry_words(self, entry) -> list:
+        """Ensure page word coordinates are extracted and sorted in reading order, even if off-screen."""
+        words = getattr(entry, "words", None)
+        if words is not None:
+            return words
+        c = self.canvas
+        if not c._doc:
+            return []
+        src_idx = getattr(entry, "src_page", -1)
+        if src_idx < 0 or src_idx >= c._doc.page_count:
+            return []
+        try:
+            page = c._doc[src_idx]
+            rot = c._page_rotations.get(src_idx, 0) % 360
+            crop = c._page_crops.get(src_idx)
+            orig_rot = page.rotation
+            orig_crop = page.cropbox
+            try:
+                if crop:
+                    crop_rect = fitz.Rect(crop) & page.mediabox
+                    if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                        page.set_cropbox(crop_rect)
+                if rot:
+                    page.set_rotation((orig_rot + rot) % 360)
+                raw_words = page.get_text("words")
+                rx0 = page.rect.x0
+                ry0 = page.rect.y0
+            finally:
+                if rot:
+                    page.set_rotation(orig_rot)
+                if crop:
+                    page.set_cropbox(orig_crop)
+
+            norm_words = []
+            for w in raw_words:
+                norm_words.append((
+                    w[0] - rx0,
+                    w[1] - ry0,
+                    w[2] - rx0,
+                    w[3] - ry0,
+                    w[4],
+                    w[5] if len(w) > 5 else 0,
+                    w[6] if len(w) > 6 else 0,
+                    w[7] if len(w) > 7 else 0,
+                ))
+            words = sort_words_in_reading_order(norm_words)
+            entry.words = words
+            return words
+        except Exception:
+            return []
+
+    def select_all(self):
+        """Select all text across all pages in the open document, copy it, and display highlights."""
+        c = self.canvas
+        if not c._entries or not c._doc:
+            return
+
+        first_pi = -1
+        first_wi = -1
+        last_pi = -1
+        last_wi = -1
+
+        for pi, entry in enumerate(c._entries):
+            words = self.ensure_entry_words(entry)
+            if words:
+                if first_pi < 0:
+                    first_pi = pi
+                    first_wi = 0
+                last_pi = pi
+                last_wi = len(words) - 1
+
+        if first_pi < 0:
+            c._sel_rects = []
+            c._sel_text = ""
+            c.text_copied.emit("")
+            c.update()
+            win: Any = c.window()
+            set_status = getattr(win, "_set_status", None)
+            if callable(set_status):
+                set_status("ℹ No text found in document")
+            return
+
+        c._drag_start = None
+        c._drag_end = None
+        self._select_word_range(first_pi, first_wi, last_pi, last_wi)
+        if c._sel_text:
+            QApplication.clipboard().setText(c._sel_text)
+        c.text_copied.emit(c._sel_text)
+        c.update()
+
+        win: Any = c.window()
+        set_status = getattr(win, "_set_status", None)
+        if callable(set_status) and c._sel_text:
+            char_count = len(c._sel_text)
+            page_count = last_pi - first_pi + 1
+            set_status(f"✔ Selected all text across {page_count} page(s) ({char_count:,} characters) — copied to clipboard")
 
     def _get_page_lines(self, words: list | None) -> list[list[tuple[int, tuple]]]:
         """Group words into natural reading lines with uniform baseline and vertical bounds."""
@@ -169,7 +265,7 @@ class CanvasInteractionHandler:
             if pi >= len(c._entries):
                 continue
             entry = c._entries[pi]
-            words = getattr(entry, "words", None)
+            words = self.ensure_entry_words(entry)
             if not words:
                 continue
 
@@ -260,8 +356,8 @@ class CanvasInteractionHandler:
         p2_x = (end.x() - x_off2) / z
         p2_y = (end.y() - e2.y_off) / z
 
-        words1 = getattr(e1, "words", None)
-        words2 = getattr(e2, "words", None)
+        words1 = self.ensure_entry_words(e1)
+        words2 = self.ensure_entry_words(e2)
 
         w1_idx = self._find_word_index(words1, p1_x, p1_y)
         w2_idx = self._find_word_index(words2, p2_x, p2_y)
@@ -522,7 +618,7 @@ class CanvasInteractionHandler:
             page_idx = c.page_at_y(pos.y())
             if 0 <= page_idx < len(c._entries):
                 entry = c._entries[page_idx]
-                words = getattr(entry, "words", None)
+                words = self.ensure_entry_words(entry)
                 if words:
                     x_off = c.page_x_offset(entry)
                     z = c._zoom or 1.0
@@ -667,7 +763,20 @@ class CanvasInteractionHandler:
                 return True
             elif key == Qt.Key.Key_C and c._sel_text:
                 QApplication.clipboard().setText(c._sel_text)
+                win: Any = c.window()
+                set_status = getattr(win, "_set_status", None)
+                if callable(set_status):
+                    set_status(f"✔ Copied {len(c._sel_text):,} characters to clipboard")
                 return True
+            elif key == Qt.Key.Key_A:
+                self.select_all()
+                return True
+
+        if key == Qt.Key.Key_Escape and c._sel_text:
+            self.clear_selection()
+            c.text_copied.emit("")
+            c.update()
+            return True
 
         if not c._crop_mode and key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             sa = c._get_scroll_area()
@@ -805,6 +914,13 @@ class CanvasInteractionHandler:
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(c._sel_text))
             menu.addSeparator()
 
+        act_sel_all = menu.addAction(
+            qta.icon("fa5s.object-group", color=TEXT_SEC),
+            t("viewer.select_all", default="Select All\tCtrl+A"),
+        )
+        act_sel_all.triggered.connect(self.select_all)
+        menu.addSeparator()
+
         act_sig = menu.addAction(
             qta.icon("fa5s.signature", color=ACCENT),
             t("viewer.add_signature"),
@@ -812,4 +928,3 @@ class CanvasInteractionHandler:
         act_sig.triggered.connect(lambda: c.start_add_signature_flow(pos))
 
         menu.exec(e.globalPos())
-

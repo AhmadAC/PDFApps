@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QFrame, QLineEdit, QSplitter, QTabWidget,
-    QTreeWidget, QDialog
+    QTreeWidget, QDialog, QTextEdit
 )
 from PySide6.QtGui import QKeySequence, QShortcut
 import qtawesome as qta
@@ -318,6 +318,15 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         sc_find.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         sc_esc = QShortcut(QKeySequence("Escape"), self._search_input, self._close_search)
         sc_esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+
+    def _select_all_text(self) -> None:
+        """Trigger select-all on the active canvas or focused text edit."""
+        focus_w = self.focusWidget()
+        if isinstance(focus_w, (QLineEdit, QTextEdit)):
+            focus_w.selectAll()
+            return
+        if hasattr(self, "_canvas") and self._canvas:
+            self._canvas.select_all()
 
     def close_doc(self) -> None:
         """Close document, release file handles, stop workers, and clear cached state."""

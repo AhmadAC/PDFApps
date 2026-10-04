@@ -115,6 +115,10 @@ class _SelectCanvas(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(300, 400)
 
+    def select_all(self):
+        """Select all text on all pages across the loaded document."""
+        self._interaction.select_all()
+
     def page_x_offset(self, entry) -> int:
         """Calculate horizontal centering offset for a page within the canvas width."""
         if not entry:

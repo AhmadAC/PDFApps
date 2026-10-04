@@ -1,4 +1,3 @@
-
 # app/window_actions.py
 """PDFApps – Navigation, themes, UI interactions, and page control mixin."""
 from __future__ import annotations
@@ -11,7 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt, QTimer, QProcess, QProcessEnvironment
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QFileDialog
+from PySide6.QtWidgets import (
+    QApplication, QMenu, QMessageBox, QFileDialog,
+    QLineEdit, QTextEdit, QPlainTextEdit,
+)
 import qtawesome as qta
 from shiboken6 import isValid
 
@@ -271,6 +273,22 @@ class WindowActionsMixin(_Base):
         else:
             self._undo_top_btn.setVisible(False)
             self._redo_top_btn.setVisible(False)
+
+    def _handle_global_select_all(self):
+        focus_w = self.focusWidget()
+        if isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            focus_w.selectAll()
+            return
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                inline_edit = getattr(edit_w._canvas, "_inline_edit", None)
+                if inline_edit and inline_edit.isVisible():
+                    inline_edit.selectAll()
+                    return
+        if self._viewer:
+            self._viewer._select_all_text()
 
     def _open_tool_by_name(self, tool_name: str):
         for i, (name, _, _) in enumerate(NAV_ITEMS):

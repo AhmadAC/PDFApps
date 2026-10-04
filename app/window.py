@@ -1,3 +1,4 @@
+
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -499,7 +500,8 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         sc_save = QShortcut(QKeySequence("Ctrl+S"), self, self._save_current_tool)
         sc_pgup = QShortcut(QKeySequence("PgUp"), self, self._goto_prev_page)
         sc_pgdn = QShortcut(QKeySequence("PgDown"), self, self._goto_next_page)
-        for sc in (sc_undo, sc_redo1, sc_redo2, sc_close, sc_save, sc_pgup, sc_pgdn):
+        sc_sel_all = QShortcut(QKeySequence("Ctrl+A"), self, self._handle_global_select_all)
+        for sc in (sc_undo, sc_redo1, sc_redo2, sc_close, sc_save, sc_pgup, sc_pgdn, sc_sel_all):
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
         assert len(NAV_ITEMS) <= 18, f"Max 18 tool shortcuts defined but NAV_ITEMS has {len(NAV_ITEMS)}."
