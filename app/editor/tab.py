@@ -397,7 +397,7 @@ class TabEditar(QWidget):
         self._history.load_existing_annotations()
 
     def auto_load(self, path: str):
-        if path and not self._drop_in.path():
+        if path and (self._doc_path != path or not self._drop_in.path()):
             self._load_pdf(path)
 
     def _close_pdf(self):
@@ -561,14 +561,12 @@ class TabEditar(QWidget):
         mode = self._mode_idx
         if mode == _MODE_TEXT:
             submode = getattr(self, "_text_submode", "edit")
-            # In edit mode (or default), if user clicks on existing text, edit it in-place
             if submode != "add":
                 hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=6.0)
                 if hit:
                     self._canvas.begin_inline_text_edit(hit, page_idx)
                     return
 
-            # If in 'add' mode, or clicking in blank space, insert new text where clicked:
             size = float(self._text_size.value())
             color = self._text_color.color_tuple()
             font = self._text_font.currentText()

@@ -1,4 +1,4 @@
-# app\styles.py
+# app/styles.py
 
 """PDFApps – stylesheet strings (dark + light themes)."""
 
@@ -97,6 +97,23 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #btn_action_small:hover   {{ background: {ACCENT_H}; border-color: {ACCENT}; }}
 #btn_action_small:pressed {{ background: {ACCENT_P}; }}
 #btn_action_small:disabled {{ background: #3A3D40; border-color: #4A4D50; color: #777777; }}
+
+/* ── Progress Bar ─────────────────────────────────────────────────────── */
+QProgressBar {{
+    background: #1E1E1E;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    text-align: center;
+    color: #F0F0F0;
+    font-size: 10pt;
+    font-weight: 600;
+    min-height: 20px;
+    max-height: 20px;
+}}
+QProgressBar::chunk {{
+    background: {ACCENT};
+    border-radius: 5px;
+}}
 
 /* ── Primary button ──────────────────────────────────────────────────── */
 #btn_primary {{
@@ -366,6 +383,23 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #btn_action_small:pressed {{ background: {_LAP}; }}
 #btn_action_small:disabled {{ background: #CBD5E1; color: #94A3B8; }}
 
+/* ── Progress Bar ─────────────────────────────────────────────────────── */
+QProgressBar {{
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
+    text-align: center;
+    color: #1A2B28;
+    font-size: 10pt;
+    font-weight: 600;
+    min-height: 20px;
+    max-height: 20px;
+}}
+QProgressBar::chunk {{
+    background: {_LA};
+    border-radius: 5px;
+}}
+
 /* ── Primary button ──────────────────────────────────────────────────── */
 #btn_primary {{
     background: {_LA}; color: #FFFFFF; border: none;
@@ -517,7 +551,7 @@ QSplitter::handle {{ background: {_LO}; width: 1px; }}
 #viewer_tabs::tab:selected {{
     color: {_LP}; background: #FFFFFF; border-bottom: 2px solid {_LA};
 }}
-#viewer_tabs::tab:hover:!selected {{ color: {_LP}; background: #E0E7FF; }}
+#viewer_tabs::tab:hover:!selected {{ color: #LP; background: #E0E7FF; }}
 
 #new_tab_btn {{
     background: {_LC}; border: none; border-bottom: 1px solid {_LO};

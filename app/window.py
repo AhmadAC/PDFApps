@@ -1,4 +1,3 @@
-
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -387,12 +386,13 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._right_tool_container.setVisible(False)
         self._saved_right_width = 400
 
-        # ── Tabbed Viewer ────────────────────────────────────────────────────
+        # ── Tabbed Viewer Containers ─────────────────────────────────────────
         self._tab_container = QWidget()
         tc_lay = QVBoxLayout(self._tab_container)
         tc_lay.setContentsMargins(0, 0, 0, 0)
         tc_lay.setSpacing(0)
 
+        # Tab bar sits at the top of content area to remain visible across all tools
         tab_row = QHBoxLayout()
         tab_row.setContentsMargins(0, 0, 0, 0)
         tab_row.setSpacing(0)
@@ -408,7 +408,6 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._tab_bar.tabCloseRequested.connect(self._close_tab)
         self._tab_bar.setVisible(False)
         tab_row.addWidget(self._tab_bar, 1)
-        tc_lay.addLayout(tab_row)
 
         self._viewer_stack = QStackedWidget()
         self._viewers: list[PdfViewerPanel] = []
@@ -424,8 +423,15 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._splitter.setCollapsible(1, False)
         self._splitter.setSizes([1200, 0])
 
+        self._content_area = QWidget()
+        content_v = QVBoxLayout(self._content_area)
+        content_v.setContentsMargins(0, 0, 0, 0)
+        content_v.setSpacing(0)
+        content_v.addLayout(tab_row)
+        content_v.addWidget(self._splitter, 1)
+
         main_h.addWidget(self._sidebar)
-        main_h.addWidget(self._splitter, 1)
+        main_h.addWidget(self._content_area, 1)
         root_v.addWidget(body, 1)
         self.setCentralWidget(central)
 
@@ -483,7 +489,6 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_pdf)
         QShortcut(QKeySequence("Ctrl+P"), self, lambda: self._viewer._print_pdf() if self._viewer else None)
 
-        # Scoped to WindowShortcut so presentation mode receives and isolates its own zoom
         sc_zi1 = QShortcut(QKeySequence("Ctrl++"), self, self._zoom_in_current)
         sc_zi2 = QShortcut(QKeySequence("Ctrl+="), self, self._zoom_in_current)
         sc_zo1 = QShortcut(QKeySequence("Ctrl+-"), self, self._zoom_out_current)
