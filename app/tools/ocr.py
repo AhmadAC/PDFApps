@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+import warnings
 from typing import Any
 
 import fitz
@@ -220,13 +221,15 @@ class TabOCR(BasePage):
 
         class _OcrRunner(TaskRunner):
             def do_work(_self):
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+
                 _self.progress.emit(5, "Checking EasyOCR models...")
                 import easyocr
                 import easyocr.utils
 
                 orig_print_bar = getattr(easyocr.utils, "printProgressBar", None)
 
-                # Hook EasyOCR's download progress to stream into the GUI progress dialog
                 def _custom_progress_bar(prefix='', suffix='', length=50):
                     def reporthook(block_num, block_size, total_size):
                         if _self.is_cancelled():
@@ -268,7 +271,6 @@ class TabOCR(BasePage):
                         raise WrongPasswordError(t("tool.err.wrong_password"))
                 try:
                     if fmt == 1:
-                        # Format 1: Text extraction (.txt) using detail=0 for direct list of strings
                         texts = []
                         for i in range(len(doc)):
                             if _self.is_cancelled():
@@ -304,7 +306,6 @@ class TabOCR(BasePage):
                                     os.unlink(_tmp)
                             raise
                     else:
-                        # Format 0: Searchable PDF with invisible text layer
                         for i in range(len(doc)):
                             if _self.is_cancelled():
                                 return None
@@ -399,6 +400,9 @@ class TabOCR(BasePage):
 
         def _on_done(result):
             self.action_btn.setEnabled(True)
+            if progress and not progress.isHidden():
+                progress.close()
+
             if result is None:
                 self._status(t("progress.cancelled"))
                 return
@@ -413,13 +417,18 @@ class TabOCR(BasePage):
             if viewer and isinstance(result, str) and result.lower().endswith(".pdf"):
                 viewer.load(result)
 
-            QMessageBox.information(self, t("msg.done"), t("tool.ocr.done", path=result))
+            target_parent = win if (win and win.isVisible()) else self
+            QMessageBox.information(target_parent, t("msg.done"), t("tool.ocr.done", path=result))
 
         def _on_err(exc):
             self.action_btn.setEnabled(True)
+            if progress and not progress.isHidden():
+                progress.close()
+
             if not isinstance(exc, BaseException):
                 exc = RuntimeError(str(exc))
-            show_error(self, exc)
+            target_parent = self.window() if (self.window() and self.window().isVisible()) else self
+            show_error(target_parent, exc)
 
         self._runner = _OcrRunner()
         self._runner_thread = run_task(self, self._runner, progress, _on_done, _on_err)
