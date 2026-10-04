@@ -86,6 +86,8 @@ class TabEditar(QWidget):
     _action_bar: QWidget
 
     # Mode option widgets (attached by _build_mode_options in setup_editor_ui)
+    _btn_text_add: QPushButton
+    _btn_text_edit: QPushButton
     _red_color: ColorPickerButton
     _text_font: FocusComboBox
     _text_size: FocusSpinBox
@@ -138,6 +140,7 @@ class TabEditar(QWidget):
         self._doc_path: str | None = None
         self._pdf_password: str = ""
         self._mode_idx: int = _MODE_TEXT
+        self._text_submode: str = "add"
         self._dark_mode: bool = True
         self._signature_path: str | None = None
         self._page_idx: int = 0
@@ -157,6 +160,7 @@ class TabEditar(QWidget):
         self._canvas.overlay_changed.connect(self.update)
         self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
 
+        self._set_text_submode("add")
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()
 
@@ -185,6 +189,7 @@ class TabEditar(QWidget):
 
     def update_theme(self, dark: bool) -> None:
         update_tab_theme(self, dark)
+        self._update_text_submode_styles()
 
     def _update_nav(self):
         n = self._canvas.page_count()
@@ -261,6 +266,37 @@ class TabEditar(QWidget):
             cur = self._img_drop.path()
             if not cur or not os.path.isfile(cur):
                 self._pick_image()
+
+    def _set_text_submode(self, mode: str):
+        is_add = (mode == "add")
+        if hasattr(self, "_btn_text_add"):
+            self._btn_text_add.setChecked(is_add)
+        if hasattr(self, "_btn_text_edit"):
+            self._btn_text_edit.setChecked(not is_add)
+        self._text_submode = mode
+        self._update_text_submode_styles()
+        if hasattr(self, "_text_hint"):
+            if is_add:
+                self._text_hint.setText("💡 Click anywhere on the page to insert new text exactly where you click.")
+            else:
+                self._text_hint.setText("💡 Click any text to edit or delete it. Change font, size, and styling above.")
+
+    def _update_text_submode_styles(self):
+        if not hasattr(self, "_btn_text_add") or not hasattr(self, "_btn_text_edit"):
+            return
+        is_add = getattr(self, "_text_submode", "add") == "add"
+        active_style = (
+            f"background:#264F78; border:1px solid {ACCENT}; color:#FFFFFF; border-radius:4px; font-weight:600; padding:3px 8px;"
+            if self._dark_mode else
+            f"background:#D6E8FA; border:1px solid #70A7DB; color:{ACCENT}; border-radius:4px; font-weight:600; padding:3px 8px;"
+        )
+        inactive_style = (
+            "background:#333333; border:1px solid #444444; color:#CCCCCC; border-radius:4px; padding:3px 8px;"
+            if self._dark_mode else
+            "background:#FFFFFF; border:1px solid #D1D5DB; color:#555555; border-radius:4px; padding:3px 8px;"
+        )
+        self._btn_text_add.setStyleSheet(active_style if is_add else inactive_style)
+        self._btn_text_edit.setStyleSheet(inactive_style if is_add else active_style)
 
     def _on_text_format_changed(self):
         font = self._text_font.currentText()
@@ -468,7 +504,19 @@ class TabEditar(QWidget):
             else:
                 self._status(t("edit.status.no_text_in_selection"))
             return
-        if mode in (_MODE_TEXT, _MODE_NOTE):
+
+        if mode == _MODE_TEXT:
+            insert_pt = fitz.Point(pdf_rect.x0, pdf_rect.y0)
+            size = float(self._text_size.value())
+            color = self._text_color.color_tuple()
+            font = self._text_font.currentText()
+            bold = self._btn_bold.isChecked()
+            italic = self._btn_italic.isChecked()
+            self._canvas.begin_inline_text_insert(page_idx, insert_pt, size, color, font)
+            self._canvas.update_active_text_format(font, size, color, bold, italic)
+            return
+
+        if mode == _MODE_NOTE:
             center = fitz.Point((pdf_rect.x0 + pdf_rect.x1) / 2, (pdf_rect.y0 + pdf_rect.y1) / 2)
             self._on_point(page_idx, center)
             return
@@ -512,31 +560,20 @@ class TabEditar(QWidget):
                             return
         mode = self._mode_idx
         if mode == _MODE_TEXT:
-            hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=18.0)
-            if hit:
-                self._canvas.begin_inline_text_edit(hit, page_idx)
-                return
-            near = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=300.0)
-            if near:
-                bb = near["bbox"]
-                size = max(float(near.get("size") or 0), float(bb[3] - bb[1]))
-                cr = near.get("color", 0)
-                if isinstance(cr, int):
-                    color = (((cr >> 16) & 0xFF) / 255, ((cr >> 8) & 0xFF) / 255, (cr & 0xFF) / 255)
-                elif isinstance(cr, (list, tuple)) and len(cr) >= 3:
-                    color = tuple(float(v) for v in cr[:3])
-                else:
-                    color = (0, 0, 0)
-                font = near.get("font", "Helvetica")
-                origin = near.get("origin")
-                baseline_y = float(origin[1]) if origin else float(bb[3])
-                insert_pt = fitz.Point(pdf_pt.x, baseline_y)
-            else:
-                size = self._text_size.value()
-                color = self._text_color.color_tuple()
-                font = self._text_font.currentText()
-                insert_pt = pdf_pt
-            self._canvas.begin_inline_text_insert(page_idx, insert_pt, size, color, font)
+            submode = getattr(self, "_text_submode", "add")
+            if submode == "edit":
+                hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=2.0)
+                if hit:
+                    self._canvas.begin_inline_text_edit(hit, page_idx)
+                    return
+
+            size = float(self._text_size.value())
+            color = self._text_color.color_tuple()
+            font = self._text_font.currentText()
+            bold = self._btn_bold.isChecked()
+            italic = self._btn_italic.isChecked()
+            self._canvas.begin_inline_text_insert(page_idx, pdf_pt, size, color, font)
+            self._canvas.update_active_text_format(font, size, color, bold, italic)
         elif mode == _MODE_NOTE:
             dlg = _NoteDialog(self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
