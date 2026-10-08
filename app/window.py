@@ -406,6 +406,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._current_tool = -1
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabCloseRequested.connect(self._close_tab)
+        self._tab_bar.active_tab_clicked.connect(self._on_active_tab_clicked)
         self._tab_bar.setVisible(False)
         tab_row.addWidget(self._tab_bar, 1)
 

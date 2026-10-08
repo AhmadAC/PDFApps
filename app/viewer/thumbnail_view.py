@@ -1,5 +1,5 @@
 # app/viewer/thumbnail_view.py
-"""Thumbnail custom QListView with drag-and-drop reordering, auto-scroll, and keyboard shortcuts."""
+"""Thumbnail custom QListView with drag-and-drop reordering, auto-scroll, multi-column grid support, and keyboard shortcuts."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _log = logging.getLogger(__name__)
 
 
 class ThumbnailListView(QListView):
-    """QListView supporting multi-selection, drag-and-drop page reordering, keyboard shortcuts, and context menu."""
+    """QListView supporting multi-selection, drag-and-drop page reordering, responsive multi-column layout, and keyboard shortcuts."""
 
     def __init__(self, panel: ThumbnailPanel) -> None:
         super().__init__(panel)
@@ -57,6 +57,10 @@ class ThumbnailListView(QListView):
             event.accept()
             return
         super().wheelEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._panel._update_grid_layout()
 
     # ── Drag & Drop Implementation ────────────────────────────────────────
 
@@ -178,12 +182,13 @@ class ThumbnailListView(QListView):
             return -1
 
         idx = self.indexAt(pos)
+        cols = self._panel.column_count()
         if idx.isValid():
             rect = self.visualRect(idx)
-            if pos.y() < rect.center().y():
-                target = idx.row()
+            if cols > 1:
+                target = idx.row() if pos.x() < rect.center().x() else idx.row() + 1
             else:
-                target = idx.row() + 1
+                target = idx.row() if pos.y() < rect.center().y() else idx.row() + 1
         else:
             first_rect = self.visualRect(m.index(0, 0))
             last_rect = self.visualRect(m.index(count - 1, 0))
@@ -195,8 +200,11 @@ class ThumbnailListView(QListView):
                 target = count
                 for r in range(count):
                     r_rect = self.visualRect(m.index(r, 0))
-                    if pos.y() < r_rect.bottom():
-                        target = r if pos.y() < r_rect.center().y() else r + 1
+                    if r_rect.contains(pos):
+                        target = r if pos.x() < r_rect.center().x() else r + 1
+                        break
+                    elif pos.y() < r_rect.bottom():
+                        target = r
                         break
 
         target = max(0, min(target, count))
@@ -301,14 +309,7 @@ class ThumbnailListView(QListView):
         ):
             count = m.rowCount()
             target = max(0, min(self._drop_target_row, count))
-            if target < count:
-                rect = self.visualRect(m.index(target, 0))
-                y = rect.top()
-            else:
-                rect = self.visualRect(m.index(count - 1, 0))
-                y = rect.bottom()
-
-            y_draw = max(2, min(y, self.viewport().height() - 2))
+            cols = self._panel.column_count()
 
             painter = QPainter(self.viewport())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -319,13 +320,35 @@ class ThumbnailListView(QListView):
             painter.setPen(pen)
             painter.setBrush(accent_col)
 
-            vp_w = self.viewport().width()
-            x0 = 8
-            x1 = vp_w - 8
+            if cols > 1:
+                if target < count:
+                    r = self.visualRect(m.index(target, 0))
+                    x_draw = max(2, r.left() - 2)
+                    y0 = r.top() + 4
+                    y1 = r.bottom() - 4
+                else:
+                    r = self.visualRect(m.index(count - 1, 0))
+                    x_draw = min(self.viewport().width() - 2, r.right() + 2)
+                    y0 = r.top() + 4
+                    y1 = r.bottom() - 4
+                painter.drawLine(x_draw, y0, x_draw, y1)
+                painter.drawEllipse(QPoint(x_draw, y0), 3, 3)
+                painter.drawEllipse(QPoint(x_draw, y1), 3, 3)
+            else:
+                if target < count:
+                    r = self.visualRect(m.index(target, 0))
+                    y = r.top()
+                else:
+                    r = self.visualRect(m.index(count - 1, 0))
+                    y = r.bottom()
+                y_draw = max(2, min(y, self.viewport().height() - 2))
+                vp_w = self.viewport().width()
+                x0 = 8
+                x1 = vp_w - 8
+                painter.drawLine(x0, y_draw, x1, y_draw)
+                painter.drawEllipse(QPoint(x0, y_draw), 3, 3)
+                painter.drawEllipse(QPoint(x1, y_draw), 3, 3)
 
-            painter.drawLine(x0, y_draw, x1, y_draw)
-            painter.drawEllipse(QPoint(x0, y_draw), 3, 3)
-            painter.drawEllipse(QPoint(x1, y_draw), 3, 3)
             painter.end()
 
     # ── Key and Context Menu Handlers ─────────────────────────────────────
@@ -354,6 +377,32 @@ class ThumbnailListView(QListView):
                 count = m.rowCount() if m is not None else 0
                 if cur < count - 1:
                     target = cur + 1
+                    self._panel.set_selected_pages([target])
+                    self._panel.page_requested.emit(target)
+                    self._panel.action_requested.emit("go_to_page", target)
+                event.accept()
+                return
+
+            if key == Qt.Key.Key_Down:
+                cols = self._panel.column_count()
+                selected_pages = self._panel.selected_pages()
+                cur = selected_pages[-1] if selected_pages else self._panel._anchor
+                m = self.model()
+                count = m.rowCount() if m is not None else 0
+                if cur < count - 1:
+                    target = min(count - 1, cur + cols)
+                    self._panel.set_selected_pages([target])
+                    self._panel.page_requested.emit(target)
+                    self._panel.action_requested.emit("go_to_page", target)
+                event.accept()
+                return
+
+            if key == Qt.Key.Key_Up:
+                cols = self._panel.column_count()
+                selected_pages = self._panel.selected_pages()
+                cur = selected_pages[0] if selected_pages else self._panel._anchor
+                if cur > 0:
+                    target = max(0, cur - cols)
                     self._panel.set_selected_pages([target])
                     self._panel.page_requested.emit(target)
                     self._panel.action_requested.emit("go_to_page", target)

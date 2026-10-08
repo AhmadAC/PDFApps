@@ -123,8 +123,8 @@ class ThumbnailModel(QAbstractListModel):
 
 
 class ThumbnailDelegate(QStyledItemDelegate):
-    """Paint each row centered: thumbnail + page number in '1 / N' format,
-    with multi-selection support and current-page highlight."""
+    """Paint each item centered: thumbnail + page number in '1 / N' format,
+    with multi-column responsive grid support and current-page highlight."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -133,6 +133,7 @@ class ThumbnailDelegate(QStyledItemDelegate):
         self._dark = True
         self._thumb_w = DEFAULT_THUMB_WIDTH
         self._thumb_h = DEFAULT_THUMB_HEIGHT
+        self._cell_w = DEFAULT_THUMB_WIDTH + 2 * THUMB_PADDING
 
     def set_current_page(self, page_idx: int) -> int:
         old = self._current_page
@@ -149,9 +150,13 @@ class ThumbnailDelegate(QStyledItemDelegate):
         self._thumb_w = max(60, min(360, w))
         self._thumb_h = max(80, min(480, h))
 
+    def set_cell_width(self, w: int) -> None:
+        self._cell_w = max(60, int(w))
+
     def sizeHint(self, option, index):
+        w = self._cell_w if getattr(self, "_cell_w", 0) > 0 else (self._thumb_w + 2 * THUMB_PADDING)
         return QSize(
-            self._thumb_w + 2 * THUMB_PADDING,
+            w,
             self._thumb_h + 2 * THUMB_PADDING + PAGE_NUM_HEIGHT,
         )
 
@@ -166,14 +171,14 @@ class ThumbnailDelegate(QStyledItemDelegate):
         is_selected = bool(option.state & QStyle.StateFlag.State_Selected)
         is_current = page_idx == self._current_page
 
-        # Centered thumbnail within available row width
+        # Centered thumbnail within available cell width
         thumb_w = min(self._thumb_w, max(40, rect.width() - 2 * THUMB_PADDING))
         thumb_h = self._thumb_h
         thumb_x = rect.x() + (rect.width() - thumb_w) // 2
         thumb_y = rect.y() + THUMB_PADDING
         thumb_rect = QRect(thumb_x, thumb_y, thumb_w, thumb_h)
 
-        # Card bounding box snugly wraps the thumbnail + page number label without empty margins
+        # Card bounding box snugly wraps the thumbnail + page number label
         card_w = min(rect.width() - 8, thumb_w + 16)
         card_x = rect.x() + (rect.width() - card_w) // 2
         card_h = thumb_h + PAGE_NUM_HEIGHT + 8

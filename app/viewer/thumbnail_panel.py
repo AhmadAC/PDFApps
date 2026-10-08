@@ -1,5 +1,5 @@
 # app/viewer/thumbnail_panel.py
-"""Thumbnail panel container widget with Foxit-style actions, worker orchestration, and zoom support."""
+"""Thumbnail panel container widget with Foxit-style actions, responsive multi-column layout, and worker orchestration."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QItemSelectionModel,
     QModelIndex,
     QPoint,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -38,6 +39,7 @@ from app.viewer.thumbnail_worker import (
     DEFAULT_THUMB_HEIGHT,
     DEFAULT_THUMB_WIDTH,
     HIDDEN_WINDOW,
+    PAGE_NUM_HEIGHT,
     THUMB_PADDING,
     VISIBLE_BUFFER,
     ThumbnailWorker,
@@ -57,7 +59,7 @@ class _ScrollableMenuStyle(QProxyStyle):
 
 
 class ThumbnailPanel(QWidget):
-    """Sidebar container hosting the QListView of thumbnails with Foxit-style actions."""
+    """Sidebar container hosting the QListView of thumbnails with responsive multi-column grid support."""
 
     page_requested = Signal(int)
     action_requested = Signal(str, object)  # (action_name, list[int] | tuple)
@@ -106,7 +108,11 @@ class ThumbnailPanel(QWidget):
         self._view = _ThumbnailListView(self)
         self._view.setModel(self._model)
         self._view.setItemDelegate(self._delegate)
-        self._view.setViewMode(QListView.ViewMode.ListMode)
+        self._view.setViewMode(QListView.ViewMode.IconMode)
+        self._view.setResizeMode(QListView.ResizeMode.Adjust)
+        self._view.setWrapping(True)
+        self._view.setFlow(QListView.Flow.LeftToRight)
+        self._view.setMovement(QListView.Movement.Static)
         self._view.setUniformItemSizes(True)
         self._view.setMouseTracking(True)
         self._view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -143,6 +149,39 @@ class ThumbnailPanel(QWidget):
         if sb is not None:
             sb.valueChanged.connect(lambda _=0: self._scroll_timer.start())
         layout.addWidget(self._view)
+
+    # ── Multi-Column Geometry Helpers ─────────────────────────────
+
+    def column_count(self) -> int:
+        vp = self._view.viewport() if self._view else None
+        if not vp:
+            return 1
+        vp_w = vp.width()
+        if vp_w <= 10:
+            return 1
+        target_thumb_w = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
+        min_cell_w = target_thumb_w + 16
+        return max(1, vp_w // min_cell_w)
+
+    def _update_grid_layout(self) -> None:
+        vp = self._view.viewport() if self._view else None
+        if not vp:
+            return
+        vp_w = vp.width()
+        if vp_w <= 10:
+            return
+
+        target_thumb_w = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
+        target_thumb_h = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
+        min_cell_w = target_thumb_w + 16
+
+        cols = max(1, vp_w // min_cell_w)
+        cell_w = max(min_cell_w, vp_w // cols)
+        cell_h = target_thumb_h + 2 * THUMB_PADDING + PAGE_NUM_HEIGHT
+
+        self._delegate.set_thumb_size(target_thumb_w, target_thumb_h)
+        self._delegate.set_cell_width(cell_w)
+        self._view.setGridSize(QSize(cell_w, cell_h))
 
     # ── Context Menu (Single-Column Scrollable Pane) ───────────────
 
@@ -356,21 +395,23 @@ class ThumbnailPanel(QWidget):
             pass
 
     def fit_window_to_thumbnails(self) -> None:
-        """Resize the parent sidebar panel in the splitter to snugly fit the thumbnails."""
+        """Resize the parent sidebar panel in the splitter to fit the thumbnails."""
+        cols = self.column_count()
         tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
-        needed_w = tw + 40
+        needed_w = (tw + 2 * THUMB_PADDING) * cols + 24
         self.action_requested.emit("fit_sidebar_width", needed_w)
 
     def fit_thumbnails_to_window(self) -> None:
         """Scale thumbnail dimensions so they fill the current sidebar viewport width."""
-        vp_w = self._view.viewport().width() if self._view and self._view.viewport() else 0
+        vp = self._view.viewport() if self._view else None
+        vp_w = vp.width() if vp else 0
         if vp_w <= 0:
             vp_w = self.width()
-        target_thumb_w = max(60, min(360, vp_w - 2 * THUMB_PADDING - 4))
+        cols = self.column_count()
+        avail_for_col = max(60, vp_w // cols)
+        target_thumb_w = max(60, min(360, avail_for_col - 2 * THUMB_PADDING - 4))
         self._thumb_scale = round(target_thumb_w / DEFAULT_THUMB_WIDTH, 2)
-        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
-        th = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
-        self._delegate.set_thumb_size(tw, th)
+        self._update_grid_layout()
         self._model.clear_cache()
         self._stop_all_workers()
         self._inflight.clear()
@@ -380,28 +421,22 @@ class ThumbnailPanel(QWidget):
 
     def _enlarge_thumbnails(self) -> None:
         self._thumb_scale = min(2.5, round(self._thumb_scale * 1.25, 2))
-        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
-        th = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
-        self._delegate.set_thumb_size(tw, th)
+        self._update_grid_layout()
         self._model.clear_cache()
         self._stop_all_workers()
         self._inflight.clear()
         self._render_visible()
         self._view.viewport().update()
-        self.fit_window_to_thumbnails()
         self._save_thumb_scale_pref()
 
     def _reduce_thumbnails(self) -> None:
         self._thumb_scale = max(0.5, round(self._thumb_scale / 1.25, 2))
-        tw = int(DEFAULT_THUMB_WIDTH * self._thumb_scale)
-        th = int(DEFAULT_THUMB_HEIGHT * self._thumb_scale)
-        self._delegate.set_thumb_size(tw, th)
+        self._update_grid_layout()
         self._model.clear_cache()
         self._stop_all_workers()
         self._inflight.clear()
         self._render_visible()
         self._view.viewport().update()
-        self.fit_window_to_thumbnails()
         self._save_thumb_scale_pref()
 
     # ── Public API ────────────────────────────────────────────────
@@ -469,6 +504,7 @@ class ThumbnailPanel(QWidget):
         self._delegate.set_total_pages(page_count)
         self._model.set_document(doc_path, page_count)
         self._delegate.set_current_page(-1)
+        self._update_grid_layout()
         _log.debug(
             "set_document: %r page_count=%d epoch=%d visible=%s",
             doc_path,
@@ -485,6 +521,7 @@ class ThumbnailPanel(QWidget):
         self._model.clear_cache()
         self._stop_all_workers()
         self._inflight.clear()
+        self._update_grid_layout()
         self._render_visible()
 
     def set_page_crops(
@@ -498,6 +535,7 @@ class ThumbnailPanel(QWidget):
         self._model.clear_cache()
         self._stop_all_workers()
         self._inflight.clear()
+        self._update_grid_layout()
         self._render_visible()
 
     def set_page_order(self, order: list[int] | None) -> None:
@@ -509,6 +547,7 @@ class ThumbnailPanel(QWidget):
         count = len(self._page_order) if self._page_order is not None else getattr(self, "_doc_page_count", 0)
         self._delegate.set_total_pages(count)
         self._model.set_page_order(self._page_order, count)
+        self._update_grid_layout()
         self._render_visible()
 
     def clear(self) -> None:
@@ -569,6 +608,9 @@ class ThumbnailPanel(QWidget):
                 vp.update()
 
     def _row_height(self) -> int:
+        gs = self._view.gridSize()
+        if gs.isValid() and gs.height() > 0:
+            return gs.height()
         return (
             self._delegate.sizeHint(None, self._model.index(0)).height() or 1
         )
@@ -580,17 +622,22 @@ class ThumbnailPanel(QWidget):
         row_h = self._row_height()
         vp = self._view.viewport()
         vp_h = vp.height() if vp is not None else 0
+        cols = self.column_count()
+
         if vp_h <= 0 or not self._view.isVisible():
-            first = max(0, self._anchor - VISIBLE_BUFFER)
-            last = min(total - 1, self._anchor + HIDDEN_WINDOW)
-            return list(range(first, last + 1))
+            first_page = max(0, self._anchor - VISIBLE_BUFFER * cols)
+            last_page = min(total - 1, self._anchor + HIDDEN_WINDOW * cols)
+            return list(range(first_page, last_page + 1))
+
         sb = self._view.verticalScrollBar()
         top = sb.value() if sb is not None else 0
-        first = top // row_h
-        last = (top + vp_h) // row_h
-        first = max(0, first - VISIBLE_BUFFER)
-        last = min(total - 1, last + VISIBLE_BUFFER)
-        return list(range(first, last + 1))
+
+        first_row = max(0, top // row_h - VISIBLE_BUFFER)
+        last_row = (top + vp_h) // row_h + VISIBLE_BUFFER
+
+        first_page = max(0, first_row * cols)
+        last_page = min(total - 1, (last_row + 1) * cols - 1)
+        return list(range(first_page, last_page + 1))
 
     def _render_visible(self) -> None:
         if not self._doc_path or self._model.rowCount() <= 0:
@@ -724,6 +771,7 @@ class ThumbnailPanel(QWidget):
         super().showEvent(event)
         if self._view is None:
             return
+        self._update_grid_layout()
         _log.debug(
             "showEvent: visible=%s cache=%d",
             self.isVisible(),
@@ -738,6 +786,7 @@ class ThumbnailPanel(QWidget):
             def _refresh_again():
                 if self._view is None:
                     return
+                self._update_grid_layout()
                 self._render_visible()
                 self._model.refresh_decorations()
                 v = self._view.viewport()
@@ -750,6 +799,7 @@ class ThumbnailPanel(QWidget):
         super().resizeEvent(event)
         if self._view is None:
             return
+        self._update_grid_layout()
         self._render_visible()
         vp = self._view.viewport()
         if vp is not None:

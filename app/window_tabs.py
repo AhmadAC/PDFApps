@@ -1,15 +1,14 @@
-#################### START OF FILE: app\window_tabs.py ####################
-
 # app/window_tabs.py
 """PDFApps – Tab management and multi-viewer window mixin."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +28,7 @@ if TYPE_CHECKING:
     from PySide6.QtWidgets import (
         QMainWindow,
         QStackedWidget,
+        QStatusBar,
         QWidget,
     )
     _Base = QMainWindow
@@ -39,20 +39,36 @@ __all__ = ["_ViewerTabBar", "WindowTabsMixin"]
 
 
 class _ViewerTabBar(QTabBar):
-    """Custom tab bar supporting mouse middle-click to close tabs and double-click to open."""
+    """Custom tab bar supporting middle-click to close, left-click on active tab to toggle thumbnails, and double-click to open."""
+
+    active_tab_clicked = Signal()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        pos = (
+            event.position().toPoint()
+            if hasattr(event, "position")
+            else event.pos()
+        )
+
         if event.button() == Qt.MouseButton.MiddleButton:
-            pos = (
-                event.position().toPoint()
-                if hasattr(event, "position")
-                else event.pos()
-            )
             idx = self.tabAt(pos)
             if idx >= 0:
                 self.tabCloseRequested.emit(idx)
                 event.accept()
                 return
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self.tabAt(pos)
+            if idx >= 0 and idx == self.currentIndex():
+                is_close_click = False
+                for side in (QTabBar.ButtonPosition.RightSide, QTabBar.ButtonPosition.LeftSide):
+                    btn = self.tabButton(idx, side)
+                    if btn and btn.isVisible() and btn.geometry().contains(pos):
+                        is_close_click = True
+                        break
+                if not is_close_click:
+                    self.active_tab_clicked.emit()
+
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
@@ -82,7 +98,9 @@ class WindowTabsMixin(_Base):
         stack: QStackedWidget
         _current_tool: int
         _dark_mode: bool
+        _sb: QStatusBar
 
+        def _set_status(self, msg: str) -> None: ...
         def _handle_global_undo(self) -> None: ...
         def _handle_global_redo(self) -> None: ...
         def _update_page_nav(self) -> None: ...
@@ -92,6 +110,7 @@ class WindowTabsMixin(_Base):
         def _cleanup_pipeline(self, viewer_id: int) -> None: ...
         def _crop_tool_idx(self) -> int: ...
         def _setup_zoom_bar(self, active: bool, canvas: Any = ...) -> None: ...
+        def _toggle_pages_sidebar(self) -> None: ...
 
     @property
     def _viewer(self) -> PdfViewerPanel | None:
@@ -101,6 +120,12 @@ class WindowTabsMixin(_Base):
                 return self._viewers[idx]
             return self._viewers[0]
         return None
+
+    def _on_active_tab_clicked(self) -> None:
+        """Toggle page thumbnails when the currently previewed tab is clicked."""
+        toggle_fn = getattr(self, "_toggle_pages_sidebar", None)
+        if callable(toggle_fn):
+            toggle_fn()
 
     def _add_viewer_tab(self, path: str = "") -> PdfViewerPanel:
         viewer = PdfViewerPanel()
@@ -227,7 +252,6 @@ class WindowTabsMixin(_Base):
 
         menu = QMenu(self)
 
-        # Tab navigation & closing actions
         act_close = menu.addAction(
             qta.icon("fa5s.times", color="#EF4444"),
             "Close Tab",
@@ -242,9 +266,9 @@ class WindowTabsMixin(_Base):
 
         menu.addSeparator()
 
-        # Filesystem actions
         act_reveal = None
         act_copy_path = None
+        act_delete_disk = None
         if path and os.path.exists(path):
             if sys.platform == "win32":
                 reveal_label = "Reveal in File Explorer"
@@ -261,6 +285,11 @@ class WindowTabsMixin(_Base):
                 qta.icon("fa5s.copy", color=icon_color),
                 "Copy Full Path",
             )
+            menu.addSeparator()
+            act_delete_disk = menu.addAction(
+                qta.icon("fa5s.trash-alt", color="#EF4444"),
+                "Delete From DisK",
+            )
 
         chosen = menu.exec(self._tab_bar.mapToGlobal(point))
         if chosen == act_close:
@@ -273,6 +302,49 @@ class WindowTabsMixin(_Base):
             reveal_file(path)
         elif act_copy_path and chosen == act_copy_path:
             QApplication.clipboard().setText(path)
+        elif act_delete_disk and chosen == act_delete_disk:
+            filename = os.path.basename(path)
+            reply = QMessageBox.question(
+                self,
+                "Delete From DisK",
+                f"Are you sure you want to permanently delete '{filename}' from disk?\n\n{path}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                orig_path = getattr(viewer, "_original_doc_path", "") or path
+                if hasattr(self, "_cleanup_pipeline"):
+                    self._cleanup_pipeline(id(viewer))
+                self._close_tab(tab_idx)
+                for target in {path, orig_path}:
+                    if target and os.path.isfile(target):
+                        try:
+                            os.remove(target)
+                        except Exception as exc:
+                            QMessageBox.critical(self, "Error", f"Could not delete file:\n{exc}")
+                try:
+                    from app.i18n import _update_config
+                    norm_targets = {os.path.normpath(t) for t in (path, orig_path) if t}
+                    def _mutate(cfg: dict) -> None:
+                        recents = cfg.get("recent_files", [])
+                        if isinstance(recents, list):
+                            cfg["recent_files"] = [
+                                r for r in recents
+                                if isinstance(r, str) and os.path.normpath(r) not in norm_targets
+                            ]
+                    _update_config(_mutate)
+                except Exception:
+                    pass
+                for v in getattr(self, "_viewers", []):
+                    ref = getattr(v, "_refresh_recents", None)
+                    if callable(ref):
+                        with contextlib.suppress(Exception):
+                            ref()
+                set_status = getattr(self, "_set_status", None)
+                if callable(set_status):
+                    set_status(f"✔ Deleted '{filename}' from disc")
+                elif hasattr(self, "_sb"):
+                    self._sb.showMessage(f"✔ Deleted '{filename}' from disc")
 
     def _load_and_track(self, path: str) -> PdfViewerPanel | None:
         if not path or not os.path.isfile(path):

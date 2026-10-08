@@ -94,7 +94,9 @@ class PanelNavMixin(_Base):
             self._pages_sidebar_collapsed = False
             self._sidebar_panel.setVisible(True)
             self._sidebar_tabs.setVisible(True)
-            w = min(500, max(70, getattr(self, "_saved_sidebar_width", 220)))
+            if hasattr(self, "_thumbnails") and hasattr(self, "_sidebar_tabs"):
+                self._sidebar_tabs.setCurrentWidget(self._thumbnails)
+            w = min(800, max(70, getattr(self, "_saved_sidebar_width", 220)))
             total = self._viewer_splitter.width() or 1020
             self._viewer_splitter.setSizes([w, max(300, total - w)])
             type(self)._pages_sidebar_visible_pref = True
@@ -512,7 +514,7 @@ class PanelNavMixin(_Base):
         self._sidebar_tabs.setVisible(show_pages)
         total = self._viewer_splitter.width() or 1020
         if show_pages:
-            w = min(500, max(70, getattr(self, "_saved_sidebar_width", 220)))
+            w = min(800, max(70, getattr(self, "_saved_sidebar_width", 220)))
             self._viewer_splitter.setSizes([w, max(300, total - w)])
         else:
             self._viewer_splitter.setSizes([0, total])
@@ -626,4 +628,3 @@ class PanelNavMixin(_Base):
         except Exception:
             pass
         super().closeEvent(event)
-
