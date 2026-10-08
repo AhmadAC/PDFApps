@@ -106,9 +106,13 @@ class WindowActionsMixin(_Base):
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)
             canvas = getattr(edit_w, "_canvas", None)
-            if canvas is not None and hasattr(canvas, "zoom_in"):
-                canvas.zoom_in()
-                return
+            if canvas is not None:
+                if getattr(canvas, "_selected_overlay_idx", -1) >= 0:
+                    canvas.scale_selected_overlay(1.10)
+                    return
+                if hasattr(canvas, "zoom_in"):
+                    canvas.zoom_in()
+                    return
         if self._viewer:
             canvas = getattr(self._viewer, "_canvas", None)
             if canvas is not None and hasattr(canvas, "zoom_in"):
@@ -122,9 +126,13 @@ class WindowActionsMixin(_Base):
         if self._current_tool == edit_idx:
             edit_w = self.stack.widget(edit_idx)
             canvas = getattr(edit_w, "_canvas", None)
-            if canvas is not None and hasattr(canvas, "zoom_out"):
-                canvas.zoom_out()
-                return
+            if canvas is not None:
+                if getattr(canvas, "_selected_overlay_idx", -1) >= 0:
+                    canvas.scale_selected_overlay(0.90)
+                    return
+                if hasattr(canvas, "zoom_out"):
+                    canvas.zoom_out()
+                    return
         if self._viewer:
             canvas = getattr(self._viewer, "_canvas", None)
             if canvas is not None and hasattr(canvas, "zoom_out"):

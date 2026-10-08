@@ -153,7 +153,7 @@ class PanelNavMixin(_Base):
         self._zoom_lbl.setText(f"{pct}%")
         self._update_page_label()
 
-    def _on_scroll(self, val: int):
+    def _on_scroll(self, val: int = 0):
         self._canvas.on_scroll()
         self._update_page_label()
 
@@ -178,6 +178,7 @@ class PanelNavMixin(_Base):
             elif event.type() == QEvent.Type.Resize:
                 if self._canvas._doc:
                     QTimer.singleShot(0, self._canvas._on_viewport_resized)
+                    QTimer.singleShot(40, self._update_page_label)
         return super().eventFilter(obj, event)
 
     @staticmethod
@@ -382,6 +383,28 @@ class PanelNavMixin(_Base):
         self._canvas_scroll.verticalScrollBar().setValue(y)
         self._canvas._active_page_idx = int(page_idx)
 
+    def _on_thumbnail_viewport_scroll(self, page_idx: int, norm_x: float, norm_y: float) -> None:
+        """Pan the canvas so the viewport corresponds to normalized top-left position on the page."""
+        if not hasattr(self, "_canvas") or not self._canvas._entries:
+            return
+        if not (0 <= page_idx < len(self._canvas._entries)):
+            return
+        entry = self._canvas._entries[page_idx]
+        px0 = self._canvas.page_x_offset(entry)
+        py0 = entry.y_off
+        pw = entry.w
+        ph = entry.h
+
+        target_x = px0 + int(round(norm_x * pw))
+        target_y = py0 + int(round(norm_y * ph))
+
+        h_sb = self._canvas_scroll.horizontalScrollBar()
+        v_sb = self._canvas_scroll.verticalScrollBar()
+        if h_sb:
+            h_sb.setValue(max(0, min(target_x, h_sb.maximum())))
+        if v_sb:
+            v_sb.setValue(max(0, min(target_y, v_sb.maximum())))
+
     def _toggle_night_mode(self):
         self._canvas.set_night_mode(self._night_btn.isChecked())
 
@@ -585,12 +608,51 @@ class PanelNavMixin(_Base):
         sb = self._canvas_scroll.verticalScrollBar()
         sb_val = sb.value() if sb else 0
         idx = self._canvas.page_at_y(sb_val)
-        self._canvas._active_page_idx = idx
+
+        # Calculate normalized viewport rectangle on the active page
+        h_sb = self._canvas_scroll.horizontalScrollBar()
+        v_sb = self._canvas_scroll.verticalScrollBar()
+        h_val = h_sb.value() if h_sb else 0
+        v_val = v_sb.value() if v_sb else 0
+        vp = self._canvas_scroll.viewport()
+        vp_w = vp.width() if vp else 0
+        vp_h = vp.height() if vp else 0
+
+        best_idx = idx
+        max_vis_h = -1
+        viewport_rect = None
+
+        if vp_w > 0 and vp_h > 0:
+            for p_i, entry in enumerate(pages):
+                py0 = entry.y_off
+                ph = entry.h
+                if py0 + ph < v_val:
+                    continue
+                if py0 > v_val + vp_h:
+                    break
+                px0 = self._canvas.page_x_offset(entry)
+                pw = entry.w
+                ix0 = max(px0, h_val)
+                iy0 = max(py0, v_val)
+                ix1 = min(px0 + pw, h_val + vp_w)
+                iy1 = min(py0 + ph, v_val + vp_h)
+                if ix1 > ix0 and iy1 > iy0:
+                    vis_h = iy1 - iy0
+                    if vis_h > max_vis_h:
+                        max_vis_h = vis_h
+                        best_idx = p_i
+                        norm_x = max(0.0, min(1.0, (ix0 - px0) / pw))
+                        norm_y = max(0.0, min(1.0, (iy0 - py0) / ph))
+                        norm_w = max(0.0, min(1.0 - norm_x, (ix1 - ix0) / pw))
+                        norm_h = max(0.0, min(1.0 - norm_y, (iy1 - iy0) / ph))
+                        viewport_rect = (norm_x, norm_y, norm_w, norm_h)
+
+        self._canvas._active_page_idx = best_idx
         total = len(pages)
-        self._page_lbl.setText(f"{idx + 1} / {total}")
-        self._prev_btn.setEnabled(idx > 0)
-        self._next_btn.setEnabled(idx < total - 1)
-        self._thumbnails.set_current_page(idx)
+        self._page_lbl.setText(f"{best_idx + 1} / {total}")
+        self._prev_btn.setEnabled(best_idx > 0)
+        self._next_btn.setEnabled(best_idx < total - 1)
+        self._thumbnails.set_current_page(best_idx, viewport_rect)
 
     def _prev_page(self):
         if not self._canvas._entries:

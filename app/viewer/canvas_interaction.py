@@ -955,7 +955,7 @@ class CanvasInteractionHandler:
 
         act_sel_all = menu.addAction(
             qta.icon("fa5s.object-group", color=TEXT_SEC),
-            t("viewer.select_all", default="Select All\tCtrl+A"),
+            t("Select All Text", default="Select All\tCtrl+A"),
         )
         act_sel_all.triggered.connect(self.select_all)
         menu.addSeparator()

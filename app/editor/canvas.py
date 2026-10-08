@@ -98,6 +98,8 @@ class PdfEditCanvas(QWidget):
         self._select_mode = False
         self._draw_mode   = False
         self._text_mode   = False
+        self._highlight_mode = False
+        self._highlight_color = (1.0, 1.0, 0.0)
         self._draw_color  = (1.0, 0.0, 0.0)
         self._draw_width  = 2
         self._current_stroke = None
@@ -144,11 +146,20 @@ class PdfEditCanvas(QWidget):
         if active:
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
+    def set_highlight_mode(self, active: bool, color: tuple = (1.0, 1.0, 0.0)):
+        self._highlight_mode = active
+        self._highlight_color = color
+        if active:
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+        elif not self._draw_mode and not self._text_mode and not self._placing_signature:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
+
     def set_text_mode(self, active: bool):
         self._text_mode = active
         if active:
             self.setCursor(Qt.CursorShape.IBeamCursor)
-        elif not self._draw_mode and not self._placing_signature:
+        elif not self._draw_mode and not self._placing_signature and not self._highlight_mode:
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def set_draw_mode(self, active: bool, color=None, width=None):
@@ -162,7 +173,7 @@ class PdfEditCanvas(QWidget):
         else:
             self._current_stroke = None
             self._stroke_page = -1
-            if not self._text_mode and not self._placing_signature:
+            if not self._text_mode and not self._placing_signature and not self._highlight_mode:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
 
@@ -173,7 +184,50 @@ class PdfEditCanvas(QWidget):
             self._selected_overlay_idx = -1
         self.update()
 
-    # ── Overlay Delegation ────────────────────────────────────────────────
+    # ── Overlay Delegation & Scaling ──────────────────────────────────────
+
+    def scale_selected_overlay(self, factor: float) -> bool:
+        """Scale the currently selected overlay (image/media/text) by the given factor around its center."""
+        if not (0 <= self._selected_overlay_idx < len(self._overlays)):
+            return False
+        ov = self._overlays[self._selected_overlay_idx]
+        if ov.get("_deleted"):
+            return False
+
+        if "rect" in ov:
+            r = fitz.Rect(ov["rect"])
+        elif "bbox" in ov:
+            r = fitz.Rect(ov["bbox"])
+        else:
+            return False
+
+        min_s = 15.0
+        old_w = max(min_s, r.width)
+        old_h = max(min_s, r.height)
+        new_w = max(min_s, old_w * factor)
+        new_h = max(min_s, old_h * factor)
+
+        cx = (r.x0 + r.x1) / 2.0
+        cy = (r.y0 + r.y1) / 2.0
+        new_r = fitz.Rect(cx - new_w / 2.0, cy - new_h / 2.0, cx + new_w / 2.0, cy + new_h / 2.0)
+
+        if "rect" in ov:
+            ov["rect"] = new_r
+        if "bbox" in ov:
+            ov["bbox"] = [new_r.x0, new_r.y0, new_r.x1, new_r.y1]
+            if "origin" in ov:
+                ov["origin"] = [new_r.x0, new_r.y1]
+        if "point" in ov:
+            ov["point"] = fitz.Point(new_r.x0, new_r.y0 + ov.get("size", 12) * 0.82)
+        if "font_size" in ov:
+            ov["font_size"] = max(4.0, float(ov["font_size"]) * factor)
+        if "size" in ov and ov.get("type") in ("text", "text_edit"):
+            ov["size"] = max(4.0, float(ov["size"]) * factor)
+
+        self._drag_start_rect = fitz.Rect(new_r)
+        self.overlay_changed.emit()
+        self.update()
+        return True
 
     def start_add_signature_flow(self, pos: QPoint | None = None):
         self._overlay_mgr.start_add_signature_flow(pos)
@@ -273,6 +327,17 @@ class PdfEditCanvas(QWidget):
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             pos = e.position().toPoint()
+            # If an overlay is selected and mouse is over it, scale overlay size with mouse wheel
+            if self._selected_overlay_idx >= 0:
+                if self._overlay_mgr.is_pos_inside_overlay(self._selected_overlay_idx, pos) or self._moving_overlay:
+                    if e.angleDelta().y() > 0:
+                        self.scale_selected_overlay(1.08)
+                    else:
+                        self.scale_selected_overlay(0.92)
+                    e.accept()
+                    return
+
+            # Default canvas zoom
             if e.angleDelta().y() > 0:
                 self.zoom_in(anchor_pos=pos)
             else:
@@ -543,7 +608,8 @@ class PdfEditCanvas(QWidget):
 
     def keyPressEvent(self, e):
         self._event_handler.handle_key_press(e)
-        super().keyPressEvent(e)
+        if not e.isAccepted():
+            super().keyPressEvent(e)
 
     def contextMenuEvent(self, e):
         self._event_handler.handle_context_menu(e)

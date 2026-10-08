@@ -124,21 +124,32 @@ class ThumbnailModel(QAbstractListModel):
 
 class ThumbnailDelegate(QStyledItemDelegate):
     """Paint each item centered: thumbnail + page number in '1 / N' format,
-    with multi-column responsive grid support and current-page highlight."""
+    with multi-column responsive grid support, current-page highlight, and Foxit-style viewport indicator."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._current_page = -1
+        self._viewport_rect: tuple[float, float, float, float] | None = None
         self._total_pages = 0
         self._dark = True
         self._thumb_w = DEFAULT_THUMB_WIDTH
         self._thumb_h = DEFAULT_THUMB_HEIGHT
         self._cell_w = DEFAULT_THUMB_WIDTH + 2 * THUMB_PADDING
 
-    def set_current_page(self, page_idx: int) -> int:
+    def set_current_page(
+        self,
+        page_idx: int,
+        viewport_rect: tuple[float, float, float, float] | None = None,
+    ) -> int:
         old = self._current_page
         self._current_page = page_idx
+        self._viewport_rect = viewport_rect
         return old
+
+    def set_viewport_rect(
+        self, viewport_rect: tuple[float, float, float, float] | None
+    ) -> None:
+        self._viewport_rect = viewport_rect
 
     def set_total_pages(self, total: int) -> None:
         self._total_pages = max(0, int(total))
@@ -154,11 +165,66 @@ class ThumbnailDelegate(QStyledItemDelegate):
         self._cell_w = max(60, int(w))
 
     def sizeHint(self, option, index):
-        w = self._cell_w if getattr(self, "_cell_w", 0) > 0 else (self._thumb_w + 2 * THUMB_PADDING)
+        w = (
+            self._cell_w
+            if getattr(self, "_cell_w", 0) > 0
+            else (self._thumb_w + 2 * THUMB_PADDING)
+        )
         return QSize(
             w,
             self._thumb_h + 2 * THUMB_PADDING + PAGE_NUM_HEIGHT,
         )
+
+    def get_thumbnail_pixmap_rect(self, item_rect: QRect, page_idx: int) -> QRect:
+        """Calculate the exact on-screen geometry of the rendered page thumbnail pixmap."""
+        thumb_w = min(self._thumb_w, max(40, item_rect.width() - 2 * THUMB_PADDING))
+        thumb_h = self._thumb_h
+        thumb_x = item_rect.x() + (item_rect.width() - thumb_w) // 2
+        thumb_y = item_rect.y() + THUMB_PADDING
+
+        parent_w = self.parent()
+        model = getattr(parent_w, "_model", None)
+        pix = model._cache.get(page_idx) if model else None
+
+        if pix is not None and not pix.isNull():
+            dpr = pix.devicePixelRatio() or 1.0
+            scaled = pix.scaled(
+                round(thumb_w * dpr),
+                round(thumb_h * dpr),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            lw = round(scaled.width() / dpr)
+            lh = round(scaled.height() / dpr)
+            cx = item_rect.x() + (item_rect.width() - lw) // 2
+            cy = thumb_y + (thumb_h - lh) // 2
+            return QRect(cx, cy, lw, lh)
+        return QRect(thumb_x, thumb_y, thumb_w, thumb_h)
+
+    def get_red_box_rect(self, item_rect: QRect, page_idx: int) -> QRect | None:
+        """Compute the screen rectangle of the red viewport box on the active page thumbnail."""
+        if page_idx != self._current_page or not self._viewport_rect:
+            return None
+        pix_rect = self.get_thumbnail_pixmap_rect(item_rect, page_idx)
+        cx = pix_rect.x()
+        cy = pix_rect.y()
+        lw = pix_rect.width()
+        lh = pix_rect.height()
+        if lw <= 0 or lh <= 0:
+            return None
+
+        norm_x, norm_y, norm_w, norm_h = self._viewport_rect
+        rx = cx + int(round(norm_x * lw))
+        ry = cy + int(round(norm_y * lh))
+        rw = max(4, int(round(norm_w * lw)))
+        rh = max(4, int(round(norm_h * lh)))
+
+        rx0 = max(cx, min(cx + lw - 3, rx))
+        ry0 = max(cy, min(cy + lh - 3, ry))
+        rw_clamped = max(4, min(cx + lw - rx0, rw))
+        rh_clamped = max(4, min(cy + lh - ry0, rh))
+
+        return QRect(rx0, ry0, rw_clamped, rh_clamped)
 
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
         page_idx = index.row()
@@ -227,6 +293,32 @@ class ThumbnailDelegate(QStyledItemDelegate):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(thumb_rect)
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "…")
+            cx = thumb_x
+            cy = thumb_y
+            lw = thumb_w
+            lh = thumb_h
+
+        # Draw red viewport rectangle on the active page (Foxit-style page view indicator)
+        if page_idx == self._current_page and self._viewport_rect and lw > 0 and lh > 0:
+            norm_x, norm_y, norm_w, norm_h = self._viewport_rect
+            rx = cx + int(round(norm_x * lw))
+            ry = cy + int(round(norm_y * lh))
+            rw = max(4, int(round(norm_w * lw)))
+            rh = max(4, int(round(norm_h * lh)))
+
+            rx0 = max(cx, min(cx + lw - 3, rx))
+            ry0 = max(cy, min(cy + lh - 3, ry))
+            rw_clamped = max(4, min(cx + lw - rx0, rw))
+            rh_clamped = max(4, min(cy + lh - ry0, rh))
+
+            red_box = QRect(rx0, ry0, rw_clamped, rh_clamped)
+
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setPen(QPen(QColor("#EF4444"), 2, Qt.PenStyle.SolidLine))
+            painter.setBrush(QColor(239, 68, 68, 20))
+            painter.drawRect(red_box)
+            painter.restore()
 
         # Centered page number displaying "1 / N"
         m = index.model()

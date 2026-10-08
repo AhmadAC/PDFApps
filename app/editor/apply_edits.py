@@ -1,5 +1,5 @@
 # app/editor/apply_edits.py 
-"""PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification support."""
+"""PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification and multi-rect text highlight support."""
 
 import os
 import logging
@@ -125,9 +125,17 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                 pg.insert_image(e["rect"], filename=path)
 
         elif etype == "highlight":
-            a = pg.add_highlight_annot(e["rect"])
-            a.set_colors(stroke=e["color"])
-            a.update()
+            rects = e.get("rects")
+            stroke_color = e.get("color", (1, 1, 0))
+            if rects:
+                for r_item in rects:
+                    a = pg.add_highlight_annot(fitz.Rect(r_item))
+                    a.set_colors(stroke=stroke_color)
+                    a.update()
+            elif "rect" in e:
+                a = pg.add_highlight_annot(fitz.Rect(e["rect"]))
+                a.set_colors(stroke=stroke_color)
+                a.update()
 
         elif etype == "note":
             pg.add_text_annot(e["point"], e["text"])

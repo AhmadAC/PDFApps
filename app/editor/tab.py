@@ -144,6 +144,8 @@ class TabEditar(QWidget):
         self._dark_mode: bool = True
         self._signature_path: str | None = None
         self._page_idx: int = 0
+        self._last_selected_page: int = -1
+        self._last_selected_rect: fitz.Rect | None = None
 
         self._history = TabHistoryManager(self)
         setup_editor_ui(self)
@@ -249,11 +251,16 @@ class TabEditar(QWidget):
             width=self._draw_width_slider.value() if is_draw else None,
         )
         self._canvas.set_text_mode(idx == _MODE_TEXT)
+
+        is_highlight = (idx == _MODE_HIGHLIGHT)
+        hi_col = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
+        self._canvas.set_highlight_mode(is_highlight, color=hi_col)
+
         cursors = {
             _MODE_REDACT: _get_icon_cursor("fa5s.eraser", 22, 22),
             _MODE_TEXT: Qt.CursorShape.IBeamCursor,
             _MODE_IMAGE: _get_icon_cursor("fa5s.image", 14, 14),
-            _MODE_HIGHLIGHT: _get_icon_cursor("fa5s.highlighter", 14, 2, rotate=135),
+            _MODE_HIGHLIGHT: Qt.CursorShape.IBeamCursor,
             _MODE_NOTE: _get_icon_cursor("fa5s.sticky-note", 4, 4),
             _MODE_FORMS: Qt.CursorShape.ArrowCursor,
             _MODE_SIGNATURE: Qt.CursorShape.ArrowCursor,
@@ -485,6 +492,47 @@ class TabEditar(QWidget):
             "width": self._draw_width_slider.value(),
         })
 
+    def _highlight_selection(self):
+        """Highlight whatever text was selected in Select mode."""
+        page_idx = getattr(self, "_last_selected_page", -1)
+        pdf_rect = getattr(self, "_last_selected_rect", None)
+        if page_idx < 0 or pdf_rect is None:
+            return
+        doc = self._canvas._doc
+        if not doc or not (0 <= page_idx < doc.page_count):
+            return
+        page = doc[page_idx]
+        words = page.get_text("words", clip=pdf_rect)
+        line_rects = []
+        if words:
+            lines_dict = {}
+            for w in words:
+                key = (w[5], w[6])
+                lines_dict.setdefault(key, []).append(w)
+            for line_words in lines_dict.values():
+                lx0 = min(w[0] for w in line_words)
+                ly0 = min(w[1] for w in line_words)
+                lx1 = max(w[2] for w in line_words)
+                ly1 = max(w[3] for w in line_words)
+                line_rects.append(fitz.Rect(lx0, ly0, lx1, ly1))
+        hi_color = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
+        if line_rects:
+            self._add({
+                "type": "highlight",
+                "page": page_idx,
+                "rect": pdf_rect,
+                "rects": line_rects,
+                "color": hi_color
+            })
+        else:
+            self._add({
+                "type": "highlight",
+                "page": page_idx,
+                "rect": pdf_rect,
+                "color": hi_color
+            })
+        self._status("✔ Highlight added to selection")
+
     def _on_rect(self, page_idx: int, pdf_rect):
         self._page_idx = page_idx
         self._update_nav()
@@ -496,6 +544,8 @@ class TabEditar(QWidget):
             raw_text = doc[page_idx].get_text("text", clip=pdf_rect)
             text = raw_text.strip() if isinstance(raw_text, str) else str(raw_text).strip()
             self._sel_result.setPlainText(text)
+            self._last_selected_page = page_idx
+            self._last_selected_rect = pdf_rect
             if text:
                 clipboard = QApplication.clipboard()
                 if clipboard:
@@ -539,7 +589,39 @@ class TabEditar(QWidget):
                     return
             self._add({"type": "signature", "page": self._page_idx, "rect": pdf_rect, "path": sig})
         elif mode == _MODE_HIGHLIGHT:
-            self._add({"type": "highlight", "page": self._page_idx, "rect": pdf_rect, "color": self._hi_color.color_tuple()})
+            doc = self._canvas._doc
+            line_rects = []
+            hi_color = self._hi_color.color_tuple()
+            if doc and 0 <= page_idx < doc.page_count:
+                page = doc[page_idx]
+                words = page.get_text("words", clip=pdf_rect)
+                if words:
+                    lines_dict = {}
+                    for w in words:
+                        key = (w[5], w[6])
+                        lines_dict.setdefault(key, []).append(w)
+                    for line_words in lines_dict.values():
+                        lx0 = min(w[0] for w in line_words)
+                        ly0 = min(w[1] for w in line_words)
+                        lx1 = max(w[2] for w in line_words)
+                        ly1 = max(w[3] for w in line_words)
+                        line_rect = fitz.Rect(lx0, ly0, lx1, ly1)
+                        line_rects.append(line_rect)
+            if line_rects:
+                self._add({
+                    "type": "highlight",
+                    "page": self._page_idx,
+                    "rect": pdf_rect,
+                    "rects": line_rects,
+                    "color": hi_color
+                })
+            else:
+                self._add({
+                    "type": "highlight",
+                    "page": self._page_idx,
+                    "rect": pdf_rect,
+                    "color": hi_color
+                })
 
     def _on_point(self, page_idx: int, pdf_pt):
         self._page_idx = page_idx
@@ -582,6 +664,17 @@ class TabEditar(QWidget):
             if not txt:
                 return
             self._add({"type": "note", "page": self._page_idx, "point": pdf_pt, "text": txt})
+        elif mode == _MODE_HIGHLIGHT:
+            hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=8.0)
+            if hit:
+                bb = fitz.Rect(hit["bbox"])
+                self._add({
+                    "type": "highlight",
+                    "page": page_idx,
+                    "rect": bb,
+                    "color": self._hi_color.color_tuple()
+                })
+                self._status("✔ Word highlighted")
 
     def _on_text_edit_committed(self, page_idx: int, edit: dict):
         self._add(edit)
@@ -648,3 +741,4 @@ class TabEditar(QWidget):
             return
 
         apply_visual_edits_and_save(self, out)
+

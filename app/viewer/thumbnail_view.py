@@ -1,5 +1,5 @@
 # app/viewer/thumbnail_view.py
-"""Thumbnail custom QListView with drag-and-drop reordering, auto-scroll, multi-column grid support, and keyboard shortcuts."""
+"""Thumbnail custom QListView with drag-and-drop reordering, auto-scroll, multi-column grid support, and interactive viewport box navigation."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _log = logging.getLogger(__name__)
 
 
 class ThumbnailListView(QListView):
-    """QListView supporting multi-selection, drag-and-drop page reordering, responsive multi-column layout, and keyboard shortcuts."""
+    """QListView supporting multi-selection, drag-and-drop page reordering, responsive multi-column layout, and Foxit-style viewport box navigation."""
 
     def __init__(self, panel: ThumbnailPanel) -> None:
         super().__init__(panel)
@@ -43,6 +43,12 @@ class ThumbnailListView(QListView):
         self._drop_target_row: int = -1
         self._auto_scroll_delta: int = 0
         self._last_drag_pos: QPoint = QPoint()
+
+        self._is_dragging_viewport: bool = False
+        self._drag_start_mouse: QPoint = QPoint()
+        self._drag_start_viewport: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+        self._drag_page_idx: int = -1
+        self._drag_pix_rect: QRect = QRect()
 
         self._auto_scroll_timer = QTimer(self)
         self._auto_scroll_timer.setInterval(30)
@@ -351,7 +357,99 @@ class ThumbnailListView(QListView):
 
             painter.end()
 
-    # ── Key and Context Menu Handlers ─────────────────────────────────────
+    # ── Mouse, Key and Context Menu Handlers ──────────────────────────────
+
+    def mousePressEvent(self, event):
+        pos = (
+            event.position().toPoint()
+            if hasattr(event, "position")
+            else event.pos()
+        )
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self.indexAt(pos)
+            curr_page = self._panel._delegate._current_page
+            if idx.isValid() and idx.row() == curr_page:
+                rect = self.visualRect(idx)
+                pix_rect = self._panel._delegate.get_thumbnail_pixmap_rect(rect, curr_page)
+                if pix_rect.contains(pos):
+                    red_box = self._panel._delegate.get_red_box_rect(rect, curr_page)
+                    v_rect = self._panel._delegate._viewport_rect or (0.0, 0.0, 1.0, 1.0)
+                    norm_w = v_rect[2]
+                    norm_h = v_rect[3]
+                    lw = max(1, pix_rect.width())
+                    lh = max(1, pix_rect.height())
+
+                    self._is_dragging_viewport = True
+                    self._drag_start_mouse = pos
+                    self._drag_page_idx = curr_page
+                    self._drag_pix_rect = pix_rect
+
+                    if red_box and red_box.contains(pos):
+                        self._drag_start_viewport = v_rect
+                    else:
+                        click_norm_x = (pos.x() - pix_rect.x()) / float(lw)
+                        click_norm_y = (pos.y() - pix_rect.y()) / float(lh)
+                        new_vx = max(0.0, min(1.0 - norm_w, click_norm_x - norm_w / 2.0))
+                        new_vy = max(0.0, min(1.0 - norm_h, click_norm_y - norm_h / 2.0))
+                        self._drag_start_viewport = (new_vx, new_vy, norm_w, norm_h)
+                        self._panel.viewport_scroll_requested.emit(curr_page, new_vx, new_vy)
+
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    event.accept()
+                    return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        pos = (
+            event.position().toPoint()
+            if hasattr(event, "position")
+            else event.pos()
+        )
+        if getattr(self, "_is_dragging_viewport", False):
+            dx = pos.x() - self._drag_start_mouse.x()
+            dy = pos.y() - self._drag_start_mouse.y()
+            v_x, v_y, v_w, v_h = self._drag_start_viewport
+            lw = max(1, self._drag_pix_rect.width())
+            lh = max(1, self._drag_pix_rect.height())
+            norm_dx = dx / float(lw)
+            norm_dy = dy / float(lh)
+            new_vx = max(0.0, min(1.0 - v_w, v_x + norm_dx))
+            new_vy = max(0.0, min(1.0 - v_h, v_y + norm_dy))
+            self._panel.viewport_scroll_requested.emit(self._drag_page_idx, new_vx, new_vy)
+            event.accept()
+            return
+
+        super().mouseMoveEvent(event)
+
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            idx = self.indexAt(pos)
+            curr_page = self._panel._delegate._current_page
+            if idx.isValid() and idx.row() == curr_page:
+                rect = self.visualRect(idx)
+                red_box = self._panel._delegate.get_red_box_rect(rect, curr_page)
+                if red_box and red_box.contains(pos):
+                    self.setCursor(Qt.CursorShape.SizeAllCursor)
+                    return
+                pix_rect = self._panel._delegate.get_thumbnail_pixmap_rect(rect, curr_page)
+                if pix_rect.contains(pos):
+                    self.setCursor(Qt.CursorShape.PointingHandCursor)
+                    return
+            self.unsetCursor()
+
+    def mouseReleaseEvent(self, event):
+        if getattr(self, "_is_dragging_viewport", False):
+            self._is_dragging_viewport = False
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event):
+        if getattr(self, "_is_dragging_viewport", False):
+            self._is_dragging_viewport = False
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     def keyPressEvent(self, event):
         key = event.key()

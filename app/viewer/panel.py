@@ -202,6 +202,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
         self._thumbnails = ThumbnailPanel(self)
         self._thumbnails.page_requested.connect(self._on_thumbnail_clicked)
         self._thumbnails.action_requested.connect(self._on_thumbnail_action)
+        self._thumbnails.viewport_scroll_requested.connect(self._on_thumbnail_viewport_scroll)
 
         # Sidebar tab widget: [Contents | Pages]
         self._sidebar_tabs = QTabWidget()
@@ -244,6 +245,7 @@ class PdfViewerPanel(PanelHistoryMixin, PanelPageOpsMixin, PanelSearchPrintMixin
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self._canvas_scroll.viewport().installEventFilter(self)
         self._canvas_scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        self._canvas_scroll.horizontalScrollBar().valueChanged.connect(self._on_scroll)
 
         # Splitter: sidebar | canvas
         self._viewer_splitter = QSplitter(Qt.Orientation.Horizontal)

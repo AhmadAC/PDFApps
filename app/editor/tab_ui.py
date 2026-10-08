@@ -1,3 +1,5 @@
+
+
 # app/editor/tab_ui.py
 """PDFApps – tab_ui: UI builder and styling manager for TabEditar."""
 
@@ -292,8 +294,10 @@ def _build_mode_options(tab) -> None:
     w3 = QWidget(); v3 = QVBoxLayout(w3); v3.setContentsMargins(0, 4, 0, 0); v3.setSpacing(4)
     v3.addWidget(QLabel(t("edit.color")))
     tab._hi_color = ColorPickerButton((1, 1, 0))
+    tab._hi_color.color_changed.connect(lambda c: tab._canvas.set_highlight_mode(tab._mode_idx == 3, color=c))
     v3.addWidget(tab._hi_color)
-    hint3 = QLabel(t("edit.hint.highlight")); hint3.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;")
+    hint3 = QLabel("💡 Drag across text or click a word to highlight it (like in Foxit PDF).")
+    hint3.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint3.setWordWrap(True)
     tab._hint_labels.append(hint3); v3.addWidget(hint3); v3.addStretch()
     tab._opt_stack.addWidget(w3)
 
@@ -335,7 +339,7 @@ def _build_mode_options(tab) -> None:
     sig_clear = QPushButton(t("edit.signature.clear"))
     sig_clear.clicked.connect(tab._clear_signature)
     v6s.addWidget(sig_clear)
-    hint6s = QLabel("💡 Click on any placed signature to move, resize, or delete it (<kbd>Del</kbd>).")
+    hint6s = QLabel("💡 Click on any placed signature to move (Arrow keys), resize (Ctrl +/- or wheel), or delete (<kbd>Del</kbd>).")
     hint6s.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint6s.setWordWrap(True)
     tab._hint_labels.append(hint6s); v6s.addWidget(hint6s); v6s.addStretch()
     tab._opt_stack.addWidget(w6)
@@ -364,16 +368,26 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(hint_d); v_d.addWidget(hint_d); v_d.addStretch()
     tab._opt_stack.addWidget(w_draw)
 
-    # 8 - Select / Copy text
+    # 8 - Select / Copy / Highlight text
     w8 = QWidget(); v8 = QVBoxLayout(w8); v8.setContentsMargins(0, 4, 0, 0); v8.setSpacing(6)
     hint8 = QLabel(t("edit.hint.select")); hint8.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint8.setWordWrap(True)
     tab._hint_labels.append(hint8)
     tab._sel_result = QTextEdit(); tab._sel_result.setReadOnly(True); tab._sel_result.setMaximumHeight(80)
     tab._sel_result.setPlaceholderText(t("edit.select_placeholder"))
+    
+    sel_btn_row = QHBoxLayout()
     tab._btn_copy = QPushButton(t("btn.copy"))
     tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=TEXT_PRI))
     tab._btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(tab._sel_result.toPlainText()))
-    v8.addWidget(hint8); v8.addWidget(tab._sel_result); v8.addWidget(tab._btn_copy); v8.addStretch()
+    
+    tab._btn_highlight = QPushButton(t("edit.mode.highlight"))
+    tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
+    tab._btn_highlight.clicked.connect(tab._highlight_selection)
+    
+    sel_btn_row.addWidget(tab._btn_copy)
+    sel_btn_row.addWidget(tab._btn_highlight)
+
+    v8.addWidget(hint8); v8.addWidget(tab._sel_result); v8.addLayout(sel_btn_row); v8.addStretch()
     tab._opt_stack.addWidget(w8)
 
 
@@ -391,6 +405,8 @@ def update_tab_theme(tab, dark: bool) -> None:
     tab._btn_undo.setIcon(qta.icon("fa5s.undo", color=pri))
     tab._btn_redo.setIcon(qta.icon("fa5s.redo", color=pri))
     tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=pri))
+    if hasattr(tab, "_btn_highlight"):
+        tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
     tab._sig_choose.setIcon(qta.icon("fa5s.signature", color=pri))
     tab._btn_bold.setIcon(qta.icon("fa5s.bold", color=pri))
     tab._btn_italic.setIcon(qta.icon("fa5s.italic", color=pri))
@@ -424,3 +440,4 @@ def update_tab_theme(tab, dark: bool) -> None:
                 if dark else
                 f"background:#D6E8FA; border:1px solid #70A7DB; color:{ACCENT}; border-radius:6px;"
             )
+

@@ -63,6 +63,7 @@ class ThumbnailPanel(QWidget):
 
     page_requested = Signal(int)
     action_requested = Signal(str, object)  # (action_name, list[int] | tuple)
+    viewport_scroll_requested = Signal(int, float, float)  # (page_idx, norm_x, norm_y)
 
     _thumb_scale_pref: float | None = None
 
@@ -503,7 +504,7 @@ class ThumbnailPanel(QWidget):
         self._anchor = 0
         self._delegate.set_total_pages(page_count)
         self._model.set_document(doc_path, page_count)
-        self._delegate.set_current_page(-1)
+        self._delegate.set_current_page(-1, None)
         self._update_grid_layout()
         _log.debug(
             "set_document: %r page_count=%d epoch=%d visible=%s",
@@ -563,20 +564,24 @@ class ThumbnailPanel(QWidget):
         self._anchor = 0
         self._model.clear()
         self._delegate.set_total_pages(0)
-        self._delegate.set_current_page(-1)
+        self._delegate.set_current_page(-1, None)
 
-    def set_current_page(self, page_idx: int) -> None:
+    def set_current_page(
+        self,
+        page_idx: int,
+        viewport_rect: tuple[float, float, float, float] | None = None,
+    ) -> None:
         if not (0 <= page_idx < self._model.rowCount()):
             return
         self._anchor = page_idx
-        old = self._delegate.set_current_page(page_idx)
+        old = self._delegate.set_current_page(page_idx, viewport_rect)
         idx = self._model.index(page_idx)
         if len(self._view.selectedIndexes()) <= 1:
             self._view.setCurrentIndex(idx)
         self._view.scrollTo(idx, QAbstractItemView.ScrollHint.EnsureVisible)
         vp = self._view.viewport()
         if vp is not None:
-            if old >= 0:
+            if old >= 0 and old != page_idx:
                 old_rect = self._view.visualRect(self._model.index(old))
                 vp.update(old_rect)
             vp.update(self._view.visualRect(idx))
@@ -591,7 +596,7 @@ class ThumbnailPanel(QWidget):
     def _on_activated(self, index: QModelIndex) -> None:
         if index.isValid():
             self._anchor = index.row()
-            self._delegate.set_current_page(index.row())
+            self._delegate.set_current_page(index.row(), self._delegate._viewport_rect)
             self.page_requested.emit(index.row())
             vp = self._view.viewport()
             if vp is not None:
@@ -601,7 +606,7 @@ class ThumbnailPanel(QWidget):
         if current.isValid():
             row = current.row()
             self._anchor = row
-            self._delegate.set_current_page(row)
+            self._delegate.set_current_page(row, self._delegate._viewport_rect)
             self.page_requested.emit(row)
             vp = self._view.viewport()
             if vp is not None:

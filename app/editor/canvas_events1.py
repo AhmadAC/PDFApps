@@ -1,3 +1,4 @@
+
 # app/editor/canvas_events1.py
 
 """Canvas interaction handler: mouse, drag handles, keyboard and context menus."""
@@ -287,6 +288,7 @@ class CanvasEventHandler:
     def handle_key_press(self, e):
         c = self.canvas
         key = e.key()
+        modifiers = e.modifiers()
 
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if c._selected_overlay_idx >= 0:
@@ -305,8 +307,9 @@ class CanvasEventHandler:
                 e.accept()
                 return
 
+        # Nudge movement of selected media/image using Arrow keys
         if c._selected_overlay_idx >= 0 and key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
-            step = 10.0 if (e.modifiers() & Qt.KeyboardModifier.ShiftModifier) else 1.0
+            step = 15.0 if (modifiers & Qt.KeyboardModifier.ShiftModifier) else (1.0 if (modifiers & Qt.KeyboardModifier.AltModifier) else 4.0)
             dx = 0.0
             dy = 0.0
             if key == Qt.Key.Key_Left: dx = -step
@@ -324,11 +327,27 @@ class CanvasEventHandler:
                 ov["bbox"] = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]
                 if "origin" in ov:
                     ov["origin"] = [b[0] + dx, b[3] + dy]
+                if "point" in ov:
+                    ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
             elif "point" in ov:
                 ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
+            c._drag_start_rect = fitz.Rect(ov["rect"]) if "rect" in ov else fitz.Rect(ov["bbox"])
             c.overlay_changed.emit()
             c.update()
             e.accept()
+            return
+
+        # Resizing selected media/image using Ctrl + and Ctrl -
+        if c._selected_overlay_idx >= 0:
+            if (modifiers & Qt.KeyboardModifier.ControlModifier) or key in (Qt.Key.Key_Plus, Qt.Key.Key_Minus):
+                if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                    c.scale_selected_overlay(1.10)
+                    e.accept()
+                    return
+                elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                    c.scale_selected_overlay(0.90)
+                    e.accept()
+                    return
 
     def handle_context_menu(self, e):
         c = self.canvas
@@ -340,6 +359,11 @@ class CanvasEventHandler:
 
         if c._selected_overlay_idx >= 0 and c._overlay_mgr.is_pos_inside_overlay(c._selected_overlay_idx, pos):
             menu = QMenu(c)
+            act_inc = menu.addAction(qta.icon("fa5s.search-plus", color=ACCENT), "Increase Size (Ctrl+)")
+            act_inc.triggered.connect(lambda: c.scale_selected_overlay(1.10))
+            act_dec = menu.addAction(qta.icon("fa5s.search-minus", color=ACCENT), "Decrease Size (Ctrl-)")
+            act_dec.triggered.connect(lambda: c.scale_selected_overlay(0.90))
+            menu.addSeparator()
             act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
             act_del.triggered.connect(c.delete_selected_overlay)
             act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("tool.duplicate", default="Duplicate"))
@@ -352,6 +376,11 @@ class CanvasEventHandler:
                 c._selected_overlay_idx = idx
                 c.update()
                 menu = QMenu(c)
+                act_inc = menu.addAction(qta.icon("fa5s.search-plus", color=ACCENT), "Increase Size (Ctrl+)")
+                act_inc.triggered.connect(lambda: c.scale_selected_overlay(1.10))
+                act_dec = menu.addAction(qta.icon("fa5s.search-minus", color=ACCENT), "Decrease Size (Ctrl-)")
+                act_dec.triggered.connect(lambda: c.scale_selected_overlay(0.90))
+                menu.addSeparator()
                 act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
                 act_del.triggered.connect(c.delete_selected_overlay)
                 act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("tool.duplicate", default="Duplicate"))

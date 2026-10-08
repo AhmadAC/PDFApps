@@ -64,9 +64,17 @@ class CanvasPainter:
                 p.setPen(QPen(QColor("#EF4444"), 1)); p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(qr)
             elif etype == "highlight":
-                r = e["rect"]; c = e["color"]
-                qr = QRect(int(r.x0*z), yo+int(r.y0*z), max(1,int(r.width*z)), max(1,int(r.height*z)))
-                p.fillRect(qr, QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255), 120))
+                c = e.get("color", (1, 1, 0))
+                col = QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255), 120)
+                rects = e.get("rects")
+                if rects:
+                    for r_item in rects:
+                        qr = QRect(int(r_item.x0*z), yo+int(r_item.y0*z), max(1,int(r_item.width*z)), max(1,int(r_item.height*z)))
+                        p.fillRect(qr, col)
+                elif "rect" in e:
+                    r = e["rect"]
+                    qr = QRect(int(r.x0*z), yo+int(r.y0*z), max(1,int(r.width*z)), max(1,int(r.height*z)))
+                    p.fillRect(qr, col)
             elif etype == "text":
                 pt = e["point"]; c = e["color"]
                 p.setPen(QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255)))
@@ -249,7 +257,15 @@ class CanvasPainter:
             if canvas._select_mode:
                 p.setPen(QPen(QColor("#3B82F6"), 2, Qt.PenStyle.SolidLine))
                 p.setBrush(QColor(59, 130, 246, 50))
+                p.drawRect(canvas._drag_rect)
+            elif getattr(canvas, "_highlight_mode", False):
+                hi_c = getattr(canvas, "_highlight_color", (1.0, 1.0, 0.0))
+                col_border = QColor(int(hi_c[0]*255), int(hi_c[1]*255), int(hi_c[2]*255), 230)
+                col_fill = QColor(int(hi_c[0]*255), int(hi_c[1]*255), int(hi_c[2]*255), 90)
+                p.setPen(QPen(col_border, 1.5, Qt.PenStyle.SolidLine))
+                p.setBrush(col_fill)
+                p.drawRect(canvas._drag_rect)
             else:
                 p.setPen(QPen(QColor("#EF4444"), 2, Qt.PenStyle.DashLine))
                 p.setBrush(QColor(239, 68, 68, 50))
-            p.drawRect(canvas._drag_rect)
+                p.drawRect(canvas._drag_rect)
