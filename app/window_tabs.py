@@ -1,3 +1,5 @@
+#################### START OF FILE: app\window_tabs.py ####################
+
 # app/window_tabs.py
 """PDFApps – Tab management and multi-viewer window mixin."""
 
@@ -15,7 +17,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QTabBar,
 )
+import qtawesome as qta
 
+from app.constants import TEXT_PRI, _LQ
 from app.i18n import add_recent_file, t
 from app.utils import reveal_file
 from app.viewer.panel import PdfViewerPanel
@@ -77,6 +81,7 @@ class WindowTabsMixin(_Base):
         _tab_bar: _ViewerTabBar
         stack: QStackedWidget
         _current_tool: int
+        _dark_mode: bool
 
         def _handle_global_undo(self) -> None: ...
         def _handle_global_redo(self) -> None: ...
@@ -217,19 +222,45 @@ class WindowTabsMixin(_Base):
             return
         viewer = self._viewers[tab_idx]
         path = viewer.current_path()
+        dark = getattr(self, "_dark_mode", True)
+        icon_color = TEXT_PRI if dark else _LQ
 
         menu = QMenu(self)
-        act_close = menu.addAction(t("tab.close", default="Close Tab"))
-        act_close_others = menu.addAction(t("tab.close_others", default="Close Other Tabs"))
-        act_close_right = menu.addAction(t("tab.close_right", default="Close Tabs to the Right"))
+
+        # Tab navigation & closing actions
+        act_close = menu.addAction(
+            qta.icon("fa5s.times", color="#EF4444"),
+            "Close Tab",
+        )
+
+        can_close_others = len(self._viewers) > 1
+        act_close_others = menu.addAction(
+            qta.icon("fa5s.window-close", color=icon_color),
+            "Close All Other Tabs",
+        )
+        act_close_others.setEnabled(can_close_others)
+
         menu.addSeparator()
 
+        # Filesystem actions
         act_reveal = None
         act_copy_path = None
         if path and os.path.exists(path):
-            label = "Show in Explorer" if sys.platform == "win32" else "Show in File Manager"
-            act_reveal = menu.addAction(t("tab.reveal", default=label))
-            act_copy_path = menu.addAction(t("tab.copy_path", default="Copy File Path"))
+            if sys.platform == "win32":
+                reveal_label = "Reveal in File Explorer"
+            elif sys.platform == "darwin":
+                reveal_label = "Reveal in Finder"
+            else:
+                reveal_label = "Reveal in File Manager"
+
+            act_reveal = menu.addAction(
+                qta.icon("fa5s.folder-open", color=icon_color),
+                reveal_label,
+            )
+            act_copy_path = menu.addAction(
+                qta.icon("fa5s.copy", color=icon_color),
+                "Copy Full Path",
+            )
 
         chosen = menu.exec(self._tab_bar.mapToGlobal(point))
         if chosen == act_close:
@@ -238,9 +269,6 @@ class WindowTabsMixin(_Base):
             for i in range(len(self._viewers) - 1, -1, -1):
                 if i != tab_idx:
                     self._close_tab(i)
-        elif chosen == act_close_right:
-            for i in range(len(self._viewers) - 1, tab_idx, -1):
-                self._close_tab(i)
         elif act_reveal and chosen == act_reveal:
             reveal_file(path)
         elif act_copy_path and chosen == act_copy_path:
