@@ -1,4 +1,4 @@
-# app\tools\extract.py
+# app/tools/extract.py
 
 """PDFApps – TabExtrair: extract PDF pages tool."""
 
@@ -140,8 +140,18 @@ class TabExtrair(BasePage):
             if callable(cleanup_fn) and viewer:
                 cleanup_fn(id(viewer))
 
-            if viewer:
-                viewer.load(out_path)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle(t("msg.done"))
+            box.setText(msg)
+            btn_open = box.addButton("Open Extracted PDF", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Ok)
+            box.setDefaultButton(btn_open)
+            box.exec()
 
-            QMessageBox.information(self, t("msg.done"), msg)
+            if box.clickedButton() == btn_open:
+                if viewer:
+                    viewer.load(out_path)
+                elif win and hasattr(win, "_load_and_track"):
+                    win._load_and_track(out_path)
         except Exception as e: show_error(self, e)

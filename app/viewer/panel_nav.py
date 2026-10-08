@@ -373,10 +373,12 @@ class PanelNavMixin(_Base):
             return
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
+        self._canvas._active_page_idx = int(page_idx)
 
     def _on_thumbnail_clicked(self, page_idx: int) -> None:
         y = self._canvas.scroll_to_page(int(page_idx))
         self._canvas_scroll.verticalScrollBar().setValue(y)
+        self._canvas._active_page_idx = int(page_idx)
 
     def _toggle_night_mode(self):
         self._canvas.set_night_mode(self._night_btn.isChecked())
@@ -499,7 +501,6 @@ class PanelNavMixin(_Base):
         self.set_page_crops({})
         self.set_page_order(None)
 
-        # Ensure container layout is active before canvas reads viewport width
         self._placeholder.setVisible(False)
         self._viewer_splitter.setVisible(True)
 
@@ -516,8 +517,9 @@ class PanelNavMixin(_Base):
         else:
             self._viewer_splitter.setSizes([0, total])
 
-        # Load document after viewport container is laid out
         self._canvas.load(doc, target_page, path=path, password=getattr(self, "_pdf_password", ""), target_scroll=target_scroll)
+        self._canvas._active_page_idx = target_page
+
         if target_scroll >= 0:
             self._canvas_scroll.verticalScrollBar().setValue(target_scroll)
         elif 0 < target_page < doc.page_count:
@@ -525,7 +527,6 @@ class PanelNavMixin(_Base):
         else:
             self._canvas_scroll.verticalScrollBar().setValue(0)
 
-        # Single deferred resize check to ensure canvas scales cleanly
         QTimer.singleShot(50, self._canvas._on_viewport_resized)
 
         display_name = os.path.basename(self._original_doc_path or path)
@@ -582,6 +583,7 @@ class PanelNavMixin(_Base):
         sb = self._canvas_scroll.verticalScrollBar()
         sb_val = sb.value() if sb else 0
         idx = self._canvas.page_at_y(sb_val)
+        self._canvas._active_page_idx = idx
         total = len(pages)
         self._page_lbl.setText(f"{idx + 1} / {total}")
         self._prev_btn.setEnabled(idx > 0)
@@ -594,7 +596,9 @@ class PanelNavMixin(_Base):
         sb = self._canvas_scroll.verticalScrollBar()
         idx = self._canvas.page_at_y(sb.value())
         if idx > 0:
-            sb.setValue(self._canvas.scroll_to_page(idx - 1))
+            target = idx - 1
+            self._canvas._active_page_idx = target
+            sb.setValue(self._canvas.scroll_to_page(target))
 
     def _next_page(self):
         if not self._canvas._entries:
@@ -602,7 +606,9 @@ class PanelNavMixin(_Base):
         sb = self._canvas_scroll.verticalScrollBar()
         idx = self._canvas.page_at_y(sb.value())
         if idx < len(self._canvas._entries) - 1:
-            sb.setValue(self._canvas.scroll_to_page(idx + 1))
+            target = idx + 1
+            self._canvas._active_page_idx = target
+            sb.setValue(self._canvas.scroll_to_page(target))
 
     def _zoom_fit(self):
         self._canvas.zoom_reset()
@@ -620,3 +626,4 @@ class PanelNavMixin(_Base):
         except Exception:
             pass
         super().closeEvent(event)
+

@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QListView,
     QMenu,
+    QProxyStyle,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +45,15 @@ from app.viewer.thumbnail_worker import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+class _ScrollableMenuStyle(QProxyStyle):
+    """Enforce single-column scrollable QMenu across all platforms."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_Menu_Scrollable:
+            return 1
+        return super().styleHint(hint, option, widget, returnData)
 
 
 class ThumbnailPanel(QWidget):
@@ -120,6 +131,10 @@ class ThumbnailPanel(QWidget):
         self._view.clicked.connect(self._on_activated)
         self._view.activated.connect(self._on_activated)
 
+        sm = self._view.selectionModel()
+        if sm is not None:
+            sm.currentChanged.connect(self._on_selection_current_changed)
+
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setSingleShot(True)
         self._scroll_timer.setInterval(120)
@@ -129,7 +144,7 @@ class ThumbnailPanel(QWidget):
             sb.valueChanged.connect(lambda _=0: self._scroll_timer.start())
         layout.addWidget(self._view)
 
-    # ── Context Menu (Foxit Layout) ───────────────────────────────
+    # ── Context Menu (Single-Column Scrollable Pane) ───────────────
 
     def _show_context_menu(
         self, global_pos: QPoint, selected_pages: list[int]
@@ -143,6 +158,9 @@ class ThumbnailPanel(QWidget):
         suffix = f" ({n_sel})" if n_sel > 1 else ""
 
         menu = QMenu(self)
+        self._menu_style = _ScrollableMenuStyle(menu.style())
+        menu.setStyle(self._menu_style)
+        menu.setStyleSheet("QMenu { menu-scrollable: 1; }")
 
         # 1. Clipboard
         act_copy = menu.addAction(
@@ -536,6 +554,16 @@ class ThumbnailPanel(QWidget):
             self._anchor = index.row()
             self._delegate.set_current_page(index.row())
             self.page_requested.emit(index.row())
+            vp = self._view.viewport()
+            if vp is not None:
+                vp.update()
+
+    def _on_selection_current_changed(self, current: QModelIndex, previous: QModelIndex) -> None:
+        if current.isValid():
+            row = current.row()
+            self._anchor = row
+            self._delegate.set_current_page(row)
+            self.page_requested.emit(row)
             vp = self._view.viewport()
             if vp is not None:
                 vp.update()

@@ -34,6 +34,9 @@ from app.pdf_io import atomic_pdf_write
 from app.utils import parse_pages, show_error
 
 if TYPE_CHECKING:
+    from PySide6.QtWidgets import QScrollArea
+    from app.viewer.canvas_1 import _SelectCanvas
+    from app.viewer.thumbnails import ThumbnailPanel
     _Base = QWidget
 else:
     _Base = object
@@ -229,9 +232,15 @@ class PanelPageOpsMixin(_Base):
         _pages_sidebar_collapsed: bool
         _saved_sidebar_width: int
         _viewer_splitter: QSplitter
+        _canvas_scroll: QScrollArea
+        _canvas: _SelectCanvas
+        _thumbnails: ThumbnailPanel
 
         def undo(self) -> None: ...
         def redo(self) -> None: ...
+        def _prev_page(self) -> None: ...
+        def _next_page(self) -> None: ...
+        def _update_page_label(self) -> None: ...
         def _save_and_reload(
             self,
             doc_to_save: fitz.Document,
@@ -262,6 +271,20 @@ class PanelPageOpsMixin(_Base):
         if action == "fit_sidebar_width":
             if isinstance(pages_arg, (int, float)):
                 self._set_sidebar_width(int(pages_arg))
+            return
+
+        if action == "prev_page":
+            self._prev_page()
+            return
+        if action == "next_page":
+            self._next_page()
+            return
+        if action == "go_to_page":
+            if isinstance(pages_arg, int) and hasattr(self, "_canvas_scroll") and hasattr(self, "_canvas"):
+                self._canvas_scroll.verticalScrollBar().setValue(self._canvas.scroll_to_page(pages_arg))
+                if hasattr(self, "_thumbnails"):
+                    self._thumbnails.set_current_page(pages_arg)
+                self._update_page_label()
             return
 
         if not self._fitz_doc or not self._current_path:
@@ -497,26 +520,15 @@ class PanelPageOpsMixin(_Base):
                 doc.close()
                 return
 
-            page_str = ", ".join(str(p + 1) for p in pages)
-            if len(pages) > 6:
-                page_str = f"{len(pages)} pages ({pages[0] + 1}..{pages[-1] + 1})"
-
-            reply = QMessageBox.question(
-                self, t("msg.confirm"),
-                f"Are you sure you want to delete page(s) {page_str}?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                doc.close()
-                return
-
             for p_idx in sorted(pages, reverse=True):
                 if 0 <= p_idx < doc.page_count:
                     doc.delete_page(p_idx)
 
             target = min(pages[0], doc.page_count - 1)
             self._save_and_reload(doc, target_page=target, selected_pages=[target])
+            win: Any = self.window()
+            if win and hasattr(win, "_set_status"):
+                win._set_status(f"✔ Deleted {len(pages)} page(s) (Ctrl+Z to undo)")
         except Exception as exc:
             show_error(self, exc)
 
@@ -543,7 +555,22 @@ class PanelPageOpsMixin(_Base):
                     new_doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
             doc.close()
             atomic_pdf_write(new_doc, out_path, close_writer=True)
-            QMessageBox.information(self, t("msg.done"), f"{len(pages)} page(s) extracted to:\n{out_path}")
+
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setWindowTitle(t("msg.done"))
+            box.setText(f"{len(pages)} page(s) extracted to:\n{out_path}")
+            btn_open = box.addButton("Open Extracted PDF", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Ok)
+            box.setDefaultButton(btn_open)
+            box.exec()
+
+            if box.clickedButton() == btn_open:
+                win: Any = self.window()
+                if win and hasattr(win, "_load_and_track"):
+                    win._load_and_track(out_path)
+                elif win and hasattr(win, "_add_viewer_tab"):
+                    win._add_viewer_tab(out_path)
         except Exception as exc:
             show_error(self, exc)
 

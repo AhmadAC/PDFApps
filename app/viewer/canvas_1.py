@@ -60,6 +60,7 @@ class _SelectCanvas(QWidget):
         self._path = ""
         self._password = ""
         self._entries: list[Any] = []
+        self._active_page_idx: int = 0
 
         if _SelectCanvas._saved_zoom_factor_pref is None:
             try:
@@ -244,6 +245,7 @@ class _SelectCanvas(QWidget):
         self._doc = doc
         self._path = path
         self._password = password
+        self._active_page_idx = target_page
         self._zoom_factor = type(self)._saved_zoom_factor_pref or 1.0
         self._gen += 1
         self._pending.clear()
@@ -398,7 +400,6 @@ class _SelectCanvas(QWidget):
         ref_w = r0.height if rot0 in (90, 270) else r0.width
         ref_w = max(ref_w, 1.0)
 
-        # Baseline width is fitted to available viewport width (Fit to Screen Width)
         target_fit_w = max(400, vp_w - 36)
         self._base_avail = target_fit_w
         self._zoom = (self._base_avail / ref_w) * self._zoom_factor
@@ -456,7 +457,6 @@ class _SelectCanvas(QWidget):
             y_off += ph + _PAGE_GAP
 
         total_h = y_off - _PAGE_GAP if y_off > 0 else 400
-        # Canvas width always spans at least the full viewport width so pages center with equal margins
         canvas_w = max(max_w + 32, vp_w, 300)
         canvas_h = max(total_h, 400)
         self.setFixedSize(canvas_w, canvas_h)

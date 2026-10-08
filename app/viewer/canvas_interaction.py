@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import fitz
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QProxyStyle, QStyle
 import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_SEC
@@ -23,6 +23,14 @@ if TYPE_CHECKING:
 
 # Safe fallback for PyMuPDF annotation constant to satisfy Pylance
 _PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
+
+
+class _ScrollableMenuStyle(QProxyStyle):
+    """Enforce single-column scrollable QMenu across all platforms."""
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_Menu_Scrollable:
+            return 1
+        return super().styleHint(hint, option, widget, returnData)
 
 
 def is_cjk(ch: str) -> bool:
@@ -162,7 +170,6 @@ class CanvasInteractionHandler:
         curr_key = None
 
         for wi, w in enumerate(words):
-            # w = (x0, y0, x1, y1, text, block_no, line_no, word_no)
             key = (w[5], w[6]) if len(w) >= 7 else (0, 0)
             if key != curr_key:
                 if curr_line:
@@ -189,13 +196,11 @@ class CanvasInteractionHandler:
         if not lines:
             return -1
 
-        # 1. Exact hit inside word bounding box
         for line in lines:
             for wi, w in line:
                 if w[0] <= px <= w[2] and w[1] <= py <= w[3]:
                     return wi
 
-        # 2. Check if py is vertically within any line
         line_data = []
         for line in lines:
             lx0 = min(item[1][0] for item in line)
@@ -221,7 +226,6 @@ class CanvasInteractionHandler:
                         best_wi = wi
                 return best_wi
 
-        # 3. Outside all lines vertically
         if py < line_data[0][2]:
             return line_data[0][0][0][0]
         if py > line_data[-1][4]:
@@ -291,7 +295,6 @@ class CanvasInteractionHandler:
                 full_ly1 = max(item[1][3] for item in line)
                 line_h = max(6.0, full_ly1 - full_ly0)
 
-                # Segment and merge consecutive words into continuous rectangles
                 segments: list[tuple[float, float]] = []
                 seg_x0 = sel_in_line[0][1][0]
                 seg_x1 = sel_in_line[0][1][2]
@@ -442,6 +445,8 @@ class CanvasInteractionHandler:
     def mouse_press(self, e):
         c = self.canvas
         pos = e.position().toPoint()
+        page_idx = c.page_at_y(pos.y())
+        c._active_page_idx = page_idx
 
         # ── 1. Placing Signature from cursor ──────────────────────────
         if c._placing_signature:
@@ -450,7 +455,6 @@ class CanvasInteractionHandler:
                 e.accept()
                 return
             if e.button() == Qt.MouseButton.LeftButton:
-                page_idx = c.page_at_y(pos.y())
                 if 0 <= page_idx < len(c._entries):
                     entry = c._entries[page_idx]
                     x_off = c.page_x_offset(entry)
@@ -506,7 +510,7 @@ class CanvasInteractionHandler:
         # ── 3. Crop mode ──────────────────────────────────────────────
         if c._crop_mode and e.button() == Qt.MouseButton.LeftButton:
             c.setFocus()
-            c._crop_active_page = c.page_at_y(pos.y())
+            c._crop_active_page = page_idx
             c._crop_drag_start = pos
             c._crop_drag_cur = pos
             c.update()
@@ -616,6 +620,7 @@ class CanvasInteractionHandler:
         if e.button() == Qt.MouseButton.LeftButton:
             pos = e.position().toPoint()
             page_idx = c.page_at_y(pos.y())
+            c._active_page_idx = page_idx
             if 0 <= page_idx < len(c._entries):
                 entry = c._entries[page_idx]
                 words = self.ensure_entry_words(entry)
@@ -744,6 +749,31 @@ class CanvasInteractionHandler:
                 c.crop_redo_requested.emit()
                 return True
 
+        # Left / Right Arrow navigation to cycle through pages when clicking on canvas
+        if not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            if key == Qt.Key.Key_Left:
+                cur_p = getattr(c, "_active_page_idx", None)
+                if cur_p is None:
+                    sa = c._get_scroll_area()
+                    sb_val = sa.verticalScrollBar().value() if sa else 0
+                    cur_p = c.page_at_y(sb_val)
+                if cur_p > 0:
+                    target = cur_p - 1
+                    c._active_page_idx = target
+                    c.page_action_requested.emit("go_to_page", target)
+                return True
+            if key == Qt.Key.Key_Right:
+                cur_p = getattr(c, "_active_page_idx", None)
+                if cur_p is None:
+                    sa = c._get_scroll_area()
+                    sb_val = sa.verticalScrollBar().value() if sa else 0
+                    cur_p = c.page_at_y(sb_val)
+                if cur_p < len(c._entries) - 1:
+                    target = cur_p + 1
+                    c._active_page_idx = target
+                    c.page_action_requested.emit("go_to_page", target)
+                return True
+
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             sa = c._get_scroll_area()
             sb_val = sa.verticalScrollBar().value() if sa else 0
@@ -798,6 +828,9 @@ class CanvasInteractionHandler:
         sig = c._active_sig
         if sig is not None and self.is_pos_inside_active_sig(pos):
             menu = QMenu(c)
+            self._menu_style = _ScrollableMenuStyle(menu.style())
+            menu.setStyle(self._menu_style)
+            menu.setStyleSheet("QMenu { menu-scrollable: 1; }")
             act_apply = menu.addAction(qta.icon("fa5s.check", color=ACCENT), t("btn.apply"))
             act_apply.triggered.connect(c.commit_active_signature)
             act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
@@ -808,6 +841,9 @@ class CanvasInteractionHandler:
         hit = self.note_icon_at(pos)
         if hit is not None:
             menu = QMenu(c)
+            self._menu_style = _ScrollableMenuStyle(menu.style())
+            menu.setStyle(self._menu_style)
+            menu.setStyleSheet("QMenu { menu-scrollable: 1; }")
             delete_action = menu.addAction(t("viewer.delete_comment"))
             action = menu.exec(e.globalPos())
             if action == delete_action:
@@ -905,6 +941,9 @@ class CanvasInteractionHandler:
             return
 
         menu = QMenu(c)
+        self._menu_style = _ScrollableMenuStyle(menu.style())
+        menu.setStyle(self._menu_style)
+        menu.setStyleSheet("QMenu { menu-scrollable: 1; }")
 
         if c._sel_text:
             act_copy = menu.addAction(

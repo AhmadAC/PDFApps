@@ -334,6 +334,32 @@ class ThumbnailListView(QListView):
         key = event.key()
         modifiers = event.modifiers()
 
+        # Left / Right Arrow navigation to cycle through pages when clicking on thumbnails
+        if not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+            if key == Qt.Key.Key_Left:
+                selected_pages = self._panel.selected_pages()
+                cur = selected_pages[0] if selected_pages else self._panel._anchor
+                if cur > 0:
+                    target = cur - 1
+                    self._panel.set_selected_pages([target])
+                    self._panel.page_requested.emit(target)
+                    self._panel.action_requested.emit("go_to_page", target)
+                event.accept()
+                return
+
+            if key == Qt.Key.Key_Right:
+                selected_pages = self._panel.selected_pages()
+                cur = selected_pages[-1] if selected_pages else self._panel._anchor
+                m = self.model()
+                count = m.rowCount() if m is not None else 0
+                if cur < count - 1:
+                    target = cur + 1
+                    self._panel.set_selected_pages([target])
+                    self._panel.page_requested.emit(target)
+                    self._panel.action_requested.emit("go_to_page", target)
+                event.accept()
+                return
+
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selected_pages = self._panel.selected_pages()
             if selected_pages:

@@ -17,10 +17,12 @@ QMainWindow {{ background: {BG_BASE}; }}
 QWidget     {{ background: transparent; color: {TEXT_PRI};
               font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif; font-size: 11pt; }}
 QDialog     {{ background: {BG_CARD}; color: {TEXT_PRI}; }}
-QMenu       {{ background: #262626; color: {TEXT_PRI}; border: 1px solid {BORDER}; border-radius: 6px; padding: 4px; }}
+QMenu       {{ background: #262626; color: {TEXT_PRI}; border: 1px solid {BORDER}; border-radius: 6px; padding: 4px; menu-scrollable: 1; }}
 QMenu::item {{ padding: 6px 22px 6px 12px; border-radius: 4px; margin: 2px 4px; background: transparent; }}
 QMenu::item:selected {{ background: {ACCENT}; color: #FFFFFF; }}
 QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 6px; }}
+QMenu::scroller {{ height: 18px; }}
+QMenu::scroller:hover {{ background: #333333; }}
 QMessageBox {{ background: {BG_CARD}; color: {TEXT_PRI}; }}
 QToolTip    {{ background: #262626; color: {TEXT_PRI}; border: 1px solid {BORDER}; border-radius: 4px; padding: 4px 6px; }}
 QScrollArea {{ background: transparent; border: none; }}
@@ -311,10 +313,12 @@ QMainWindow {{ background: #CBD5E1; }}
 QWidget     {{ background: transparent; color: {_LP};
               font-family: "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif; font-size: 11pt; }}
 QDialog     {{ background: {_LC}; color: {_LP}; }}
-QMenu       {{ background: {_LC}; color: {_LP}; border: 1px solid {_LO}; border-radius: 6px; padding: 4px; }}
+QMenu       {{ background: {_LC}; color: {_LP}; border: 1px solid {_LO}; border-radius: 6px; padding: 4px; menu-scrollable: 1; }}
 QMenu::item {{ padding: 6px 22px 6px 12px; border-radius: 4px; margin: 2px 4px; background: transparent; }}
 QMenu::item:selected {{ background: {_LA}; color: #FFFFFF; }}
 QMenu::separator {{ height: 1px; background: {_LO}; margin: 4px 6px; }}
+QMenu::scroller {{ height: 18px; }}
+QMenu::scroller:hover {{ background: #E0E7FF; }}
 QMessageBox {{ background: {_LC}; color: {_LP}; }}
 QToolTip    {{ background: {_LC}; color: {_LP}; border: 1px solid {_LO}; border-radius: 4px; padding: 4px 6px; }}
 QScrollArea {{ background: transparent; border: none; }}
@@ -519,43 +523,41 @@ QStatusBar {{ background: {_LS}; border-top: 1px solid {_LO};
 #viewer_header {{ background: {_LC}; border-bottom: 1px solid {_LO}; }}
 #viewer_title  {{ font-size: 10.5pt; font-weight: 600; color: {_LP}; background: transparent; }}
 #viewer_page_lbl {{ font-size: 10pt; color: {_LQ}; background: transparent; min-width: 54px; }}
-
-#viewer_nav_btn  {{ background: #FFFFFF; border: 1px solid #CBD5E1;
-                   border-radius: 6px; color: {_LP};
+#viewer_nav_btn  {{ background: #333333; border: 1px solid #555555;
+                   border-radius: 6px; color: {TEXT_PRI};
                    min-width: 30px; min-height: 30px; padding: 0; }}
-#viewer_nav_btn:hover   {{ background: #E2E8F0; border-color: {_LA}; color: {_LP}; }}
-#viewer_nav_btn:pressed {{ background: #CBD5E1; }}
-#viewer_nav_btn:disabled {{ background: {_LN}; border-color: {_LO}; color: {_LO}; }}
-#page_input {{ background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
-               color: {_LP}; font-size: 10pt; padding: 2px; }}
-
-#viewer_placeholder {{ font-size: 12pt; color: {_LQ}; background: {_LN}; }}
-#viewer_sel_status  {{ font-size: 9pt; color: {_LQ}; background: {_LC};
-                       border-top: 1px solid {_LO}; padding: 4px 8px; }}
-QPdfView {{ background: {_LN}; border: none; }}
-QSplitter::handle {{ background: {_LO}; width: 1px; }}
+#viewer_nav_btn:hover   {{ background: #4F5254; border-color: {ACCENT}; color: #FFFFFF; }}
+#viewer_nav_btn:pressed {{ background: {ACCENT}; color: #FFFFFF; }}
+#viewer_nav_btn:disabled {{ background: #242424; border-color: #333333; color: #555555; }}
+#page_input {{ background: #1E1E1E; border: 1px solid {BORDER}; border-radius: 4px;
+               color: {TEXT_PRI}; font-size: 10pt; padding: 2px; }}
+#viewer_placeholder {{ font-size: 12pt; color: {TEXT_SEC}; background: {BG_INNER}; }}
+#viewer_sel_status  {{ font-size: 9pt; color: {TEXT_SEC}; background: {BG_CARD};
+                       border-top: 1px solid {BORDER}; padding: 4px 8px; }}
+QPdfView {{ background: {BG_INNER}; border: none; }}
+QSplitter::handle {{ background: {BORDER}; width: 1px; }}
 
 #theme_btn {{
-    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 14px; font-size: 12pt;
-    padding: 0; min-width: 28px; max-width: 28px; color: {_LP};
+    background: #333333; border: 1px solid #555555; border-radius: 14px;
+    font-size: 12pt; padding: 0; min-width: 28px; max-width: 28px; color: {TEXT_PRI};
 }}
-#theme_btn:hover {{ background: #E2E8F0; border-color: {_LA}; }}
+#theme_btn:hover {{ background: #4F5254; border-color: {ACCENT}; }}
 
 #viewer_tabs {{
-    background: {_LC}; border: none; border-bottom: 1px solid {_LO};
+    background: {BG_CARD}; border: none; border-bottom: 1px solid {BORDER};
 }}
 #viewer_tabs::tab {{
-    background: {_LC}; color: {_LQ}; border: none;
+    background: {BG_CARD}; color: {TEXT_SEC}; border: none;
     padding: 6px 14px; margin-right: 1px; border-bottom: 2px solid transparent;
 }}
 #viewer_tabs::tab:selected {{
-    color: {_LP}; background: #FFFFFF; border-bottom: 2px solid {_LA};
+    color: #FFFFFF; background: #1E1E1E; border-bottom: 2px solid {ACCENT};
 }}
-#viewer_tabs::tab:hover:!selected {{ color: #LP; background: #E0E7FF; }}
+#viewer_tabs::tab:hover:!selected {{ color: #FFFFFF; background: #333333; }}
 
 #new_tab_btn {{
-    background: {_LC}; border: none; border-bottom: 1px solid {_LO};
-    color: {_LQ}; font-size: 14pt; font-weight: bold; padding: 0;
+    background: {BG_CARD}; border: none; border-bottom: 1px solid {BORDER};
+    color: {TEXT_SEC}; font-size: 14pt; font-weight: bold; padding: 0;
 }}
-#new_tab_btn:hover {{ color: {_LP}; background: #E0E7FF; }}
+#new_tab_btn:hover {{ color: #FFFFFF; background: #333333; }}
 """
