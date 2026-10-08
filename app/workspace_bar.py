@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 import qtawesome as qta
 
-from app.constants import TEXT_PRI, ACCENT, _LQ, TEXT_SEC
+from app.constants import TEXT_PRI, ACCENT, _LP
 from app.i18n import t
 from app.utils import _paint_bg
 
@@ -29,16 +29,15 @@ class WorkspaceBar(QWidget):
         # ── Left Side: App Sidebar Toggle & Pages Sidebar Toggle ──────
         self._sidebar_toggle_btn = QPushButton()
         self._ico_bars = qta.icon("fa5s.bars", color=TEXT_PRI)
-        self._ico_times = qta.icon("fa5s.times", color=TEXT_PRI)
         self._sidebar_toggle_btn.setIcon(self._ico_bars)
         self._sidebar_toggle_btn.setObjectName("viewer_nav_btn")
         self._sidebar_toggle_btn.setFixedSize(28, 28)
         _a11y(self._sidebar_toggle_btn, t("sidebar.collapse_expand"))
         layout.addWidget(self._sidebar_toggle_btn)
 
-        # Pages / Thumbnails sidebar toggle button with two-page icon
+        # Pages / Thumbnails sidebar toggle button with thumbnail grid icon
         self._pages_toggle_btn = QPushButton()
-        self._ico_pages = qta.icon("fa5s.copy", color=TEXT_PRI)
+        self._ico_pages = qta.icon("fa5s.th-large", color=TEXT_PRI)
         self._pages_toggle_btn.setIcon(self._ico_pages)
         self._pages_toggle_btn.setObjectName("viewer_nav_btn")
         self._pages_toggle_btn.setFixedSize(28, 28)
@@ -208,7 +207,8 @@ class WorkspaceBar(QWidget):
         self._lang_btn.setFixedSize(28, 28)
         layout.addWidget(self._lang_btn)
 
-        self._theme_btn = QPushButton("☀")
+        self._theme_btn = QPushButton()
+        self._theme_btn.setIcon(qta.icon("fa5s.sun", color="#FBBF24"))
         self._theme_btn.setObjectName("theme_btn")
         _a11y(self._theme_btn, t("theme.toggle"))
         self._theme_btn.setFixedSize(28, 28)
@@ -226,9 +226,9 @@ class WorkspaceBar(QWidget):
         )
         layout.addWidget(self._update_btn)
 
-        # ── Far Right: Tool Pane Burger Toggle ────────────────────────
+        # ── Far Right: Tool Pane Toggle ──────────────────────────────
         self._right_pane_toggle_btn = QPushButton()
-        self._right_pane_toggle_btn.setIcon(self._ico_bars)
+        self._right_pane_toggle_btn.setIcon(qta.icon("fa5s.columns", color=TEXT_PRI))
         self._right_pane_toggle_btn.setObjectName("viewer_nav_btn")
         self._right_pane_toggle_btn.setFixedSize(28, 28)
         _a11y(self._right_pane_toggle_btn, t("sidebar.collapse_expand"))
@@ -239,16 +239,18 @@ class WorkspaceBar(QWidget):
         _paint_bg(self)
 
     def update_theme(self, dark: bool, sidebar_collapsed: bool = False):
-        bar_color = TEXT_PRI if dark else _LQ
+        bar_color = TEXT_PRI if dark else _LP
         self._ico_bars = qta.icon("fa5s.bars", color=bar_color)
-        self._ico_times = qta.icon("fa5s.times", color=bar_color)
-        self._ico_pages = qta.icon("fa5s.copy", color=bar_color)
-        self._sidebar_toggle_btn.setIcon(self._ico_bars if sidebar_collapsed else self._ico_times)
+        self._ico_pages = qta.icon("fa5s.th-large", color=bar_color)
+
+        self._sidebar_toggle_btn.setIcon(self._ico_bars)
         self._pages_toggle_btn.setIcon(self._ico_pages)
-        self._right_pane_toggle_btn.setIcon(self._ico_bars)
+        self._right_pane_toggle_btn.setIcon(qta.icon("fa5s.columns", color=bar_color))
         self._open_pdf_btn.setIcon(qta.icon("fa5s.folder-open", color=bar_color))
         self._toc_top_btn.setIcon(qta.icon("fa5s.bookmark", color=bar_color))
-        self._night_top_btn.setIcon(qta.icon("fa5s.moon", color=bar_color))
+
+        is_night = self._night_top_btn.isChecked()
+        self._night_top_btn.setIcon(qta.icon("fa5s.sun" if is_night else "fa5s.moon", color=ACCENT if is_night else bar_color))
         self._print_top_btn.setIcon(qta.icon("fa5s.print", color=bar_color))
         self._present_btn.setIcon(qta.icon("fa5s.tv", color=bar_color))
         self._search_top_btn.setIcon(qta.icon("fa5s.search", color=bar_color))
@@ -260,4 +262,5 @@ class WorkspaceBar(QWidget):
         self._prev_pg_btn.setIcon(qta.icon("fa5s.chevron-left", color=bar_color))
         self._next_pg_btn.setIcon(qta.icon("fa5s.chevron-right", color=bar_color))
         self._last_pg_btn.setIcon(qta.icon("fa5s.angle-double-right", color=bar_color))
-        self._theme_btn.setText("☀" if dark else "🌙")
+
+        self._theme_btn.setIcon(qta.icon("fa5s.sun" if dark else "fa5s.moon", color="#FBBF24" if dark else ACCENT))

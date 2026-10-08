@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 from shiboken6 import isValid
 
-from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
+from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, _LP, DESKTOP
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
 from app.utils import _make_palette, show_error
@@ -751,6 +751,8 @@ class WindowActionsMixin(_Base):
             canvas = getattr(viewer, "_canvas", None)
             if canvas:
                 canvas.set_night_mode(active)
+            bar_color = TEXT_PRI if self._dark_mode else _LP
+            self._night_top_btn.setIcon(qta.icon("fa5s.sun" if active else "fa5s.moon", color=ACCENT if active else bar_color))
 
     def _refresh_viewer_top_buttons(self):
         try:
@@ -758,7 +760,10 @@ class WindowActionsMixin(_Base):
             if v:
                 self._toc_top_btn.setVisible(v._toc_tree.topLevelItemCount() > 0)
                 canvas = getattr(v, "_canvas", None)
-                self._night_top_btn.setChecked(bool(getattr(canvas, "_night_mode", False)))
+                is_night = bool(getattr(canvas, "_night_mode", False))
+                self._night_top_btn.setChecked(is_night)
+                bar_color = TEXT_PRI if self._dark_mode else _LP
+                self._night_top_btn.setIcon(qta.icon("fa5s.sun" if is_night else "fa5s.moon", color=ACCENT if is_night else bar_color))
             else:
                 self._toc_top_btn.setVisible(False)
                 self._night_top_btn.setChecked(False)
@@ -843,7 +848,7 @@ class WindowActionsMixin(_Base):
                     idx = it.data(Qt.ItemDataRole.UserRole)
                     if idx is not None and idx < 0:
                         it.setHidden(False)
-            self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_times)
+            self._sidebar_toggle_btn.setIcon(self._workspace_bar._ico_bars)
             self.nav.updateGeometries()
             self.nav.viewport().update()
         QTimer.singleShot(50, self._relayout_viewer)

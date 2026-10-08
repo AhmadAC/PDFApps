@@ -288,7 +288,7 @@ class WindowTabsMixin(_Base):
             menu.addSeparator()
             act_delete_disk = menu.addAction(
                 qta.icon("fa5s.trash-alt", color="#EF4444"),
-                "Delete From DisK",
+                "Delete From Disk",
             )
 
         chosen = menu.exec(self._tab_bar.mapToGlobal(point))
@@ -306,7 +306,7 @@ class WindowTabsMixin(_Base):
             filename = os.path.basename(path)
             reply = QMessageBox.question(
                 self,
-                "Delete From DisK",
+                "Delete From Disk",
                 f"Are you sure you want to permanently delete '{filename}' from disk?\n\n{path}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
