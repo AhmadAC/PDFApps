@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -52,6 +54,27 @@ else:
     _Base = object
 
 _log = logging.getLogger(__name__)
+
+
+class NoWheelComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel events to prevent accidental changes when scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    """QSpinBox that ignores mouse wheel events to prevent accidental changes when scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox that ignores mouse wheel events to prevent accidental changes when scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 def _is_linux() -> bool:
@@ -392,6 +415,34 @@ class _PdfPrintDialog(QDialog):
                 background: transparent;
                 border: none;
             }
+            QDialog#print_dialog QTabWidget::pane {
+                background-color: #26282D;
+                border: 1px solid #3E4249;
+                border-radius: 6px;
+                top: -1px;
+            }
+            QDialog#print_dialog QTabBar::tab {
+                background-color: #1E1F22;
+                color: #A0A0A0;
+                border: 1px solid #3E4249;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 7px 18px;
+                margin-right: 4px;
+                font-weight: 600;
+                font-size: 9.5pt;
+            }
+            QDialog#print_dialog QTabBar::tab:selected {
+                background-color: #26282D;
+                color: #FFFFFF;
+                border-color: #3E4249;
+                border-bottom: 2px solid #0078D4;
+            }
+            QDialog#print_dialog QTabBar::tab:hover:!selected {
+                background-color: #2B2D33;
+                color: #E0E0E0;
+            }
             QDialog#print_dialog QGroupBox {
                 background-color: #26282D;
                 border: 1px solid #3E4249;
@@ -453,7 +504,31 @@ class _PdfPrintDialog(QDialog):
             QDialog#print_dialog QPushButton#btn_primary:hover {
                 background-color: #106EBE;
             }
-            QDialog#print_dialog QRadioButton,
+            QDialog#print_dialog QRadioButton {
+                color: #F0F0F0;
+                spacing: 10px;
+                background: transparent;
+                font-size: 10pt;
+            }
+            QDialog#print_dialog QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 9px;
+                border: 1.5px solid #64748B;
+                background-color: #1E1F22;
+            }
+            QDialog#print_dialog QRadioButton::indicator:hover {
+                border-color: #0078D4;
+            }
+            QDialog#print_dialog QRadioButton::indicator:checked {
+                border: 2px solid #0078D4;
+                background-color: #1E1F22;
+                image: none;
+            }
+            QDialog#print_dialog QRadioButton::indicator:checked {
+                background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                    stop:0 #0078D4, stop:0.55 #0078D4, stop:0.6 transparent);
+            }
             QDialog#print_dialog QCheckBox {
                 color: #F0F0F0;
                 spacing: 8px;
@@ -561,24 +636,35 @@ class _PdfPrintDialog(QDialog):
         v_left.addLayout(nav_h)
         main_lay.addWidget(left_box, 6)
 
-        # ── RIGHT PANEL: Settings, Accounting & Print Actions ─────────
+        # ── RIGHT PANEL: Tabs, Settings, Accounting & Print Actions ────
         right_container = QWidget()
         right_container.setMinimumWidth(440)
         right_container_layout = QVBoxLayout(right_container)
         right_container_layout.setContentsMargins(0, 0, 0, 0)
         right_container_layout.setSpacing(8)
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setObjectName("print_tabs")
 
-        right_box = QWidget()
-        right_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
-        v_right = QVBoxLayout(right_box)
-        v_right.setContentsMargins(0, 0, 10, 0)
-        v_right.setSpacing(12)
+        # ══════════════════════════════════════════════════════════════
+        # TAB 1: Print Settings (Standard Print Setup)
+        # ══════════════════════════════════════════════════════════════
+        tab_settings = QWidget()
+        tab_settings_layout = QVBoxLayout(tab_settings)
+        tab_settings_layout.setContentsMargins(0, 0, 0, 0)
+        tab_settings_layout.setSpacing(0)
+
+        scroll_settings = QScrollArea()
+        scroll_settings.setWidgetResizable(True)
+        scroll_settings.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_settings.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_settings.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        box_settings = QWidget()
+        box_settings.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        v_settings = QVBoxLayout(box_settings)
+        v_settings.setContentsMargins(8, 8, 12, 8)
+        v_settings.setSpacing(12)
 
         # 1. Destination Group
         grp_dest = QGroupBox("Printer Destination")
@@ -588,82 +674,22 @@ class _PdfPrintDialog(QDialog):
         f_dest.setHorizontalSpacing(12)
         f_dest.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
-        self.cmb_printer = QComboBox()
+        self.cmb_printer = NoWheelComboBox()
         self.cmb_printer.setMinimumHeight(30)
         self.cmb_printer.currentIndexChanged.connect(self._on_printer_changed)
         f_dest.addRow("Printer:", self.cmb_printer)
 
-        ip_row = QHBoxLayout()
-        ip_row.setContentsMargins(0, 0, 0, 0)
-        ip_row.setSpacing(8)
-        self.edit_ip = QLineEdit(self.saved_ip)
-        self.edit_ip.setMinimumHeight(30)
-        self.edit_ip.setPlaceholderText("e.g. 172.31.2.14")
-        ip_row.addWidget(self.edit_ip, 1)
-
-        self.btn_test_ip = QPushButton("Test Port 9100")
-        self.btn_test_ip.setMinimumHeight(30)
-        self.btn_test_ip.setToolTip("Verify high-speed port connectivity")
-        self.btn_test_ip.clicked.connect(self._test_printer_ip)
-        ip_row.addWidget(self.btn_test_ip)
-
-        self.row_ip_widget = QWidget()
-        self.row_ip_widget.setLayout(ip_row)
-        f_dest.addRow("Network IP:", self.row_ip_widget)
-
-        v_right.addWidget(grp_dest)
-
-        # 2. Accounting Credentials (Fuji Xerox ApeosPort / XSA)
-        grp_acct = QGroupBox("Printer Accounting (Fuji Xerox ApeosPort / Auditron)")
-        f_acct = QFormLayout(grp_acct)
-        f_acct.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        f_acct.setVerticalSpacing(10)
-        f_acct.setHorizontalSpacing(12)
-        f_acct.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
-
-        self.edit_acct_user = QLineEdit(self.acct_user)
-        self.edit_acct_user.setMinimumHeight(30)
-        f_acct.addRow("User ID:", self.edit_acct_user)
-
-        pin_row = QHBoxLayout()
-        pin_row.setContentsMargins(0, 0, 0, 0)
-        pin_row.setSpacing(8)
-        self.edit_acct_pin = QLineEdit(self.acct_pin)
-        self.edit_acct_pin.setMinimumHeight(30)
-        self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Password)
-        pin_row.addWidget(self.edit_acct_pin, 1)
-
-        self.btn_toggle_pin = QPushButton("Show")
-        self.btn_toggle_pin.setFixedWidth(64)
-        self.btn_toggle_pin.setMinimumHeight(30)
-        self.btn_toggle_pin.setCheckable(True)
-        self.btn_toggle_pin.toggled.connect(
-            lambda checked: (
-                self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password),
-                self.btn_toggle_pin.setText("Hide" if checked else "Show")
-            )
+        # Quick note and navigation link when Direct Network Printer is selected
+        self.lbl_direct_socket_hint = QLabel(
+            " "
         )
-        pin_row.addWidget(self.btn_toggle_pin)
+        self.lbl_direct_socket_hint.setWordWrap(True)
+        self.lbl_direct_socket_hint.setStyleSheet(f"color: {ACCENT}; font-size: 9pt;")
+        f_dest.addRow("", self.lbl_direct_socket_hint)
 
-        pin_widget = QWidget()
-        pin_widget.setLayout(pin_row)
-        f_acct.addRow("Passcode / PIN:", pin_widget)
+        v_settings.addWidget(grp_dest)
 
-        self.edit_acct_id = QLineEdit(self.acct_id)
-        self.edit_acct_id.setMinimumHeight(30)
-        self.edit_acct_id.setPlaceholderText("Optional Account ID")
-        f_acct.addRow("Account ID:", self.edit_acct_id)
-
-        script_path = _find_printer_accounting_script()
-        if script_path:
-            btn_launch_acct = QPushButton("Open Fuji Xerox Manager (Standalone)...")
-            btn_launch_acct.setMinimumHeight(30)
-            btn_launch_acct.clicked.connect(self._launch_standalone_accounting)
-            f_acct.addRow("", btn_launch_acct)
-
-        v_right.addWidget(grp_acct)
-
-        # 3. Page Range Group
+        # 2. Page Range Group
         grp_range = QGroupBox("Page Range")
         v_range = QVBoxLayout(grp_range)
         v_range.setSpacing(10)
@@ -716,9 +742,9 @@ class _PdfPrintDialog(QDialog):
         self.bg_range.idClicked.connect(lambda _: self._update_preview())
         self.edit_range.textChanged.connect(lambda _: self._update_preview() if self.rad_custom.isChecked() else None)
 
-        v_right.addWidget(grp_range)
+        v_settings.addWidget(grp_range)
 
-        # 4. Layout & Finishing
+        # 3. Layout & Finishing
         grp_opts = QGroupBox("Layout && Finishing")
         f_opts = QFormLayout(grp_opts)
         f_opts.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -729,7 +755,7 @@ class _PdfPrintDialog(QDialog):
         copies_h = QHBoxLayout()
         copies_h.setContentsMargins(0, 0, 0, 0)
         copies_h.setSpacing(10)
-        self.spin_copies = QSpinBox()
+        self.spin_copies = NoWheelSpinBox()
         self.spin_copies.setMinimumHeight(30)
         self.spin_copies.setRange(1, 999)
         self.spin_copies.setValue(1)
@@ -745,7 +771,7 @@ class _PdfPrintDialog(QDialog):
         copies_w.setLayout(copies_h)
         f_opts.addRow("Copies:", copies_w)
 
-        self.cmb_duplex = QComboBox()
+        self.cmb_duplex = NoWheelComboBox()
         self.cmb_duplex.setMinimumHeight(30)
         self.cmb_duplex.addItems(["1-Sided (Simplex)", "2-Sided (Flip on Long Edge)", "2-Sided (Flip on Short Edge)"])
         idx_dup = self.cmb_duplex.findText(self.saved_duplex)
@@ -753,7 +779,7 @@ class _PdfPrintDialog(QDialog):
             self.cmb_duplex.setCurrentIndex(idx_dup)
         f_opts.addRow("Duplex:", self.cmb_duplex)
 
-        self.cmb_paper = QComboBox()
+        self.cmb_paper = NoWheelComboBox()
         self.cmb_paper.setMinimumHeight(30)
         self.cmb_paper.addItems(["A4", "A3", "Letter", "Legal", "A5"])
         idx_paper = self.cmb_paper.findText(self.saved_paper)
@@ -761,7 +787,7 @@ class _PdfPrintDialog(QDialog):
             self.cmb_paper.setCurrentIndex(idx_paper)
         f_opts.addRow("Paper Size:", self.cmb_paper)
 
-        self.cmb_color = QComboBox()
+        self.cmb_color = NoWheelComboBox()
         self.cmb_color.setMinimumHeight(30)
         self.cmb_color.addItems(["Color", "Black & White (Grayscale)"])
         idx_col = self.cmb_color.findText(self.saved_color)
@@ -770,19 +796,138 @@ class _PdfPrintDialog(QDialog):
         self.cmb_color.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Color Mode:", self.cmb_color)
 
-        self.cmb_orient = QComboBox()
+        self.cmb_orient = NoWheelComboBox()
         self.cmb_orient.setMinimumHeight(30)
         self.cmb_orient.addItems(["Auto (Match PDF)", "Portrait", "Landscape"])
         self.cmb_orient.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Orientation:", self.cmb_orient)
 
-        v_right.addWidget(grp_opts)
-        v_right.addStretch()
+        v_settings.addWidget(grp_opts)
+        v_settings.addStretch()
 
-        right_scroll.setWidget(right_box)
-        right_container_layout.addWidget(right_scroll, 1)
+        scroll_settings.setWidget(box_settings)
+        tab_settings_layout.addWidget(scroll_settings)
+        self.tab_widget.addTab(tab_settings, "Print Settings")
 
-        # 5. Fixed Bottom Action Row
+        # ══════════════════════════════════════════════════════════════
+        # TAB 2: Printer Accounting (Dedicated Tab with IP & Credentials)
+        # ══════════════════════════════════════════════════════════════
+        tab_accounting = QWidget()
+        tab_accounting_layout = QVBoxLayout(tab_accounting)
+        tab_accounting_layout.setContentsMargins(0, 0, 0, 0)
+        tab_accounting_layout.setSpacing(0)
+
+        scroll_accounting = QScrollArea()
+        scroll_accounting.setWidgetResizable(True)
+        scroll_accounting.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_accounting.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_accounting.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        box_accounting = QWidget()
+        box_accounting.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        v_accounting = QVBoxLayout(box_accounting)
+        v_accounting.setContentsMargins(8, 8, 12, 8)
+        v_accounting.setSpacing(12)
+
+        # 1. Network & Port 9100 Setup Group (Moved here from main tab)
+        grp_net = QGroupBox("Printer Network Address")
+        f_net = QFormLayout(grp_net)
+        f_net.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        f_net.setVerticalSpacing(10)
+        f_net.setHorizontalSpacing(12)
+        f_net.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+
+        ip_row = QHBoxLayout()
+        ip_row.setContentsMargins(0, 0, 0, 0)
+        ip_row.setSpacing(8)
+        self.edit_ip = QLineEdit(self.saved_ip)
+        self.edit_ip.setMinimumHeight(30)
+        self.edit_ip.setPlaceholderText("e.g. 172.31.2.14")
+        ip_row.addWidget(self.edit_ip, 1)
+
+        self.btn_test_ip = QPushButton("Test Port 9100")
+        self.btn_test_ip.setMinimumHeight(30)
+        self.btn_test_ip.setToolTip("Verify high-speed port connectivity")
+        self.btn_test_ip.clicked.connect(self._test_printer_ip)
+        ip_row.addWidget(self.btn_test_ip)
+
+        net_ip_widget = QWidget()
+        net_ip_widget.setLayout(ip_row)
+        f_net.addRow("Network IP:", net_ip_widget)
+
+        lbl_ip_hint = QLabel("Used for direct, instant socket transmission on port 9100.")
+        lbl_ip_hint.setStyleSheet(f"color: {TEXT_SEC}; font-size: 8.5pt;")
+        f_net.addRow("", lbl_ip_hint)
+
+        v_accounting.addWidget(grp_net)
+
+        # 2. Accounting Credentials Group
+        grp_acct = QGroupBox("Printer Accounting (Fuji Xerox ApeosPort / Auditron)")
+        f_acct = QFormLayout(grp_acct)
+        f_acct.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        f_acct.setVerticalSpacing(10)
+        f_acct.setHorizontalSpacing(12)
+        f_acct.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+
+        lbl_acct_hint = QLabel(
+            "Configure user credentials for print job tracking. Credentials are automatically injected "
+            "into the Port 9100 stream and CUPS jobs via JCL/PJL attributes (@JOAU, @JOAP, @DAID)."
+        )
+        lbl_acct_hint.setWordWrap(True)
+        lbl_acct_hint.setStyleSheet(f"color: {TEXT_SEC}; font-size: 9pt; padding-bottom: 6px;")
+        f_acct.addRow(lbl_acct_hint)
+
+        self.edit_acct_user = QLineEdit(self.acct_user)
+        self.edit_acct_user.setMinimumHeight(30)
+        self.edit_acct_user.setPlaceholderText("User ID or account name")
+        f_acct.addRow("User ID:", self.edit_acct_user)
+
+        pin_row = QHBoxLayout()
+        pin_row.setContentsMargins(0, 0, 0, 0)
+        pin_row.setSpacing(8)
+        self.edit_acct_pin = QLineEdit(self.acct_pin)
+        self.edit_acct_pin.setMinimumHeight(30)
+        self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Password)
+        pin_row.addWidget(self.edit_acct_pin, 1)
+
+        self.btn_toggle_pin = QPushButton("Show")
+        self.btn_toggle_pin.setFixedWidth(64)
+        self.btn_toggle_pin.setMinimumHeight(30)
+        self.btn_toggle_pin.setCheckable(True)
+        self.btn_toggle_pin.toggled.connect(
+            lambda checked: (
+                self.edit_acct_pin.setEchoMode(QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password),
+                self.btn_toggle_pin.setText("Hide" if checked else "Show")
+            )
+        )
+        pin_row.addWidget(self.btn_toggle_pin)
+
+        pin_widget = QWidget()
+        pin_widget.setLayout(pin_row)
+        f_acct.addRow("Passcode / PIN:", pin_widget)
+
+        self.edit_acct_id = QLineEdit(self.acct_id)
+        self.edit_acct_id.setMinimumHeight(30)
+        self.edit_acct_id.setPlaceholderText("Optional Account ID")
+        f_acct.addRow("Account ID:", self.edit_acct_id)
+
+        script_path = _find_printer_accounting_script()
+        if script_path:
+            btn_launch_acct = QPushButton("Open Fuji Xerox Manager (Standalone)...")
+            btn_launch_acct.setMinimumHeight(32)
+            btn_launch_acct.clicked.connect(self._launch_standalone_accounting)
+            f_acct.addRow("", btn_launch_acct)
+
+        v_accounting.addWidget(grp_acct)
+        v_accounting.addStretch()
+
+        scroll_accounting.setWidget(box_accounting)
+        tab_accounting_layout.addWidget(scroll_accounting)
+        self.tab_widget.addTab(tab_accounting, "Printer Accounting")
+
+        right_container_layout.addWidget(self.tab_widget, 1)
+
+        # ── Fixed Bottom Action Row ────────────────────────────────────
         bottom_box = QWidget()
         bottom_layout = QVBoxLayout(bottom_box)
         bottom_layout.setContentsMargins(0, 2, 8, 2)
@@ -846,7 +991,7 @@ class _PdfPrintDialog(QDialog):
     def _on_printer_changed(self, idx: int):
         data = self.cmb_printer.itemData(idx)
         is_direct_socket = (data == "socket")
-        self.row_ip_widget.setVisible(is_direct_socket)
+        self.lbl_direct_socket_hint.setVisible(is_direct_socket)
         if is_direct_socket:
             self.btn_print.setText("Print")
         else:
@@ -1001,7 +1146,6 @@ class _PdfPrintDialog(QDialog):
         target_file = self.doc_path
         self.temp_slice_path = None
 
-        # Prepare print document: convert to 100% DeviceGray or slice if custom pages / black & white selected
         need_temp = (is_grayscale or len(pages) != self.total_pages or pages != list(range(self.total_pages)))
         if need_temp:
             try:
@@ -1013,7 +1157,6 @@ class _PdfPrintDialog(QDialog):
                 for p in pages:
                     if 0 <= p < doc.page_count:
                         if is_grayscale:
-                            # Render page at 300 DPI in pure DeviceGray colorspace to guarantee zero color clicks
                             page = doc[p]
                             pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
                             new_page = sliced_doc.new_page(width=page.rect.width, height=page.rect.height)
@@ -1037,7 +1180,7 @@ class _PdfPrintDialog(QDialog):
         if p_data == "socket":
             ip = self.edit_ip.text().strip()
             if not ip:
-                QMessageBox.warning(self, "Missing IP", "Printer IP is required for Port 9100.")
+                QMessageBox.warning(self, "Missing IP", "Printer IP is required for Port 9100. Configure it on the Printer Accounting tab.")
                 return
 
             try:

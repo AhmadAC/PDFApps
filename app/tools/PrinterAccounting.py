@@ -59,6 +59,21 @@ except Exception:
     QPdfView = None      # type: ignore
     HAS_QTPDF = False
 
+
+class NoWheelComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel events to prevent accidental changes when scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    """QSpinBox that ignores mouse wheel events to prevent accidental changes when scrolling."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PREFERENCES_FILE = os.path.join(SCRIPT_DIR, "printer_preferences.json")
 HISTORY_FILE = os.path.join(SCRIPT_DIR, "history.json")
@@ -448,7 +463,7 @@ class FujiAccountingManager(QWidget):
 
         dest_row = QHBoxLayout()
         dest_row.addWidget(QLabel("Target:"))
-        self.dest_mode_combo = QComboBox()
+        self.dest_mode_combo = NoWheelComboBox()
         self.dest_mode_combo.addItems([
             "Direct Raw Socket 9100 (Instant Foxit Speed)",
             "CUPS Queue (Linux System Spooler)"
@@ -470,7 +485,7 @@ class FujiAccountingManager(QWidget):
         ip_row.addWidget(self.test_conn_btn)
         d_layout.addLayout(ip_row)
 
-        self.cups_queue_combo = QComboBox()
+        self.cups_queue_combo = NoWheelComboBox()
         self.cups_queue_combo.setVisible(False)
         d_layout.addWidget(self.cups_queue_combo)
 
@@ -487,7 +502,7 @@ class FujiAccountingManager(QWidget):
         pg_layout = QVBoxLayout()
         pg_layout.setSpacing(5)
 
-        self.page_scope_combo = QComboBox()
+        self.page_scope_combo = NoWheelComboBox()
         self.page_scope_combo.addItems([
             "All Pages",
             "Current Page Only",
@@ -525,7 +540,7 @@ class FujiAccountingManager(QWidget):
         s_layout.setSpacing(5)
 
         s_layout.addWidget(QLabel("2-Sided / Duplex:"))
-        self.duplex_combo = QComboBox()
+        self.duplex_combo = NoWheelComboBox()
         self.duplex_combo.addItems([
             "1-Sided (Simplex)",
             "2-Sided (Flip on Long Edge)",
@@ -535,13 +550,13 @@ class FujiAccountingManager(QWidget):
         s_layout.addWidget(self.duplex_combo)
 
         s_layout.addWidget(QLabel("Paper Size:"))
-        self.paper_combo = QComboBox()
+        self.paper_combo = NoWheelComboBox()
         self.paper_combo.addItems(["A4", "A3", "Letter", "Legal"])
         self.paper_combo.setCurrentText("A4")
         s_layout.addWidget(self.paper_combo)
 
         s_layout.addWidget(QLabel("Color Mode:"))
-        self.color_combo = QComboBox()
+        self.color_combo = NoWheelComboBox()
         self.color_combo.addItems([
             "Color",
             "Black & White (Monochrome)"
@@ -550,7 +565,7 @@ class FujiAccountingManager(QWidget):
         s_layout.addWidget(self.color_combo)
 
         s_layout.addWidget(QLabel("Copies:"))
-        self.copies_spin = QSpinBox()
+        self.copies_spin = NoWheelSpinBox()
         self.copies_spin.setRange(1, 99)
         self.copies_spin.setValue(1)
         s_layout.addWidget(self.copies_spin)
@@ -639,7 +654,7 @@ class FujiAccountingManager(QWidget):
         p_layout = QVBoxLayout()
 
         p_layout.addWidget(QLabel("CUPS Queue:"))
-        self.printer_combo = QComboBox()
+        self.printer_combo = NoWheelComboBox()
         self.printer_combo.currentIndexChanged.connect(self.on_printer_selected)
         p_layout.addWidget(self.printer_combo)
 
@@ -1128,7 +1143,6 @@ class FujiAccountingManager(QWidget):
         needs_cleanup = False
         target_pdf = pdf_path
 
-        # Ensure document is converted to 100% DeviceGray or sliced as needed
         need_temp = (is_grayscale or scope_idx != 0 or len(pages_to_print) != self.total_pages)
         if need_temp:
             try:
@@ -1141,7 +1155,6 @@ class FujiAccountingManager(QWidget):
                         if 0 <= p_idx < doc.page_count:
                             page = doc[p_idx]
                             if is_grayscale:
-                                # Render page at 300 DPI in pure DeviceGray colorspace to guarantee zero color clicks
                                 pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
                                 new_page = sliced_doc.new_page(width=page.rect.width, height=page.rect.height)
                                 new_page.insert_image(page.rect, stream=pix.tobytes("jpeg"))
