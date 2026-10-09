@@ -339,7 +339,7 @@ class FujiAccountingManager(QWidget):
     def __init__(self, initial_pdf=None):
         super().__init__()
         self.os_title = get_os_info()
-        self.setWindowTitle(f"Fast PDF Print & Accounting Suite — [{self.os_title}]")
+        self.setWindowTitle(f"PDF Print — [{self.os_title}]")
         self.setStyleSheet(TOKYO_NIGHT_STYLE)
         
         self.total_pages = 0
@@ -567,7 +567,7 @@ class FujiAccountingManager(QWidget):
         left_layout.addWidget(self.print_progress)
 
         # Send Button
-        self.send_pdf_btn = QPushButton("⚡ Fast Direct Print (Port 9100)")
+        self.send_pdf_btn = QPushButton("Print")
         self.send_pdf_btn.setObjectName("ActionBtn")
         self.send_pdf_btn.setIcon(get_svg_icon(SVG_BOLT, "#1a1b26", 18))
         self.send_pdf_btn.clicked.connect(self.execute_print_job)
@@ -739,9 +739,9 @@ class FujiAccountingManager(QWidget):
         self.test_conn_btn.setVisible(is_direct)
         self.cups_queue_combo.setVisible(not is_direct)
         if is_direct:
-            self.send_pdf_btn.setText("⚡ Fast Direct Print (Port 9100)")
+            self.send_pdf_btn.setText("Print")
         else:
-            self.send_pdf_btn.setText("🖨️ Print via CUPS Queue")
+            self.send_pdf_btn.setText("Print via CUPS Queue")
 
     def test_printer_ip_connection(self):
         ip = self.dest_ip_input.text().strip()

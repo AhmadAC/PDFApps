@@ -808,7 +808,7 @@ class _PdfPrintDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         act_h.addWidget(self.btn_cancel)
 
-        self.btn_print = QPushButton("Fast Print (Port 9100)")
+        self.btn_print = QPushButton("Print")
         self.btn_print.setObjectName("btn_primary")
         self.btn_print.setMinimumHeight(34)
         self.btn_print.clicked.connect(self._start_print_job)
@@ -848,7 +848,7 @@ class _PdfPrintDialog(QDialog):
         is_direct_socket = (data == "socket")
         self.row_ip_widget.setVisible(is_direct_socket)
         if is_direct_socket:
-            self.btn_print.setText("Fast Print (Port 9100)")
+            self.btn_print.setText("Print")
         else:
             self.btn_print.setText("Send Print Job")
 
