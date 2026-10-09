@@ -146,11 +146,11 @@ class PdfEditCanvas(QWidget):
         if active:
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
-    def set_highlight_mode(self, active: bool, color: tuple = (1.0, 1.0, 0.0)):
+    def set_highlight_mode(self, active: bool, color: tuple = (1.0, 1.0, 0.0), cursor_shape: Qt.CursorShape = Qt.CursorShape.IBeamCursor):
         self._highlight_mode = active
         self._highlight_color = color
         if active:
-            self.setCursor(Qt.CursorShape.IBeamCursor)
+            self.setCursor(cursor_shape)
         elif not self._draw_mode and not self._text_mode and not self._placing_signature:
             self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()

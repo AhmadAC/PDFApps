@@ -297,22 +297,25 @@ QSplitter::handle {{ background: {BORDER}; width: 1px; }}
 #viewer_tabs::tab {{
     background: #282828; color: #A0A0A0; border: 1px solid #383838; border-bottom: none;
     border-top-left-radius: 6px; border-top-right-radius: 6px;
-    padding: 5px 12px; margin-right: 3px; min-height: 22px;
+    padding: 5px 10px 5px 12px; margin-right: 3px; min-height: 22px;
 }}
 #viewer_tabs::tab:selected {{
     color: #FFFFFF; background: #1E1E1E; border-color: #444444; border-bottom: 2px solid {ACCENT}; font-weight: 600;
 }}
 #viewer_tabs::tab:hover:!selected {{ color: #FFFFFF; background: #323232; }}
 
-QTabBar::close-button {{
-    subcontrol-position: right;
-    margin-left: 6px;
-    padding: 2px;
-    border-radius: 4px;
+QPushButton#tab_close_btn {{
+    border: none;
     background: transparent;
+    border-radius: 3px;
+    margin-left: 4px;
+    padding: 0px;
 }}
-QTabBar::close-button:hover {{
-    background: rgba(239, 68, 68, 0.4);
+QPushButton#tab_close_btn:hover {{
+    background: rgba(239, 68, 68, 0.85);
+}}
+QPushButton#tab_close_btn:pressed {{
+    background: #DC2626;
 }}
 """
 
@@ -565,21 +568,24 @@ QSplitter::handle {{ background: {_LO}; width: 1px; }}
 #viewer_tabs::tab {{
     background: #DEE4EA; color: {_LQ}; border: 1px solid #CBD5E1; border-bottom: none;
     border-top-left-radius: 6px; border-top-right-radius: 6px;
-    padding: 5px 12px; margin-right: 3px; min-height: 22px;
+    padding: 5px 10px 5px 12px; margin-right: 3px; min-height: 22px;
 }}
 #viewer_tabs::tab:selected {{
     color: {_LA}; background: #FFFFFF; border-color: #CBD5E1; border-bottom: 2px solid {_LA}; font-weight: 600;
 }}
 #viewer_tabs::tab:hover:!selected {{ color: {_LP}; background: #E8EEF3; }}
 
-QTabBar::close-button {{
-    subcontrol-position: right;
-    margin-left: 6px;
-    padding: 2px;
-    border-radius: 4px;
+QPushButton#tab_close_btn {{
+    border: none;
     background: transparent;
+    border-radius: 3px;
+    margin-left: 4px;
+    padding: 0px;
 }}
-QTabBar::close-button:hover {{
-    background: rgba(239, 68, 68, 0.2);
+QPushButton#tab_close_btn:hover {{
+    background: rgba(239, 68, 68, 0.85);
+}}
+QPushButton#tab_close_btn:pressed {{
+    background: #DC2626;
 }}
 """

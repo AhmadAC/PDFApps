@@ -734,6 +734,33 @@ class CanvasInteractionHandler:
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 c.delete_active_signature()
                 return True
+            # Nudge movement of active placed signature using Arrow keys
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+                step = 15.0 if (modifiers & Qt.KeyboardModifier.ShiftModifier) else (1.0 if (modifiers & Qt.KeyboardModifier.AltModifier) else 4.0)
+                dx = 0.0
+                dy = 0.0
+                if key == Qt.Key.Key_Left:
+                    dx = -step
+                elif key == Qt.Key.Key_Right:
+                    dx = step
+                elif key == Qt.Key.Key_Up:
+                    dy = -step
+                elif key == Qt.Key.Key_Down:
+                    dy = step
+                z = c._zoom or 1.0
+                page_idx = c._active_sig.get("page", 0)
+                entry = c._entries[page_idx] if 0 <= page_idx < len(c._entries) else None
+                max_w = entry.w / z if entry else 1000.0
+                max_h = entry.h / z if entry else 1000.0
+                r = c._active_sig["rect"]
+                w = r.width
+                h = r.height
+                new_x0 = max(0.0, min(max_w - w, r.x0 + dx))
+                new_y0 = max(0.0, min(max_h - h, r.y0 + dy))
+                c._active_sig["rect"] = fitz.Rect(new_x0, new_y0, new_x0 + w, new_y0 + h)
+                c._active_sig["orig_rect"] = fitz.Rect(c._active_sig["rect"])
+                c.update()
+                return True
 
         if c._crop_mode and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             c.crop_applied.emit()
@@ -773,6 +800,40 @@ class CanvasInteractionHandler:
                     c._active_page_idx = target
                     c.page_action_requested.emit("go_to_page", target)
                 return True
+
+        # When nothing is selected, Up/Down arrow and Page keys navigate/scroll the main page
+        if c._active_sig is None and not c._placing_signature:
+            if not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+                if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown, Qt.Key.Key_Home, Qt.Key.Key_End):
+                    if c._sel_text and key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                        self.clear_selection()
+                        c.text_copied.emit("")
+                        c.update()
+                    sa = c._get_scroll_area()
+                    if sa:
+                        sb = sa.verticalScrollBar()
+                        if sb:
+                            step = 60
+                            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                                step = 150
+                            if key == Qt.Key.Key_Down:
+                                sb.setValue(min(sb.maximum(), sb.value() + step))
+                                return True
+                            elif key == Qt.Key.Key_Up:
+                                sb.setValue(max(0, sb.value() - step))
+                                return True
+                            elif key == Qt.Key.Key_PageDown:
+                                sb.setValue(min(sb.maximum(), sb.value() + sb.pageStep()))
+                                return True
+                            elif key == Qt.Key.Key_PageUp:
+                                sb.setValue(max(0, sb.value() - sb.pageStep()))
+                                return True
+                            elif key == Qt.Key.Key_Home:
+                                sb.setValue(0)
+                                return True
+                            elif key == Qt.Key.Key_End:
+                                sb.setValue(sb.maximum())
+                                return True
 
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             sa = c._get_scroll_area()

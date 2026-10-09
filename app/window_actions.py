@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     )
     from app.viewer.panel import PdfViewerPanel
     from app.workspace_bar import WorkspaceBar
+    from app.window_tabs import _ViewerTabBar
     _Base = QMainWindow
 else:
     _Base = object
@@ -49,6 +50,7 @@ class WindowActionsMixin(_Base):
     if TYPE_CHECKING:
         stack: QStackedWidget
         nav: QListWidget
+        _tab_bar: _ViewerTabBar
         _viewers: list[PdfViewerPanel]
         _viewer: PdfViewerPanel | None
         _current_tool: int
@@ -176,6 +178,12 @@ class WindowActionsMixin(_Base):
         return self._tool_idx_for_class(TabPageNumbers)
 
     def _toggle_pages_sidebar(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar) and hasattr(edit_w, "toggle_pages_sidebar"):
+                edit_w.toggle_pages_sidebar()
+                return
         viewer = self._viewer
         if viewer:
             viewer._toggle_pages_sidebar()
@@ -436,7 +444,7 @@ class WindowActionsMixin(_Base):
                 self._right_tool_container.setMinimumWidth(0)
                 self._right_tool_container.setMaximumWidth(16777215)
                 self._tab_container.setVisible(False)
-                self._pages_toggle_btn.setVisible(False)
+                self._pages_toggle_btn.setVisible(True)
                 self._setup_zoom_bar(True)
                 edit_w = self.stack.widget(edit_idx)
                 if isinstance(edit_w, TabEditar):
@@ -554,6 +562,23 @@ class WindowActionsMixin(_Base):
 
     # ── Page navigation ───────────────────────────────────────────────────
     def _update_page_nav(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                n = edit_w._canvas.page_count()
+                if n > 0:
+                    self._page_nav_widget.setVisible(True)
+                    idx = edit_w._page_idx
+                    self._page_input.setText(str(idx + 1))
+                    self._page_total_lbl.setText(f"/ {n}")
+                    self._first_pg_btn.setEnabled(idx > 0)
+                    self._prev_pg_btn.setEnabled(idx > 0)
+                    self._next_pg_btn.setEnabled(idx < n - 1)
+                    self._last_pg_btn.setEnabled(idx < n - 1)
+                    self._update_undo_redo_buttons()
+                    return
+
         viewer = self._viewer
         if not viewer:
             self._page_nav_widget.setVisible(False)
@@ -581,6 +606,12 @@ class WindowActionsMixin(_Base):
         self._update_undo_redo_buttons()
 
     def _goto_first_page(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                edit_w._scroll_to(0)
+                return
         viewer = self._viewer
         if not viewer:
             return
@@ -596,6 +627,12 @@ class WindowActionsMixin(_Base):
             sb.setValue(canvas.scroll_to_page(0))
 
     def _goto_prev_page(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                edit_w._prev_page()
+                return
         viewer = self._viewer
         if not viewer:
             return
@@ -613,6 +650,12 @@ class WindowActionsMixin(_Base):
                 sb.setValue(canvas.scroll_to_page(idx - 1))
 
     def _goto_next_page(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                edit_w._next_page()
+                return
         viewer = self._viewer
         if not viewer:
             return
@@ -630,6 +673,14 @@ class WindowActionsMixin(_Base):
                 sb.setValue(canvas.scroll_to_page(idx + 1))
 
     def _goto_last_page(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                n = edit_w._canvas.page_count()
+                if n > 0:
+                    edit_w._scroll_to(n - 1)
+                return
         viewer = self._viewer
         if not viewer:
             return
@@ -645,6 +696,18 @@ class WindowActionsMixin(_Base):
             sb.setValue(canvas.scroll_to_page(len(entries) - 1))
 
     def _goto_input_page(self):
+        edit_idx = self._edit_tool_idx()
+        if self._current_tool == edit_idx:
+            edit_w = self.stack.widget(edit_idx)
+            if isinstance(edit_w, TabEditar):
+                n = edit_w._canvas.page_count()
+                try:
+                    p = int(self._page_input.text())
+                except ValueError:
+                    return
+                p = max(1, min(p, n))
+                edit_w._scroll_to(p - 1)
+                return
         viewer = self._viewer
         if not viewer:
             return
@@ -883,6 +946,8 @@ class WindowActionsMixin(_Base):
         self._qapp.setPalette(_make_palette(self._dark_mode))
         self._qapp.setStyleSheet(style)
         self._workspace_bar.update_theme(self._dark_mode, self._sidebar_collapsed)
+        if hasattr(self, "_tab_bar") and hasattr(self._tab_bar, "update_theme"):
+            self._tab_bar.update_theme(self._dark_mode)
         for r in range(self.nav.count()):
             it = self.nav.item(r)
             if it:

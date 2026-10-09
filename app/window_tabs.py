@@ -8,12 +8,13 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QMenu,
     QMessageBox,
+    QPushButton,
     QTabBar,
 )
 import qtawesome as qta
@@ -42,6 +43,38 @@ class _ViewerTabBar(QTabBar):
     """Custom tab bar supporting middle-click to close, left-click on active tab to toggle thumbnails, and double-click to open."""
 
     active_tab_clicked = Signal()
+
+    def tabInserted(self, index: int) -> None:
+        super().tabInserted(index)
+        btn = QPushButton(self)
+        btn.setObjectName("tab_close_btn")
+        btn.setFixedSize(16, 16)
+        btn.setIconSize(QSize(9, 9))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setToolTip(t("btn.close") if t("btn.close") != "btn.close" else "Close Tab")
+        self._update_close_btn_icon(btn)
+        btn.clicked.connect(lambda _=False, b=btn: self._on_close_btn_clicked(b))
+        self.setTabButton(index, QTabBar.ButtonPosition.RightSide, btn)
+
+    def _update_close_btn_icon(self, btn: QPushButton, dark: bool | None = None) -> None:
+        if dark is None:
+            win = self.window()
+            dark = getattr(win, "_dark_mode", True) if win else True
+        icon_color = "#D1D5DB" if dark else "#4B5563"
+        btn.setIcon(qta.icon("fa5s.times", color=icon_color, color_active="#FFFFFF"))
+
+    def _on_close_btn_clicked(self, btn: QPushButton) -> None:
+        for i in range(self.count()):
+            if self.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
+                self.tabCloseRequested.emit(i)
+                return
+
+    def update_theme(self, dark: bool) -> None:
+        for i in range(self.count()):
+            btn = self.tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if isinstance(btn, QPushButton):
+                self._update_close_btn_icon(btn, dark=dark)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         pos = (

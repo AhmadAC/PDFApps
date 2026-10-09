@@ -181,6 +181,8 @@ class _FastPrintWorker(QThread):
         color = self.kwargs.get("color", "Color")
         user = self.kwargs.get("user", "")
 
+        is_color = (color == "Color")
+
         self.progress.emit(30, f"Spooling to CUPS queue '{queue}'...")
         cmd = ["lp", "-d", queue, "-n", str(copies)]
 
@@ -193,10 +195,17 @@ class _FastPrintWorker(QThread):
 
         if paper:
             cmd.extend(["-o", f"media={paper}"])
-        if "Color" in color:
-            cmd.extend(["-o", "ColorModel=Color"])
+
+        if is_color:
+            cmd.extend(["-o", "ColorModel=Color", "-o", "print-color-mode=color"])
         else:
-            cmd.extend(["-o", "ColorModel=Gray"])
+            cmd.extend([
+                "-o", "ColorModel=Gray",
+                "-o", "ColorModel=Grayscale",
+                "-o", "CNColorMode=mono",
+                "-o", "print-color-mode=monochrome",
+            ])
+
         if user:
             cmd.extend(["-o", f"job-originating-user-name={user}"])
 
@@ -213,11 +222,19 @@ class _FastPrintWorker(QThread):
         pdf_path = self.payload_or_pdf
         page_indices = self.kwargs.get("page_indices", [])
         copies = self.kwargs.get("copies", 1)
+        color = self.kwargs.get("color", "Color")
+        is_color = (color == "Color")
 
         self.progress.emit(15, f"Initializing {printer_name}...")
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPrinterName(printer_name)
         printer.setDocName(os.path.basename(str(pdf_path)))
+
+        if is_color:
+            printer.setColorMode(QPrinter.ColorMode.Color)
+        else:
+            printer.setColorMode(QPrinter.ColorMode.GrayScale)
+
         if printer.supportsMultipleCopies():
             printer.setCopyCount(copies)
             job_copies = 1
@@ -238,6 +255,8 @@ class _FastPrintWorker(QThread):
             target_dpi = min(200, max(120, printer.resolution() // 2))
             zoom = target_dpi / 72.0
             mat = fitz.Matrix(zoom, zoom)
+            cs = fitz.csRGB if is_color else fitz.csGRAY
+            fmt = QImage.Format.Format_RGB888 if is_color else QImage.Format.Format_Grayscale8
 
             first_page = True
             for _ in range(job_copies):
@@ -254,10 +273,8 @@ class _FastPrintWorker(QThread):
                     first_page = False
 
                     page = doc[p_idx]
-                    pix = page.get_pixmap(matrix=mat, alpha=False)
-                    if pix.n != 3:
-                        pix = fitz.Pixmap(fitz.csRGB, pix)
-                    img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888).copy()
+                    pix = page.get_pixmap(matrix=mat, colorspace=cs, alpha=False)
+                    img = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt).copy()
                     pix = None
 
                     target_rect = QRectF(painter.viewport())
@@ -411,10 +428,16 @@ class _PdfPrintDialog(QDialog):
                 background-color: #383A40;
                 border: 1px solid #4E5157;
                 border-radius: 4px;
-                padding: 5px 14px;
+                padding: 4px 12px;
                 color: #F0F0F0;
                 min-height: 26px;
                 font-size: 10pt;
+            }
+            QDialog#print_dialog QPushButton#nav_page_btn {
+                min-height: 22px;
+                max-height: 26px;
+                padding: 2px 4px;
+                font-size: 9pt;
             }
             QDialog#print_dialog QPushButton:hover {
                 background-color: #43464D;
@@ -461,14 +484,14 @@ class _PdfPrintDialog(QDialog):
 
     def _build_ui(self):
         main_lay = QHBoxLayout(self)
-        main_lay.setContentsMargins(16, 16, 16, 16)
-        main_lay.setSpacing(16)
+        main_lay.setContentsMargins(14, 12, 14, 12)
+        main_lay.setSpacing(14)
 
         # ── LEFT PANEL: Live Interactive Preview ──────────────────────
         left_box = QWidget()
         v_left = QVBoxLayout(left_box)
         v_left.setContentsMargins(0, 0, 0, 0)
-        v_left.setSpacing(10)
+        v_left.setSpacing(6)
 
         top_hdr = QHBoxLayout()
         lbl_doc = QLabel(f"<b>{os.path.basename(self.doc_path)}</b>")
@@ -493,25 +516,49 @@ class _PdfPrintDialog(QDialog):
         self.preview_scroll.setWidget(self.lbl_preview_img)
         v_left.addWidget(self.preview_scroll, 1)
 
+        # Navigation Bar: First, Prev, Page indicator, Next, Last
         nav_h = QHBoxLayout()
-        self.btn_prev_page = QPushButton("Previous")
-        self.btn_prev_page.setFixedWidth(80)
-        self.btn_prev_page.setFixedHeight(30)
+        nav_h.setContentsMargins(0, 2, 0, 2)
+        nav_h.setSpacing(6)
+
+        self.btn_first_page = QPushButton("<<")
+        self.btn_first_page.setObjectName("nav_page_btn")
+        self.btn_first_page.setFixedWidth(36)
+        self.btn_first_page.setFixedHeight(26)
+        self.btn_first_page.setToolTip("First Page (Page 1)")
+        self.btn_first_page.clicked.connect(self._first_preview_page)
+        nav_h.addWidget(self.btn_first_page)
+
+        self.btn_prev_page = QPushButton("< Prev")
+        self.btn_prev_page.setObjectName("nav_page_btn")
+        self.btn_prev_page.setFixedWidth(56)
+        self.btn_prev_page.setFixedHeight(26)
+        self.btn_prev_page.setToolTip("Previous Page")
         self.btn_prev_page.clicked.connect(self._prev_preview_page)
         nav_h.addWidget(self.btn_prev_page)
 
         self.lbl_page_count = QLabel(f"Page 1 of {self.total_pages}")
         self.lbl_page_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_page_count.setStyleSheet(f"color: {ACCENT}; font-weight: bold; font-size: 10pt;")
+        self.lbl_page_count.setStyleSheet(f"color: {ACCENT}; font-weight: bold; font-size: 9.5pt;")
         nav_h.addWidget(self.lbl_page_count, 1)
 
-        self.btn_next_page = QPushButton("Next")
-        self.btn_next_page.setFixedWidth(80)
-        self.btn_next_page.setFixedHeight(30)
+        self.btn_next_page = QPushButton("Next >")
+        self.btn_next_page.setObjectName("nav_page_btn")
+        self.btn_next_page.setFixedWidth(56)
+        self.btn_next_page.setFixedHeight(26)
+        self.btn_next_page.setToolTip("Next Page")
         self.btn_next_page.clicked.connect(self._next_preview_page)
         nav_h.addWidget(self.btn_next_page)
-        v_left.addLayout(nav_h)
 
+        self.btn_last_page = QPushButton(">>")
+        self.btn_last_page.setObjectName("nav_page_btn")
+        self.btn_last_page.setFixedWidth(36)
+        self.btn_last_page.setFixedHeight(26)
+        self.btn_last_page.setToolTip(f"Last Page (Page {self.total_pages})")
+        self.btn_last_page.clicked.connect(self._last_preview_page)
+        nav_h.addWidget(self.btn_last_page)
+
+        v_left.addLayout(nav_h)
         main_lay.addWidget(left_box, 6)
 
         # ── RIGHT PANEL: Settings, Accounting & Print Actions ─────────
@@ -519,7 +566,7 @@ class _PdfPrintDialog(QDialog):
         right_container.setMinimumWidth(440)
         right_container_layout = QVBoxLayout(right_container)
         right_container_layout.setContentsMargins(0, 0, 0, 0)
-        right_container_layout.setSpacing(10)
+        right_container_layout.setSpacing(8)
 
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
@@ -672,7 +719,7 @@ class _PdfPrintDialog(QDialog):
         v_right.addWidget(grp_range)
 
         # 4. Layout & Finishing
-        grp_opts = QGroupBox("Layout & Finishing")
+        grp_opts = QGroupBox("Layout && Finishing")
         f_opts = QFormLayout(grp_opts)
         f_opts.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         f_opts.setVerticalSpacing(10)
@@ -738,7 +785,7 @@ class _PdfPrintDialog(QDialog):
         # 5. Fixed Bottom Action Row
         bottom_box = QWidget()
         bottom_layout = QVBoxLayout(bottom_box)
-        bottom_layout.setContentsMargins(0, 4, 10, 0)
+        bottom_layout.setContentsMargins(0, 2, 8, 2)
         bottom_layout.setSpacing(6)
 
         self.prog_bar = QProgressBar()
@@ -756,14 +803,14 @@ class _PdfPrintDialog(QDialog):
         act_h.addStretch()
 
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setMinimumHeight(36)
+        self.btn_cancel.setMinimumHeight(34)
         self.btn_cancel.setFixedWidth(100)
         self.btn_cancel.clicked.connect(self.reject)
         act_h.addWidget(self.btn_cancel)
 
         self.btn_print = QPushButton("Fast Print (Port 9100)")
         self.btn_print.setObjectName("btn_primary")
-        self.btn_print.setMinimumHeight(36)
+        self.btn_print.setMinimumHeight(34)
         self.btn_print.clicked.connect(self._start_print_job)
         act_h.addWidget(self.btn_print)
 
@@ -834,6 +881,11 @@ class _PdfPrintDialog(QDialog):
         evens = [str(p) for p in range(2, self.total_pages + 1, 2)]
         self.edit_range.setText(", ".join(evens))
 
+    def _first_preview_page(self):
+        if self.current_preview_page > 0:
+            self.current_preview_page = 0
+            self._update_preview()
+
     def _prev_preview_page(self):
         if self.current_preview_page > 0:
             self.current_preview_page -= 1
@@ -842,6 +894,11 @@ class _PdfPrintDialog(QDialog):
     def _next_preview_page(self):
         if self.current_preview_page < self.total_pages - 1:
             self.current_preview_page += 1
+            self._update_preview()
+
+    def _last_preview_page(self):
+        if self.current_preview_page < self.total_pages - 1:
+            self.current_preview_page = self.total_pages - 1
             self._update_preview()
 
     def showEvent(self, event):
@@ -856,8 +913,10 @@ class _PdfPrintDialog(QDialog):
     def _update_preview(self):
         self.rad_current.setText(f"Current Page (Page {self.current_preview_page + 1})")
         self.lbl_page_count.setText(f"Page {self.current_preview_page + 1} of {self.total_pages}")
+        self.btn_first_page.setEnabled(self.current_preview_page > 0)
         self.btn_prev_page.setEnabled(self.current_preview_page > 0)
         self.btn_next_page.setEnabled(self.current_preview_page < self.total_pages - 1)
+        self.btn_last_page.setEnabled(self.current_preview_page < self.total_pages - 1)
 
         try:
             doc = fitz.open(self.doc_path)
@@ -928,37 +987,51 @@ class _PdfPrintDialog(QDialog):
         p_idx = self.cmb_printer.currentIndex()
         p_data = self.cmb_printer.itemData(p_idx)
 
+        copies = self.spin_copies.value()
+        duplex = self.cmb_duplex.currentText()
+        paper = self.cmb_paper.currentText()
+        color = self.cmb_color.currentText()
+        is_color = (color == "Color")
+        is_grayscale = not is_color
+
+        user = self.edit_acct_user.text().strip() or "none"
+        pin = self.edit_acct_pin.text().strip()
+        acct = self.edit_acct_id.text().strip()
+
         target_file = self.doc_path
         self.temp_slice_path = None
 
-        if len(pages) != self.total_pages or pages != list(range(self.total_pages)):
+        # Prepare print document: convert to 100% DeviceGray or slice if custom pages / black & white selected
+        need_temp = (is_grayscale or len(pages) != self.total_pages or pages != list(range(self.total_pages)))
+        if need_temp:
             try:
                 doc = fitz.open(self.doc_path)
                 if self.password and doc.needs_pass:
                     doc.authenticate(self.password)
                 sliced_doc = fitz.open()
+
                 for p in pages:
                     if 0 <= p < doc.page_count:
-                        sliced_doc.insert_pdf(doc, from_page=p, to_page=p)
+                        if is_grayscale:
+                            # Render page at 300 DPI in pure DeviceGray colorspace to guarantee zero color clicks
+                            page = doc[p]
+                            pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
+                            new_page = sliced_doc.new_page(width=page.rect.width, height=page.rect.height)
+                            new_page.insert_image(page.rect, stream=pix.tobytes("jpeg"))
+                        else:
+                            sliced_doc.insert_pdf(doc, from_page=p, to_page=p)
+
                 doc.close()
 
                 fd, tmp_out = tempfile.mkstemp(prefix="pdfapps_print_", suffix=".pdf")
                 os.close(fd)
-                sliced_doc.save(tmp_out)
+                sliced_doc.save(tmp_out, garbage=4, deflate=True)
                 sliced_doc.close()
                 self.temp_slice_path = tmp_out
                 target_file = tmp_out
             except Exception as ex:
-                QMessageBox.critical(self, "Page Slicing Error", f"Failed to prepare pages:\n{ex}")
+                QMessageBox.critical(self, "Page Processing Error", f"Failed to prepare pages for printing:\n{ex}")
                 return
-
-        copies = self.spin_copies.value()
-        duplex = self.cmb_duplex.currentText()
-        paper = self.cmb_paper.currentText()
-        color = self.cmb_color.currentText()
-        user = self.edit_acct_user.text().strip() or "none"
-        pin = self.edit_acct_pin.text().strip()
-        acct = self.edit_acct_id.text().strip()
 
         # Mode 1: Direct Socket Port 9100 (Instant Foxit Speed)
         if p_data == "socket":
@@ -981,7 +1054,16 @@ class _PdfPrintDialog(QDialog):
                 pjl.append(f'@PJL SET JOBNAME = "{os.path.basename(self.doc_path)}"')
                 pjl.append(f"@PJL SET COPIES = {copies}")
                 pjl.append(f"@PJL SET PAPER = {paper}")
-                pjl.append("@PJL SET COLORMODE = COLOR" if "Color" in color else "@PJL SET COLORMODE = MONO")
+
+                if is_color:
+                    pjl.append("@PJL SET COLORMODE = COLOR")
+                    pjl.append("@PJL SET RENDERMODE = COLOR")
+                else:
+                    pjl.append("@PJL SET COLORMODE = MONO")
+                    pjl.append("@PJL SET RENDERMODE = GRAYSCALE")
+                    pjl.append("@PJL SET DATAMODE = GRAYSCALE")
+                    pjl.append("@PJL SET COLOR = OFF")
+                    pjl.append("@PJL SET PROCESSCOLOR = OFF")
 
                 if "Long Edge" in duplex:
                     pjl.append("@PJL SET DUPLEX = ON\r\n@PJL SET BINDING = LONGEDGE")
@@ -1024,6 +1106,7 @@ class _PdfPrintDialog(QDialog):
                 target_file,
                 {
                     "copies": copies,
+                    "color": color,
                     "page_indices": pages if not self.temp_slice_path else None,
                 },
             )

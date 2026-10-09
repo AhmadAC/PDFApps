@@ -1,7 +1,8 @@
-
-
 # app/editor/tab_ui.py
 """PDFApps – tab_ui: UI builder and styling manager for TabEditar."""
+
+import json
+import os
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
@@ -9,18 +10,20 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QStackedWidget, QGroupBox,
     QSizePolicy, QListWidget, QTableWidget, QHeaderView,
     QTextEdit, QApplication, QSlider, QGridLayout,
+    QSplitter, QTabWidget, QTreeWidget,
 )
 import qtawesome as qta
 
 from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, DESKTOP, BG_INNER, _LN, _LP, _LQ
 from app.utils import ToolHeader, ActionBar, info_lbl
-from app.i18n import t, get_saved_signature
+from app.i18n import t, get_saved_signature, _CONFIG_PATH
 from app.widgets import DropFileEdit, ColorPickerButton, FocusSpinBox, FocusComboBox
 from app.editor.canvas import PdfEditCanvas
 from app.editor.dialogs import load_signature_pixmap
 from app.editor.tab_constants import (
     _MODE_KEYS, _MODE_TEXT,
 )
+from app.viewer.thumbnails import ThumbnailPanel, DEFAULT_THUMB_WIDTH
 
 
 def setup_editor_ui(tab) -> None:
@@ -35,7 +38,7 @@ def setup_editor_ui(tab) -> None:
     body_h.setContentsMargins(0, 0, 0, 0)
     body_h.setSpacing(0)
 
-    # Canvas Scroll Area (Left window - full height)
+    # Canvas Scroll Area (Center window - full height)
     tab._canvas = PdfEditCanvas()
     canvas_scroll = QScrollArea()
     canvas_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -44,11 +47,76 @@ def setup_editor_ui(tab) -> None:
     canvas_scroll.setWidget(tab._canvas)
     canvas_scroll.setMinimumWidth(320)
     canvas_scroll.viewport().installEventFilter(tab)
-    canvas_scroll.verticalScrollBar().valueChanged.connect(
-        lambda _: tab._canvas.on_scroll()
-    )
+    canvas_scroll.verticalScrollBar().valueChanged.connect(tab._on_canvas_scroll)
+    canvas_scroll.horizontalScrollBar().valueChanged.connect(tab._on_canvas_scroll)
     tab._canvas_scroll = canvas_scroll
-    body_h.addWidget(canvas_scroll, 1)
+
+    # ── Left Sidebar: TOC tree & Thumbnails ───────────────────────
+    tab._toc_tree = QTreeWidget()
+    tab._toc_tree.setObjectName("toc_tree")
+    tab._toc_tree.setHeaderHidden(True)
+    tab._toc_tree.setMinimumWidth(70)
+    tab._toc_tree.itemClicked.connect(tab._on_toc_clicked)
+
+    tab._thumbnails = ThumbnailPanel(tab)
+    tab._thumbnails.page_requested.connect(tab._scroll_to)
+    tab._thumbnails.action_requested.connect(tab._on_thumbnail_action)
+    tab._thumbnails.viewport_scroll_requested.connect(tab._on_thumbnail_viewport_scroll)
+
+    tab._sidebar_tabs = QTabWidget()
+    tab._sidebar_tabs.setObjectName("viewer_sidebar_tabs")
+    tab._sidebar_tabs.setDocumentMode(True)
+    tab._sidebar_tabs.setMinimumWidth(70)
+    tab._toc_tab_idx = tab._sidebar_tabs.addTab(tab._toc_tree, t("viewer.sidebar.contents"))
+    tab._pages_tab_idx = tab._sidebar_tabs.addTab(tab._thumbnails, t("viewer.sidebar.pages"))
+
+    tab._sidebar_panel = QWidget()
+    tab._sidebar_panel.setObjectName("viewer_left_sidebar")
+    sp_lay = QVBoxLayout(tab._sidebar_panel)
+    sp_lay.setContentsMargins(0, 0, 0, 0)
+    sp_lay.setSpacing(0)
+    sp_lay.addWidget(tab._sidebar_tabs, 1)
+
+    initial_open = True
+    saved_w = 220
+    try:
+        if os.path.isfile(_CONFIG_PATH):
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
+                cfg = json.load(_f)
+                initial_open = bool(cfg.get("pages_sidebar_open", True))
+                val = cfg.get("sidebar_panel_width")
+                if val is not None:
+                    saved_w = max(70, min(600, int(val)))
+                else:
+                    scale = getattr(ThumbnailPanel, "_thumb_scale_pref", 1.0) or 1.0
+                    saved_w = int(DEFAULT_THUMB_WIDTH * scale) + 40
+    except Exception:
+        pass
+
+    tab._pages_sidebar_collapsed = not initial_open
+    tab._saved_sidebar_width = saved_w
+
+    # Splitter for left sidebar and center canvas
+    tab._edit_splitter = QSplitter(Qt.Orientation.Horizontal)
+    tab._edit_splitter.addWidget(tab._sidebar_panel)
+    tab._edit_splitter.addWidget(canvas_scroll)
+    tab._edit_splitter.setStretchFactor(0, 0)
+    tab._edit_splitter.setStretchFactor(1, 1)
+    if initial_open:
+        tab._edit_splitter.setSizes([tab._saved_sidebar_width, 800])
+        tab._sidebar_panel.setVisible(True)
+    else:
+        tab._edit_splitter.setSizes([0, 1020])
+        tab._sidebar_panel.setVisible(False)
+    tab._edit_splitter.setCollapsible(0, True)
+    tab._edit_splitter.setCollapsible(1, False)
+    tab._edit_splitter.splitterMoved.connect(tab._on_edit_splitter_moved)
+
+    handle = tab._edit_splitter.handle(1)
+    if handle:
+        handle.installEventFilter(tab)
+
+    body_h.addWidget(tab._edit_splitter, 1)
 
     # Control Sidebar (Right window)
     ctrl_inner = QWidget()
@@ -106,7 +174,7 @@ def setup_editor_ui(tab) -> None:
     gp.addWidget(tab._btn_next)
     cv.addWidget(grp_page)
 
-    # 3. Edit Modes Grid
+    # 3. Edit Modes Grid (5 columns x 2 rows = 10 buttons)
     grp_mode = QGroupBox(t("edit.mode"))
     gm = QGridLayout(grp_mode)
     gm.setSpacing(4)
@@ -290,18 +358,29 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(hint2); v2.addWidget(hint2); v2.addStretch()
     tab._opt_stack.addWidget(w2)
 
-    # 3 - Highlight
+    # 3 - Highlight Text (snaps to words & lines)
     w3 = QWidget(); v3 = QVBoxLayout(w3); v3.setContentsMargins(0, 4, 0, 0); v3.setSpacing(4)
     v3.addWidget(QLabel(t("edit.color")))
     tab._hi_color = ColorPickerButton((1, 1, 0))
-    tab._hi_color.color_changed.connect(lambda c: tab._canvas.set_highlight_mode(tab._mode_idx == 3, color=c))
+    tab._hi_color.color_changed.connect(lambda c: tab._canvas.set_highlight_mode(tab._mode_idx == 3, color=c, cursor_shape=Qt.CursorShape.IBeamCursor))
     v3.addWidget(tab._hi_color)
-    hint3 = QLabel("💡 Drag across text or click a word to highlight it (like in Foxit PDF).")
+    hint3 = QLabel(t("edit.hint.highlight", default="💡 Drag across text or click a word to highlight it (snaps to lines)."))
     hint3.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint3.setWordWrap(True)
     tab._hint_labels.append(hint3); v3.addWidget(hint3); v3.addStretch()
     tab._opt_stack.addWidget(w3)
 
-    # 4 - Note
+    # 4 - Highlight Rectangle (area / box highlight)
+    w3_rect = QWidget(); v3_r = QVBoxLayout(w3_rect); v3_r.setContentsMargins(0, 4, 0, 0); v3_r.setSpacing(4)
+    v3_r.addWidget(QLabel(t("edit.color")))
+    tab._hi_rect_color = ColorPickerButton((1, 1, 0))
+    tab._hi_rect_color.color_changed.connect(lambda c: tab._canvas.set_highlight_mode(tab._mode_idx == 4, color=c, cursor_shape=Qt.CursorShape.CrossCursor))
+    v3_r.addWidget(tab._hi_rect_color)
+    hint3_r = QLabel(t("edit.hint.highlight_rect", default="💡 Drag across any area to draw a highlight rectangle box."))
+    hint3_r.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint3_r.setWordWrap(True)
+    tab._hint_labels.append(hint3_r); v3_r.addWidget(hint3_r); v3_r.addStretch()
+    tab._opt_stack.addWidget(w3_rect)
+
+    # 5 - Note
     w4 = QWidget(); v4 = QVBoxLayout(w4); v4.setContentsMargins(0, 4, 0, 0); v4.setSpacing(4)
     v4.addWidget(QLabel(t("edit.note_text")))
     tab._note_txt = QTextEdit(); tab._note_txt.setMaximumHeight(80)
@@ -310,7 +389,7 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(hint4); v4.addWidget(hint4); v4.addStretch()
     tab._opt_stack.addWidget(w4)
 
-    # 5 - Forms
+    # 6 - Forms
     w5 = QWidget(); v5 = QVBoxLayout(w5); v5.setContentsMargins(0, 4, 0, 0); v5.setSpacing(4)
     v5.addWidget(QLabel(t("edit.fields_detected")))
     tab._form_table = QTableWidget(0, 2)
@@ -325,7 +404,7 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(tab._form_status); v5.addWidget(tab._form_status)
     tab._opt_stack.addWidget(w5)
 
-    # 6 - Signature
+    # 7 - Signature
     w6 = QWidget(); v6s = QVBoxLayout(w6); v6s.setContentsMargins(0, 4, 0, 0); v6s.setSpacing(6)
     tab._sig_preview = QLabel(t("edit.signature.none"))
     tab._sig_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -351,7 +430,7 @@ def _build_mode_options(tab) -> None:
         if not pix.isNull():
             tab._sig_preview.setPixmap(pix)
 
-    # 7 - Draw (freehand ink)
+    # 8 - Draw (freehand ink)
     w_draw = QWidget(); v_d = QVBoxLayout(w_draw); v_d.setContentsMargins(0, 4, 0, 0); v_d.setSpacing(4)
     v_d.addWidget(QLabel(t("edit.color")))
     tab._draw_color_cb = ColorPickerButton((1, 0, 0))
@@ -368,7 +447,7 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(hint_d); v_d.addWidget(hint_d); v_d.addStretch()
     tab._opt_stack.addWidget(w_draw)
 
-    # 8 - Select / Copy / Highlight text
+    # 9 - Select / Copy / Highlight text
     w8 = QWidget(); v8 = QVBoxLayout(w8); v8.setContentsMargins(0, 4, 0, 0); v8.setSpacing(6)
     hint8 = QLabel(t("edit.hint.select")); hint8.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint8.setWordWrap(True)
     tab._hint_labels.append(hint8)
@@ -380,7 +459,7 @@ def _build_mode_options(tab) -> None:
     tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=TEXT_PRI))
     tab._btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(tab._sel_result.toPlainText()))
     
-    tab._btn_highlight = QPushButton(t("edit.mode.highlight"))
+    tab._btn_highlight = QPushButton(t("edit.mode.highlight", default="Highlight Text"))
     tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
     tab._btn_highlight.clicked.connect(tab._highlight_selection)
     
@@ -397,6 +476,8 @@ def update_tab_theme(tab, dark: bool) -> None:
     bg = BG_INNER if dark else _LN
     tab._canvas.set_dark_mode(dark)
     tab._canvas_scroll.setStyleSheet(f"QScrollArea {{ background: {bg}; }}")
+    if hasattr(tab, "_thumbnails"):
+        tab._thumbnails.update_theme(dark)
     pri = TEXT_PRI if dark else _LP
     sec = TEXT_SEC if dark else _LQ
 
@@ -440,4 +521,3 @@ def update_tab_theme(tab, dark: bool) -> None:
                 if dark else
                 f"background:#D6E8FA; border:1px solid #70A7DB; color:{ACCENT}; border-radius:6px;"
             )
-

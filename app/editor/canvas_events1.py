@@ -1,4 +1,3 @@
-
 # app/editor/canvas_events1.py
 
 """Canvas interaction handler: mouse, drag handles, keyboard and context menus."""
@@ -307,7 +306,7 @@ class CanvasEventHandler:
                 e.accept()
                 return
 
-        # Nudge movement of selected media/image using Arrow keys
+        # 1. Nudge movement of selected media/image using Arrow keys
         if c._selected_overlay_idx >= 0 and key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             step = 15.0 if (modifiers & Qt.KeyboardModifier.ShiftModifier) else (1.0 if (modifiers & Qt.KeyboardModifier.AltModifier) else 4.0)
             dx = 0.0
@@ -337,7 +336,7 @@ class CanvasEventHandler:
             e.accept()
             return
 
-        # Resizing selected media/image using Ctrl + and Ctrl -
+        # 2. Resizing selected media/image using Ctrl + and Ctrl -
         if c._selected_overlay_idx >= 0:
             if (modifiers & Qt.KeyboardModifier.ControlModifier) or key in (Qt.Key.Key_Plus, Qt.Key.Key_Minus):
                 if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
@@ -348,6 +347,42 @@ class CanvasEventHandler:
                     c.scale_selected_overlay(0.90)
                     e.accept()
                     return
+
+        # 3. When nothing is selected, Up/Down arrow and Page keys navigate/scroll the main page
+        if c._selected_overlay_idx < 0 and not c._inline_mgr.edit.isVisible():
+            if not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
+                if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown, Qt.Key.Key_Home, Qt.Key.Key_End):
+                    sa = c._get_scroll_area()
+                    if sa:
+                        sb = sa.verticalScrollBar()
+                        if sb:
+                            step = 60
+                            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                                step = 150
+                            if key == Qt.Key.Key_Down:
+                                sb.setValue(min(sb.maximum(), sb.value() + step))
+                                e.accept()
+                                return
+                            elif key == Qt.Key.Key_Up:
+                                sb.setValue(max(0, sb.value() - step))
+                                e.accept()
+                                return
+                            elif key == Qt.Key.Key_PageDown:
+                                sb.setValue(min(sb.maximum(), sb.value() + sb.pageStep()))
+                                e.accept()
+                                return
+                            elif key == Qt.Key.Key_PageUp:
+                                sb.setValue(max(0, sb.value() - sb.pageStep()))
+                                e.accept()
+                                return
+                            elif key == Qt.Key.Key_Home:
+                                sb.setValue(0)
+                                e.accept()
+                                return
+                            elif key == Qt.Key.Key_End:
+                                sb.setValue(sb.maximum())
+                                e.accept()
+                                return
 
     def handle_context_menu(self, e):
         c = self.canvas
@@ -366,7 +401,7 @@ class CanvasEventHandler:
             menu.addSeparator()
             act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
             act_del.triggered.connect(c.delete_selected_overlay)
-            act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("tool.duplicate", default="Duplicate"))
+            act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("Duplicate", default="Duplicate"))
             act_dup.triggered.connect(c.duplicate_selected_overlay)
             menu.exec(e.globalPos())
             return
@@ -383,7 +418,7 @@ class CanvasEventHandler:
                 menu.addSeparator()
                 act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), t("btn.delete"))
                 act_del.triggered.connect(c.delete_selected_overlay)
-                act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("tool.duplicate", default="Duplicate"))
+                act_dup = menu.addAction(qta.icon("fa5s.clone", color=ACCENT), t("Duplicate", default="Duplicate"))
                 act_dup.triggered.connect(c.duplicate_selected_overlay)
                 menu.exec(e.globalPos())
                 return

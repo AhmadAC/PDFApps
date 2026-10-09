@@ -1,8 +1,6 @@
-
 # app/i18n.py
 
 """PDFApps – Internationalization (i18n) module."""
-# app/i18n.py
 import contextlib
 import json
 import locale
@@ -52,6 +50,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Left-click on page to place signature. Right-click to cancel.",
         "edit.signature.resize_hint": "Drag handles to resize. Click outside or press Enter to apply.",
         "viewer.sig_placed": "✔ Signature added (Ctrl+Z to undo, Ctrl+S to save)",
+        "edit.mode.highlight": "Highlight Text",
+        "edit.mode.highlight_rect": "Highlight Rectangle",
+        "edit.hint.highlight": "Drag across text or click a word to highlight it (snaps to lines).",
+        "edit.hint.highlight_rect": "Drag across any area to draw a highlight rectangle box.",
     },
     "pt": {
         "viewer.add_signature": "Adicionar Assinatura",
@@ -64,6 +66,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Clique com o botão esquerdo para posicionar. Botão direito para cancelar.",
         "edit.signature.resize_hint": "Arraste os cantos para redimensionar. Clique fora ou prima Enter para aplicar.",
         "viewer.sig_placed": "✔ Assinatura adicionada (Ctrl+Z para anular, Ctrl+S para guardar)",
+        "edit.mode.highlight": "Realçar Texto",
+        "edit.mode.highlight_rect": "Realçar Retângulo",
+        "edit.hint.highlight": "Arraste sobre o texto ou clique numa palavra para realçar.",
+        "edit.hint.highlight_rect": "Arraste para desenhar uma caixa retangular de realce.",
     },
     "es": {
         "viewer.add_signature": "Añadir Firma",
@@ -76,6 +82,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Clic izquierdo para colocar. Clic derecho para cancelar.",
         "edit.signature.resize_hint": "Arrastre para redimensionar. Clic fuera o Enter para aplicar.",
         "viewer.sig_placed": "✔ Firma añadida (Ctrl+Z para deshacer, Ctrl+S para guardar)",
+        "edit.mode.highlight": "Resaltar Texto",
+        "edit.mode.highlight_rect": "Resaltar Rectángulo",
+        "edit.hint.highlight": "Arrastre sobre el texto o haga clic para resaltarlo.",
+        "edit.hint.highlight_rect": "Arrastre para dibujar un cuadro rectangular de resaltado.",
     },
     "fr": {
         "viewer.add_signature": "Ajouter une signature",
@@ -88,6 +98,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Clic gauche pour placer. Clic droit pour annuler.",
         "edit.signature.resize_hint": "Glissez les poignées pour redimensionner. Cliquez dehors ou Entrée pour appliquer.",
         "viewer.sig_placed": "✔ Signature ajoutée (Ctrl+Z pour annuler, Ctrl+S pour enregistrer)",
+        "edit.mode.highlight": "Surligner Texte",
+        "edit.mode.highlight_rect": "Surligner Rectangle",
+        "edit.hint.highlight": "Glissez sur le texte ou cliquez sur un mot pour le surligner.",
+        "edit.hint.highlight_rect": "Glissez sur une zone pour dessiner un rectangle de surlignage.",
     },
     "de": {
         "viewer.add_signature": "Signatur hinzufügen",
@@ -100,6 +114,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Linksklick zum Platzieren. Rechtsklick zum Abbrechen.",
         "edit.signature.resize_hint": "Griffe ziehen zum Skalieren. Außerhalb klicken oder Enter zum Anwenden.",
         "viewer.sig_placed": "✔ Signatur hinzugefügt (Strg+Z zum Rückgängigmachen, Strg+S zum Speichern)",
+        "edit.mode.highlight": "Text hervorheben",
+        "edit.mode.highlight_rect": "Rechteck hervorheben",
+        "edit.hint.highlight": "Über Text ziehen oder Wort anklicken zum Hervorheben.",
+        "edit.hint.highlight_rect": "Über einen Bereich ziehen, um ein Markierungsrechteck zu zeichnen.",
     },
     "zh": {
         "viewer.add_signature": "添加签名",
@@ -112,6 +130,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "左键点击页面放置签名，右键取消。",
         "edit.signature.resize_hint": "拖动手柄调整大小，点击空白处或回车确认。",
         "viewer.sig_placed": "✔ 已添加签名（Ctrl+Z 撤销，Ctrl+S 保存）",
+        "edit.mode.highlight": "高亮文本",
+        "edit.mode.highlight_rect": "矩形高亮",
+        "edit.hint.highlight": "拖动选择文本或点击单词以高亮显示（按行对齐）。",
+        "edit.hint.highlight_rect": "在任意区域拖动以绘制矩形高亮框。",
     },
     "it": {
         "viewer.add_signature": "Aggiungi firma",
@@ -124,6 +146,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Clic sinistro per posizionare. Clic destro per annullare.",
         "edit.signature.resize_hint": "Trascina per ridimensionare. Clic fuori o Invio per applicare.",
         "viewer.sig_placed": "✔ Firma aggiunta (Ctrl+Z per annullare, Ctrl+S per salvare)",
+        "edit.mode.highlight": "Evidenzia Testo",
+        "edit.mode.highlight_rect": "Evidenzia Rettangolo",
+        "edit.hint.highlight": "Trascina sul testo o clicca su una parola per evidenziare.",
+        "edit.hint.highlight_rect": "Trascina su un'area per disegnare un rettangolo di evidenziazione.",
     },
     "nl": {
         "viewer.add_signature": "Handtekening toevoegen",
@@ -136,6 +162,10 @@ _SIG_I18N = {
         "edit.signature.place_hint": "Linksklik om te plaatsen. Rechtsklik om te annuleren.",
         "edit.signature.resize_hint": "Versleep handgrepen om te vergroten/verkleinen. Klik buiten of druk op Enter.",
         "viewer.sig_placed": "✔ Handtekening toegevoegd (Ctrl+Z om ongedaan te maken, Ctrl+S om op te slaan)",
+        "edit.mode.highlight": "Tekst markeren",
+        "edit.mode.highlight_rect": "Rechthoek markeren",
+        "edit.hint.highlight": "Sleep over tekst of klik op een woord om te markeren.",
+        "edit.hint.highlight_rect": "Sleep over een gebied om een markeerrechthoek te tekenen.",
     },
 }
 

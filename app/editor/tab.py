@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget, QScrollArea, QGroupBox, QPushButton, QLabel,
     QStackedWidget, QListWidget, QTextEdit, QTableWidget,
     QSlider, QFileDialog, QMessageBox, QDialog, QApplication,
+    QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem,
 )
 from shiboken6 import isValid
 import qtawesome as qta
@@ -22,6 +23,7 @@ from app.i18n import t
 from app.widgets import DropFileEdit, ColorPickerButton, FocusSpinBox, FocusComboBox
 from app.editor.canvas import PdfEditCanvas
 from app.editor.dialogs import _NoteDialog, _SignatureDialog, load_signature_pixmap
+from app.viewer.thumbnails import ThumbnailPanel
 from app.pdf_password import authenticate_fitz
 
 try:
@@ -38,7 +40,7 @@ from app.editor.tab_constants import (
     _RED_FILLS_KEYS, _RED_FILLS_VALS,
     _MODE_KEYS, _DRAW_COLORS_KEYS, _DRAW_COLORS_VALS,
     _MODE_REDACT, _MODE_TEXT, _MODE_IMAGE, _MODE_HIGHLIGHT,
-    _MODE_NOTE, _MODE_FORMS, _MODE_SIGNATURE, _MODE_DRAW, _MODE_SELECT,
+    _MODE_HIGHLIGHT_RECT, _MODE_NOTE, _MODE_FORMS, _MODE_SIGNATURE, _MODE_DRAW, _MODE_SELECT,
 )
 from app.editor.tab_ui import setup_editor_ui, update_tab_theme
 from app.editor.tab_history import TabHistoryManager
@@ -85,6 +87,17 @@ class TabEditar(QWidget):
     _drop_out: DropFileEdit
     _action_bar: QWidget
 
+    # Sidebar thumbnail & TOC widgets
+    _thumbnails: ThumbnailPanel
+    _toc_tree: QTreeWidget
+    _sidebar_tabs: QTabWidget
+    _sidebar_panel: QWidget
+    _edit_splitter: QSplitter
+    _pages_sidebar_collapsed: bool
+    _saved_sidebar_width: int
+    _toc_tab_idx: int
+    _pages_tab_idx: int
+
     # Mode option widgets (attached by _build_mode_options in setup_editor_ui)
     _btn_text_add: QPushButton
     _btn_text_edit: QPushButton
@@ -98,6 +111,7 @@ class TabEditar(QWidget):
     _text_hint: QLabel
     _img_drop: DropFileEdit
     _hi_color: ColorPickerButton
+    _hi_rect_color: ColorPickerButton
     _note_txt: QTextEdit
     _form_table: QTableWidget
     _form_status: QLabel
@@ -161,6 +175,7 @@ class TabEditar(QWidget):
         self._canvas.signature_added.connect(self._on_signature_added)
         self._canvas.overlay_changed.connect(self.update)
         self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
+        self._canvas.zoom_changed.connect(lambda _: self._update_page_nav_and_thumbnails())
 
         self._set_text_submode("edit")
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
@@ -174,10 +189,88 @@ class TabEditar(QWidget):
             QTimer.singleShot(50, self._canvas._layout_and_schedule)
         return not is_vis
 
+    def toggle_pages_sidebar(self) -> bool:
+        """Toggle the left-hand pages/thumbnail sidebar within the editor."""
+        if not hasattr(self, "_sidebar_panel"):
+            return False
+
+        if not self._pages_sidebar_collapsed:
+            self._saved_sidebar_width = max(70, self._sidebar_panel.width())
+            self._pages_sidebar_collapsed = True
+            self._sidebar_panel.setVisible(False)
+            total = self._edit_splitter.width() or 1020
+            self._edit_splitter.setSizes([0, total])
+            pref_open = False
+        else:
+            self._pages_sidebar_collapsed = False
+            self._sidebar_panel.setVisible(True)
+            self._sidebar_tabs.setVisible(True)
+            if hasattr(self, "_thumbnails") and hasattr(self, "_sidebar_tabs"):
+                self._sidebar_tabs.setCurrentWidget(self._thumbnails)
+            w = min(800, max(70, getattr(self, "_saved_sidebar_width", 220)))
+            total = self._edit_splitter.width() or 1020
+            self._edit_splitter.setSizes([w, max(300, total - w)])
+            pref_open = True
+
+        try:
+            from app.viewer.panel import PdfViewerPanel
+            PdfViewerPanel._pages_sidebar_visible_pref = pref_open
+            PdfViewerPanel._saved_sidebar_width_pref = self._saved_sidebar_width
+        except Exception:
+            pass
+
+        try:
+            from app.i18n import _update_config
+            saved_w = self._saved_sidebar_width
+            def _save_nav_pref(cfg: dict) -> None:
+                cfg["pages_sidebar_open"] = pref_open
+                cfg["sidebar_panel_width"] = saved_w
+            _update_config(_save_nav_pref)
+        except Exception:
+            pass
+
+        if hasattr(self, "_canvas") and self._canvas._doc and self._canvas._zoom_factor == 1.0:
+            QTimer.singleShot(50, self._canvas._layout_and_schedule)
+        return not self._pages_sidebar_collapsed
+
+    def _set_sidebar_width(self, target_w: int) -> None:
+        target_w = max(70, min(600, target_w))
+        self._saved_sidebar_width = target_w
+        try:
+            from app.viewer.panel import PdfViewerPanel
+            PdfViewerPanel._saved_sidebar_width_pref = target_w
+        except Exception:
+            pass
+        if not getattr(self, "_pages_sidebar_collapsed", False) and hasattr(self, "_edit_splitter"):
+            sizes = self._edit_splitter.sizes()
+            if len(sizes) >= 2:
+                total = sum(sizes)
+                canvas_w = max(200, total - target_w)
+                self._edit_splitter.setSizes([target_w, canvas_w])
+        try:
+            from app.i18n import _update_config
+            _update_config(lambda cfg: cfg.__setitem__("sidebar_panel_width", target_w))
+        except Exception:
+            pass
+
+    def _on_edit_splitter_moved(self, pos: int, index: int) -> None:
+        if index == 1 and pos >= 70 and not self._pages_sidebar_collapsed:
+            self._saved_sidebar_width = pos
+            try:
+                from app.viewer.panel import PdfViewerPanel
+                PdfViewerPanel._saved_sidebar_width_pref = pos
+            except Exception:
+                pass
+
     def paintEvent(self, event):
         _paint_bg(self)
 
     def eventFilter(self, obj, event):
+        if hasattr(self, "_edit_splitter") and obj is self._edit_splitter.handle(1):
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                if hasattr(self, "_thumbnails"):
+                    self._thumbnails.fit_window_to_thumbnails()
+                    return True
         if obj is self._canvas_scroll.viewport() and event.type() == QEvent.Type.Resize:
             if self._canvas._doc and self._canvas._zoom_factor == 1.0:
                 QTimer.singleShot(0, self._canvas._layout_and_schedule)
@@ -192,6 +285,8 @@ class TabEditar(QWidget):
     def update_theme(self, dark: bool) -> None:
         update_tab_theme(self, dark)
         self._update_text_submode_styles()
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.update_theme(dark)
 
     def _update_nav(self):
         n = self._canvas.page_count()
@@ -199,11 +294,65 @@ class TabEditar(QWidget):
         self._btn_next.setEnabled(n > 0 and self._page_idx < n - 1)
         self._lbl_page.setText(f"{self._page_idx+1} / {n}" if n else "—")
 
+    def _on_canvas_scroll(self, val: int = 0):
+        self._canvas.on_scroll()
+        self._update_page_nav_and_thumbnails()
+
+    def _update_page_nav_and_thumbnails(self):
+        offsets = getattr(self._canvas, "_page_offsets", [])
+        if not offsets:
+            return
+        sb = self._canvas_scroll.verticalScrollBar()
+        sb_val = sb.value() if sb else 0
+        idx = self._canvas.page_at_y(sb_val)
+
+        h_sb = self._canvas_scroll.horizontalScrollBar()
+        v_sb = self._canvas_scroll.verticalScrollBar()
+        h_val = h_sb.value() if h_sb else 0
+        v_val = v_sb.value() if v_sb else 0
+        vp = self._canvas_scroll.viewport()
+        vp_w = vp.width() if vp else 0
+        vp_h = vp.height() if vp else 0
+
+        best_idx = idx
+        max_vis_h = -1
+        viewport_rect = None
+
+        if vp_w > 0 and vp_h > 0:
+            for p_i, (py0, pw, ph) in enumerate(offsets):
+                if py0 + ph < v_val:
+                    continue
+                if py0 > v_val + vp_h:
+                    break
+                px0 = max(0, (self._canvas.width() - pw) // 2)
+                ix0 = max(px0, h_val)
+                iy0 = max(py0, v_val)
+                ix1 = min(px0 + pw, h_val + vp_w)
+                iy1 = min(py0 + ph, v_val + vp_h)
+                if ix1 > ix0 and iy1 > iy0:
+                    vis_h = iy1 - iy0
+                    if vis_h > max_vis_h:
+                        max_vis_h = vis_h
+                        best_idx = p_i
+                        norm_x = max(0.0, min(1.0, (ix0 - px0) / pw))
+                        norm_y = max(0.0, min(1.0, (iy0 - py0) / ph))
+                        norm_w = max(0.0, min(1.0 - norm_x, (ix1 - ix0) / pw))
+                        norm_h = max(0.0, min(1.0 - norm_y, (iy1 - iy0) / ph))
+                        viewport_rect = (norm_x, norm_y, norm_w, norm_h)
+
+        if best_idx != self._page_idx:
+            self._page_idx = best_idx
+            self._update_nav()
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.set_current_page(best_idx, viewport_rect)
+
     def _scroll_to(self, idx: int):
         self._page_idx = idx
         y = self._canvas.scroll_to_page(idx)
         self._canvas_scroll.verticalScrollBar().setValue(y)
         self._update_nav()
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.set_current_page(idx)
 
     def _prev_page(self):
         if self._page_idx > 0:
@@ -212,6 +361,85 @@ class TabEditar(QWidget):
     def _next_page(self):
         if self._page_idx < self._canvas.page_count() - 1:
             self._scroll_to(self._page_idx + 1)
+
+    def _on_thumbnail_action(self, action: str, pages_arg: object) -> None:
+        if action == "fit_sidebar_width":
+            if isinstance(pages_arg, (int, float)):
+                self._set_sidebar_width(int(pages_arg))
+            return
+        if action == "prev_page":
+            self._prev_page()
+            return
+        if action == "next_page":
+            self._next_page()
+            return
+        if action == "go_to_page":
+            if isinstance(pages_arg, int):
+                self._scroll_to(pages_arg)
+            return
+
+    def _on_thumbnail_viewport_scroll(self, page_idx: int, norm_x: float, norm_y: float) -> None:
+        offsets = getattr(self._canvas, "_page_offsets", [])
+        if not offsets or not (0 <= page_idx < len(offsets)):
+            return
+        py0, pw, ph = offsets[page_idx]
+        px0 = max(0, (self._canvas.width() - pw) // 2)
+
+        target_x = px0 + int(round(norm_x * pw))
+        target_y = py0 + int(round(norm_y * ph))
+
+        h_sb = self._canvas_scroll.horizontalScrollBar()
+        v_sb = self._canvas_scroll.verticalScrollBar()
+        if h_sb:
+            h_sb.setValue(max(0, min(target_x, h_sb.maximum())))
+        if v_sb:
+            v_sb.setValue(max(0, min(target_y, v_sb.maximum())))
+
+    def _on_toc_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        page_idx = item.data(0, Qt.ItemDataRole.UserRole)
+        if page_idx is not None:
+            self._scroll_to(int(page_idx))
+
+    def _populate_toc(self, doc: fitz.Document | None) -> None:
+        if not hasattr(self, "_toc_tree"):
+            return
+        self._toc_tree.clear()
+        if not doc:
+            if hasattr(self, "_sidebar_tabs"):
+                if hasattr(self._sidebar_tabs, "setTabVisible"):
+                    self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
+            return
+        try:
+            toc = doc.get_toc()
+        except Exception:
+            toc = []
+        if not toc:
+            if hasattr(self._sidebar_tabs, "setTabVisible"):
+                self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
+            pages_idx = self._sidebar_tabs.indexOf(self._thumbnails)
+            if pages_idx >= 0:
+                self._sidebar_tabs.setCurrentIndex(pages_idx)
+            return
+        try:
+            stack = [(0, self._toc_tree.invisibleRootItem())]
+            for level, title, page in toc:
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                parent = stack[-1][1] if stack else self._toc_tree.invisibleRootItem()
+                item = QTreeWidgetItem(parent, [title])
+                item.setData(0, Qt.ItemDataRole.UserRole, max(0, page - 1))
+                item.setToolTip(0, title)
+                stack.append((level, item))
+            self._toc_tree.expandToDepth(1)
+            if hasattr(self._sidebar_tabs, "setTabVisible"):
+                self._sidebar_tabs.setTabVisible(self._toc_tab_idx, True)
+            pages_idx = self._sidebar_tabs.indexOf(self._thumbnails)
+            if pages_idx >= 0:
+                self._sidebar_tabs.setCurrentIndex(pages_idx)
+        except Exception:
+            self._toc_tree.clear()
+            if hasattr(self._sidebar_tabs, "setTabVisible"):
+                self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
 
     def _on_mode_btn(self, btn: QPushButton):
         idx = self._mode_btn_idx.get(id(btn), 0)
@@ -252,15 +480,23 @@ class TabEditar(QWidget):
         )
         self._canvas.set_text_mode(idx == _MODE_TEXT)
 
-        is_highlight = (idx == _MODE_HIGHLIGHT)
-        hi_col = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
-        self._canvas.set_highlight_mode(is_highlight, color=hi_col)
+        is_hi_text = (idx == _MODE_HIGHLIGHT)
+        is_hi_rect = (idx == _MODE_HIGHLIGHT_RECT)
+        if is_hi_text:
+            hi_col = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
+            self._canvas.set_highlight_mode(True, color=hi_col, cursor_shape=Qt.CursorShape.IBeamCursor)
+        elif is_hi_rect:
+            hi_col = self._hi_rect_color.color_tuple() if hasattr(self, "_hi_rect_color") else (1.0, 1.0, 0.0)
+            self._canvas.set_highlight_mode(True, color=hi_col, cursor_shape=Qt.CursorShape.CrossCursor)
+        else:
+            self._canvas.set_highlight_mode(False)
 
         cursors = {
             _MODE_REDACT: _get_icon_cursor("fa5s.eraser", 22, 22),
             _MODE_TEXT: Qt.CursorShape.IBeamCursor,
             _MODE_IMAGE: _get_icon_cursor("fa5s.image", 14, 14),
             _MODE_HIGHLIGHT: Qt.CursorShape.IBeamCursor,
+            _MODE_HIGHLIGHT_RECT: Qt.CursorShape.CrossCursor,
             _MODE_NOTE: _get_icon_cursor("fa5s.sticky-note", 4, 4),
             _MODE_FORMS: Qt.CursorShape.ArrowCursor,
             _MODE_SIGNATURE: Qt.CursorShape.ArrowCursor,
@@ -397,6 +633,11 @@ class TabEditar(QWidget):
         n = self._canvas.page_count()
         self._lbl_info.setText(t("edit.status.pages", n=n))
         self._update_nav()
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.set_document(p, n, password=self._pdf_password)
+            self._thumbnails.set_current_page(0)
+        if hasattr(self, "_populate_toc"):
+            self._populate_toc(self._canvas._doc)
         QTimer.singleShot(100, lambda: self._load_existing_annotations() if isValid(self) else None)
         QTimer.singleShot(200, lambda: self._load_form_fields(p) if isValid(self) else None)
 
@@ -411,6 +652,10 @@ class TabEditar(QWidget):
         self._doc_path = None
         self._canvas.close_doc()
         self._canvas.set_overlays([])
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.clear()
+        if hasattr(self, "_toc_tree"):
+            self._toc_tree.clear()
         self._pending.clear()
         self._pending_list.clear()
         self._lbl_info.setText("")
@@ -589,9 +834,10 @@ class TabEditar(QWidget):
                     return
             self._add({"type": "signature", "page": self._page_idx, "rect": pdf_rect, "path": sig})
         elif mode == _MODE_HIGHLIGHT:
+            # Mode 3: Text Highlight (snaps to words and lines like Foxit PDF)
             doc = self._canvas._doc
             line_rects = []
-            hi_color = self._hi_color.color_tuple()
+            hi_color = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
             if doc and 0 <= page_idx < doc.page_count:
                 page = doc[page_idx]
                 words = page.get_text("words", clip=pdf_rect)
@@ -622,6 +868,15 @@ class TabEditar(QWidget):
                     "rect": pdf_rect,
                     "color": hi_color
                 })
+        elif mode == _MODE_HIGHLIGHT_RECT:
+            # Mode 4: Rectangle Highlight (freeform highlight box)
+            hi_color = self._hi_rect_color.color_tuple() if hasattr(self, "_hi_rect_color") else (1.0, 1.0, 0.0)
+            self._add({
+                "type": "highlight",
+                "page": self._page_idx,
+                "rect": pdf_rect,
+                "color": hi_color
+            })
 
     def _on_point(self, page_idx: int, pdf_pt):
         self._page_idx = page_idx
@@ -668,11 +923,12 @@ class TabEditar(QWidget):
             hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=8.0)
             if hit:
                 bb = fitz.Rect(hit["bbox"])
+                hi_col = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
                 self._add({
                     "type": "highlight",
                     "page": page_idx,
                     "rect": bb,
-                    "color": self._hi_color.color_tuple()
+                    "color": hi_col
                 })
                 self._status("✔ Word highlighted")
 
@@ -742,3 +998,7 @@ class TabEditar(QWidget):
 
         apply_visual_edits_and_save(self, out)
 
+    def closeEvent(self, event):
+        if hasattr(self, "_thumbnails"):
+            self._thumbnails.clear()
+        super().closeEvent(event)

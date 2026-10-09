@@ -12,6 +12,7 @@ import json
 import socket
 import subprocess
 import tempfile
+import contextlib
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -293,8 +294,9 @@ class BackgroundPrintWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(bool, str)
 
-    def __init__(self, target_ip: str, target_port: int, payload_bytes: bytes, job_name: str):
-        super().__init__()
+    def __init__(self, job_type: str, target_ip: str, target_port: int, payload_bytes: bytes, job_name: str, parent=None):
+        super().__init__(parent)
+        self.job_type = job_type
         self.target_ip = target_ip
         self.target_port = target_port
         self.payload_bytes = payload_bytes
@@ -544,6 +546,7 @@ class FujiAccountingManager(QWidget):
             "Color",
             "Black & White (Monochrome)"
         ])
+        self.color_combo.currentIndexChanged.connect(lambda _: self.jump_to_page(self.current_page))
         s_layout.addWidget(self.color_combo)
 
         s_layout.addWidget(QLabel("Copies:"))
@@ -936,7 +939,15 @@ class FujiAccountingManager(QWidget):
                 zoom = target_w / max(1.0, page.rect.width)
                 mat = fitz.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
-                img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888).copy()
+
+                color_txt = self.color_combo.currentText()
+                if ("Black" in color_txt or "Mono" in color_txt) and pix.n != 1:
+                    pix = fitz.Pixmap(fitz.csGRAY, pix)
+                elif pix.n != 3 and ("Black" not in color_txt and "Mono" not in color_txt):
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+
+                fmt = QImage.Format.Format_Grayscale8 if pix.n == 1 else QImage.Format.Format_RGB888
+                img = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt).copy()
                 doc.close()
                 if self.preview_lbl is not None:
                     self.preview_lbl.setPixmap(QPixmap.fromImage(img))
@@ -1103,23 +1114,54 @@ class FujiAccountingManager(QWidget):
             QMessageBox.warning(self, "Page Range Error", "No pages selected to print.")
             return
 
-        needs_cleanup = False
-        target_pdf = pdf_path
-        if scope_idx != 0 or len(pages_to_print) != self.total_pages:
-            try:
-                target_pdf = self.extract_pdf_pages_fast(pdf_path, pages_to_print)
-                needs_cleanup = True
-            except Exception as e:
-                QMessageBox.critical(self, "Page Slicing Error", str(e))
-                return
-
         duplex_val = self.duplex_combo.currentText()
         paper_val = self.paper_combo.currentText()
         color_val = self.color_combo.currentText()
+        is_color = ("Color" in color_val and "Black" not in color_val and "Mono" not in color_val)
+        is_grayscale = not is_color
+
         copies_val = self.copies_spin.value()
         username = self.user_input.text().strip()
         passcode = self.pass_input.text().strip()
         account = self.account_input.text().strip()
+
+        needs_cleanup = False
+        target_pdf = pdf_path
+
+        # Ensure document is converted to 100% DeviceGray or sliced as needed
+        need_temp = (is_grayscale or scope_idx != 0 or len(pages_to_print) != self.total_pages)
+        if need_temp:
+            try:
+                if HAS_FITZ and fitz is not None:
+                    doc = fitz.open(pdf_path)
+                    sliced_doc = fitz.open()
+
+                    for p in pages_to_print:
+                        p_idx = p - 1
+                        if 0 <= p_idx < doc.page_count:
+                            page = doc[p_idx]
+                            if is_grayscale:
+                                # Render page at 300 DPI in pure DeviceGray colorspace to guarantee zero color clicks
+                                pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
+                                new_page = sliced_doc.new_page(width=page.rect.width, height=page.rect.height)
+                                new_page.insert_image(page.rect, stream=pix.tobytes("jpeg"))
+                            else:
+                                sliced_doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
+
+                    doc.close()
+                    fd, tmp_out = tempfile.mkstemp(prefix="pdfapps_print_", suffix=".pdf")
+                    os.close(fd)
+                    sliced_doc.save(tmp_out, garbage=4, deflate=True)
+                    sliced_doc.close()
+                    target_pdf = tmp_out
+                    needs_cleanup = True
+                else:
+                    if scope_idx != 0 or len(pages_to_print) != self.total_pages:
+                        target_pdf = self.extract_pdf_pages_fast(pdf_path, pages_to_print)
+                        needs_cleanup = True
+            except Exception as e:
+                QMessageBox.critical(self, "Page Processing Error", f"Failed to prepare pages for printing:\n{e}")
+                return
 
         # If CUPS Mode on Linux
         if not is_direct:
@@ -1133,7 +1175,17 @@ class FujiAccountingManager(QWidget):
                     cmd.extend(["-o", "sides=one-sided"])
 
                 cmd.extend(["-o", f"media={paper_val}"])
-                cmd.extend(["-o", "ColorModel=Color" if "Color" in color_val else "ColorModel=Gray"])
+
+                if is_color:
+                    cmd.extend(["-o", "ColorModel=Color", "-o", "print-color-mode=color"])
+                else:
+                    cmd.extend([
+                        "-o", "ColorModel=Gray",
+                        "-o", "ColorModel=Grayscale",
+                        "-o", "CNColorMode=mono",
+                        "-o", "print-color-mode=monochrome",
+                    ])
+
                 if username:
                     cmd.extend(["-o", f"job-originating-user-name={username}"])
                 cmd.append(target_pdf)
@@ -1148,7 +1200,8 @@ class FujiAccountingManager(QWidget):
                 QMessageBox.critical(self, "CUPS Error", f"Failed to print via CUPS:\n{e}")
             finally:
                 if needs_cleanup and os.path.exists(target_pdf):
-                    os.remove(target_pdf)
+                    with contextlib.suppress(Exception):
+                        os.remove(target_pdf)
             return
 
         # Direct Socket Port 9100 Mode (Foxit-speed)
@@ -1170,19 +1223,20 @@ class FujiAccountingManager(QWidget):
             pjl.append(f"@PJL SET COPIES = {copies_val}")
             pjl.append(f"@PJL SET PAPER = {paper_val}")
 
-            if "Color" in color_val:
+            if is_color:
                 pjl.append("@PJL SET COLORMODE = COLOR")
                 pjl.append("@PJL SET RENDERMODE = COLOR")
             else:
                 pjl.append("@PJL SET COLORMODE = MONO")
                 pjl.append("@PJL SET RENDERMODE = GRAYSCALE")
+                pjl.append("@PJL SET DATAMODE = GRAYSCALE")
+                pjl.append("@PJL SET COLOR = OFF")
+                pjl.append("@PJL SET PROCESSCOLOR = OFF")
 
             if "Long Edge" in duplex_val:
-                pjl.append("@PJL SET DUPLEX = ON")
-                pjl.append("@PJL SET BINDING = LONGEDGE")
+                pjl.append("@PJL SET DUPLEX = ON\r\n@PJL SET BINDING = LONGEDGE")
             elif "Short Edge" in duplex_val:
-                pjl.append("@PJL SET DUPLEX = ON")
-                pjl.append("@PJL SET BINDING = SHORTEDGE")
+                pjl.append("@PJL SET DUPLEX = ON\r\n@PJL SET BINDING = SHORTEDGE")
             else:
                 pjl.append("@PJL SET DUPLEX = OFF")
 
@@ -1195,7 +1249,7 @@ class FujiAccountingManager(QWidget):
             self.print_progress.setValue(0)
             self.print_progress.setVisible(True)
 
-            self.print_thread = BackgroundPrintWorker(ip, 9100, payload, os.path.basename(pdf_path))
+            self.print_thread = BackgroundPrintWorker("socket", ip, 9100, payload, os.path.basename(pdf_path), parent=self)
             
             def on_progress(pct: int, msg: str):
                 self.print_progress.setValue(pct)
@@ -1207,7 +1261,8 @@ class FujiAccountingManager(QWidget):
                 self.status_badge.setText("Engine: Ready")
 
                 if needs_cleanup and os.path.exists(target_pdf):
-                    os.remove(target_pdf)
+                    with contextlib.suppress(Exception):
+                        os.remove(target_pdf)
 
                 if success:
                     self.save_preferences()
@@ -1233,7 +1288,8 @@ class FujiAccountingManager(QWidget):
             self.send_pdf_btn.setEnabled(True)
             self.print_progress.setVisible(False)
             if needs_cleanup and os.path.exists(target_pdf):
-                os.remove(target_pdf)
+                with contextlib.suppress(Exception):
+                    os.remove(target_pdf)
             QMessageBox.critical(self, "Print Setup Error", str(e))
 
     # -------------------------------------------------------------
