@@ -1273,7 +1273,6 @@ class _PdfPrintDialog(QDialog):
             self._cleanup_temp_slice()
 
             if success:
-                QMessageBox.information(self, "Print Succeeded", msg)
                 self.accept()
             else:
                 QMessageBox.critical(self, "Print Error", msg)
