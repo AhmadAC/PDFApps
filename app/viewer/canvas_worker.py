@@ -122,7 +122,7 @@ class _PageJob(QRunnable):
                 rz = 8192.0 / max_d
 
             mat = fitz.Matrix(rz, rz)
-            pix = page.get_pixmap(matrix=mat, alpha=False, annots=False)
+            pix = page.get_pixmap(matrix=mat, alpha=False, annots=True)
             if self._night_mode:
                 pix.invert_irect()
 
@@ -138,8 +138,8 @@ class _PageJob(QRunnable):
                     w[3] - ry0,
                     w[4],
                     w[5] if len(w) > 5 else 0,
-                    w[6] if len(w) > 6 else 0,
-                    w[7] if len(w) > 7 else 0,
+                    line_idx if (line_idx := 0) else 0,
+                    0,
                 ))
 
             words = sort_words_in_reading_order(norm_words)

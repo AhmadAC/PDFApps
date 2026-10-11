@@ -311,7 +311,7 @@ class PresentationWidget(QWidget):
             if rot:
                 mat = mat.prerotate(rot)
 
-            pix = page.get_pixmap(matrix=mat)
+            pix = page.get_pixmap(matrix=mat, annots=True)
             if pix.n != 3:
                 pix = fitz.Pixmap(fitz.csRGB, pix)
 
@@ -771,68 +771,104 @@ class PresentationWidget(QWidget):
             scale_x = page.rect.width / pw
             scale_y = page.rect.height / ph
 
-            def to_pdf_pt(pt):
-                x_pdf = (pt.x() - offset_x) * scale_x + page.rect.x0
-                y_pdf = (pt.y() - offset_y) * scale_y + page.rect.y0
-                return fitz.Point(x_pdf, y_pdf)
+            def to_pdf_coord(pt) -> tuple[float, float]:
+                x_pdf = float((pt.x() - offset_x) * scale_x + page.rect.x0)
+                y_pdf = float((pt.y() - offset_y) * scale_y + page.rect.y0)
+                return (x_pdf, y_pdf)
 
             strokes = self._overlay._strokes.get(page_idx, [])
             for stroke in strokes:
-                any_modified = True
-                pts = [to_pdf_pt(p) for p in stroke.points]
-                if len(pts) >= 2:
-                    annot = page.add_ink_annot([pts])
-                    annot.set_colors(stroke=(stroke.color.redF(), stroke.color.greenF(), stroke.color.blueF()))
-                    annot.set_border(width=max(0.5, stroke.width * scale_x))
-
-                    if stroke.kind == ToolMode.HIGHLIGHTER:
-                        annot.set_opacity(90 / 255.0)
-                    annot.update()
+                if not stroke.points:
+                    continue
+                raw_pts = [to_pdf_coord(p) for p in stroke.points]
+                clean_pts: list[tuple[float, float]] = []
+                for pt in raw_pts:
+                    if not clean_pts or abs(pt[0] - clean_pts[-1][0]) > 1e-4 or abs(pt[1] - clean_pts[-1][1]) > 1e-4:
+                        clean_pts.append(pt)
+                if len(clean_pts) == 1:
+                    clean_pts.append((clean_pts[0][0] + 0.1, clean_pts[0][1]))
+                if len(clean_pts) >= 2:
+                    try:
+                        annot = page.add_ink_annot([clean_pts])
+                        annot.set_colors(stroke=(
+                            float(stroke.color.redF()),
+                            float(stroke.color.greenF()),
+                            float(stroke.color.blueF()),
+                        ))
+                        border_w = max(1, int(round(stroke.width * scale_x)))
+                        annot.set_border(width=border_w)
+                        if stroke.kind == ToolMode.HIGHLIGHTER:
+                            annot.set_opacity(0.4)
+                            with contextlib.suppress(Exception):
+                                annot.set_blendmode(fitz.PDF_BM_Multiply)
+                        annot.update()
+                        any_modified = True
+                    except Exception as e:
+                        _log.warning("Failed to burn stroke: %s", e)
 
             text_boxes = self._overlay._text_boxes.get(page_idx, [])
             for box in text_boxes:
                 if not box.text.strip():
                     continue
-                any_modified = True
-                pdf_p1 = to_pdf_pt(box.rect.topLeft())
-                pdf_p2 = to_pdf_pt(box.rect.bottomRight())
-                pdf_rect = fitz.Rect(pdf_p1, pdf_p2)
+                try:
+                    p1_x, p1_y = to_pdf_coord(box.rect.topLeft())
+                    p2_x, p2_y = to_pdf_coord(box.rect.bottomRight())
+                    pdf_rect = fitz.Rect(p1_x, p1_y, p2_x, p2_y)
 
-                pdf_font_size = box.font_size * scale_y
+                    pdf_font_size = max(4.0, float(box.font_size * scale_y))
 
-                if box.has_cloud:
-                    bg_annot = page.add_rect_annot(pdf_rect)
-                    bg_annot.set_colors(stroke=None, fill=(1, 1, 1))
-                    bg_annot.set_opacity(102 / 255.0)
-                    bg_annot.update()
+                    if box.has_cloud:
+                        bg_annot = page.add_rect_annot(pdf_rect)
+                        bg_annot.set_colors(fill=(1, 1, 1))
+                        bg_annot.set_opacity(102 / 255.0)
+                        bg_annot.update()
 
-                text_color = (box.color.redF(), box.color.greenF(), box.color.blueF())
-                inner_rect = pdf_rect + fitz.Rect(7 * scale_x, 5 * scale_y, -7 * scale_x, -5 * scale_y)
+                    text_color = (
+                        float(box.color.redF()),
+                        float(box.color.greenF()),
+                        float(box.color.blueF()),
+                    )
+                    inner_rect = pdf_rect + fitz.Rect(7 * scale_x, 5 * scale_y, -7 * scale_x, -5 * scale_y)
 
-                if box.has_stroke:
-                    offsets = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
-                    for dx, dy in offsets:
-                        out_rect = inner_rect + fitz.Rect(dx * scale_x, dy * scale_y, dx * scale_x, dy * scale_y)
-                        page.insert_textbox(
-                            out_rect,
+                    if box.has_stroke:
+                        offsets = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+                        for dx, dy in offsets:
+                            out_rect = inner_rect + fitz.Rect(dx * scale_x, dy * scale_y, dx * scale_x, dy * scale_y)
+                            page.insert_textbox(
+                                out_rect,
+                                box.text,
+                                fontsize=pdf_font_size,
+                                color=(0, 0, 0),
+                                fontname="helv",
+                            )
+
+                    rc = page.insert_textbox(
+                        inner_rect,
+                        box.text,
+                        fontsize=pdf_font_size,
+                        color=text_color,
+                        fontname="helv",
+                    )
+                    if rc < 0:
+                        page.insert_text(
+                            fitz.Point(inner_rect.x0, inner_rect.y0 + pdf_font_size),
                             box.text,
                             fontsize=pdf_font_size,
-                            color=(0, 0, 0),
-                            fontname="helv"
+                            color=text_color,
+                            fontname="helv",
                         )
-
-                page.insert_textbox(
-                    inner_rect,
-                    box.text,
-                    fontsize=pdf_font_size,
-                    color=text_color,
-                    fontname="helv"
-                )
+                    any_modified = True
+                except Exception as e:
+                    _log.warning("Failed to burn text box: %s", e)
 
         return any_modified
 
     def closeEvent(self, event):
-        any_modified = self._burn_annotations_to_doc()
+        any_modified = False
+        try:
+            any_modified = self._burn_annotations_to_doc()
+        except Exception as e:
+            _log.exception("Error burning presentation annotations: %s", e)
 
         if isValid(self._overlay):
             self._overlay.clear_all(record_undo=False)
@@ -856,7 +892,7 @@ class PresentationWidget(QWidget):
                 if callable(save_and_reload):
                     save_and_reload(doc_to_save, target_page=self._current)
             except Exception as e:
-                _log.error("Failed to save presentation annotations: %s", e)
+                _log.exception("Failed to save presentation annotations to viewer: %s", e)
             self._doc = None  # Handed off to viewer
         else:
             if self._doc is not None:

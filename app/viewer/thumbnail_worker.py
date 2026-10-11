@@ -160,7 +160,7 @@ class ThumbnailWorker(QThread):
                     mat = fitz.Matrix(zoom, zoom)
                     if rot:
                         mat = mat.prerotate(rot)
-                    pix = page.get_pixmap(matrix=mat, alpha=False, annots=False)
+                    pix = page.get_pixmap(matrix=mat, alpha=False, annots=True)
                     if pix.n != 3:
                         pix = fitz.Pixmap(fitz.csRGB, pix)
 
