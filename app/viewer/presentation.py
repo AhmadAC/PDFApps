@@ -1,10 +1,13 @@
 # app/viewer/presentation.py
 """PDFApps – Presentation mode: fullscreen single-page viewer with page transitions and auto-advance."""
 
+from __future__ import annotations
+
 import contextlib
 import logging
 import re
 import time
+from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtGui import QColor, QPainter, QPixmap, QImage, QKeySequence, QShortcut
@@ -36,8 +39,19 @@ class PresentationWidget(QWidget):
     Annotations are session-scoped — kept per page while the window lives,
     discarded on close."""
 
-    def __init__(self, path: str, password: str, start_page: int,
-                 total_pages: int, dark_mode: bool = True, viewer=None):
+    _viewer: Any
+
+    def __init__(
+        self,
+        path: str,
+        password: str,
+        start_page: int,
+        total_pages: int,
+        dark_mode: bool = True,
+        viewer: Any = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._path = path
@@ -49,7 +63,7 @@ class PresentationWidget(QWidget):
         self._ready = False
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
-        self._viewer = viewer
+        self._viewer: Any = viewer
 
         # Zoom and Pan state
         self._zoom_factor: float = 1.0
@@ -58,6 +72,41 @@ class PresentationWidget(QWidget):
         self._is_panning = False
         self._pan_start_pos = QPoint()
         self._pan_start_offset = QPoint()
+
+        # Document geometry & current view state from viewer
+        self._page_rotations: dict[int, int] = {}
+        self._page_crops: dict[int, tuple[float, float, float, float]] = {}
+        self._initial_scroll_pt_y: float | None = None
+        self._initial_scroll_pt_x: float | None = None
+        self._fit_width_mode: bool = True
+
+        if self._viewer is not None:
+            canvas = getattr(self._viewer, "_canvas", None)
+            sb_scroll = getattr(self._viewer, "_canvas_scroll", None)
+            if canvas is not None:
+                self._page_rotations = dict(getattr(canvas, "_page_rotations", {}))
+                self._page_crops = dict(getattr(canvas, "_page_crops", {}))
+                self._zoom_factor = getattr(canvas, "_zoom_factor", 1.0) or 1.0
+
+                entries = getattr(canvas, "_entries", [])
+                if sb_scroll is not None and 0 <= self._current < len(entries):
+                    entry = entries[self._current]
+                    vp = sb_scroll.viewport()
+                    vp_w = float(vp.width()) if vp and vp.width() > 0 else 1.0
+                    vp_h = float(vp.height()) if vp and vp.height() > 0 else 1.0
+
+                    self._fit_width_mode = (entry.h > vp_h) or (entry.w >= vp_w * 0.85)
+
+                    sb_v = sb_scroll.verticalScrollBar()
+                    sb_val = sb_v.value() if sb_v else 0
+                    c_zoom = getattr(canvas, "_zoom", 1.0) or 1.0
+                    dy = max(0, sb_val - entry.y_off)
+                    self._initial_scroll_pt_y = dy / c_zoom
+
+                    sb_h = sb_scroll.horizontalScrollBar()
+                    sb_h_val = sb_h.value() if sb_h else 0
+                    dx = max(0, sb_h_val - canvas.page_x_offset(entry))
+                    self._initial_scroll_pt_x = dx / c_zoom
 
         # Transitions state
         self._trans_style = None
@@ -146,9 +195,6 @@ class PresentationWidget(QWidget):
 
     def _zoom_out(self):
         self._zoom_factor = max(0.4, round(self._zoom_factor / 1.25, 3))
-        if self._zoom_factor <= 1.0:
-            self._pan_x = 0
-            self._pan_y = 0
         self._render(transition=False)
 
     def _zoom_reset(self):
@@ -163,12 +209,20 @@ class PresentationWidget(QWidget):
         dpr = self._pixmap.devicePixelRatio() or 1.0
         ph = self._pixmap.height() / dpr
         sh = float(self.height())
-        max_pan = max(0.0, (ph - sh) / 2.0) + (sh * 0.35 if ph > sh else sh * 0.45)
 
-        if up:
-            self._pan_y = int(round(min(max_pan, self._pan_y + amount)))
+        if ph <= sh:
+            max_pan = max(0.0, (sh - ph) / 2.0)
+            if up:
+                self._pan_y = int(round(min(max_pan, self._pan_y + amount)))
+            else:
+                self._pan_y = int(round(max(-max_pan, self._pan_y - amount)))
         else:
-            self._pan_y = int(round(max(-max_pan, self._pan_y - amount)))
+            min_pan_y = sh - ph
+            max_pan_y = 0.0
+            if up:
+                self._pan_y = int(round(min(max_pan_y, self._pan_y + amount)))
+            else:
+                self._pan_y = int(round(max(min_pan_y, self._pan_y - amount)))
 
         self.update()
 
@@ -219,19 +273,45 @@ class PresentationWidget(QWidget):
                 self._pixmap = None
                 return
             page = self._doc[self._current]
+
+            crop = self._page_crops.get(self._current)
+            if crop:
+                crop_rect = fitz.Rect(crop) & page.mediabox
+                if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                    page.set_cropbox(crop_rect)
+
+            rot = self._page_rotations.get(self._current, 0) % 360
+
             screen = self.screen() or QApplication.primaryScreen()
             geom = screen.geometry()
             dpr = screen.devicePixelRatio() or 1.0
-            sw, sh = geom.width(), geom.height()
-            base_zoom = min(sw / page.rect.width, sh / page.rect.height)
+            sw, sh = float(geom.width()), float(geom.height())
+
+            eff_w = page.rect.height if rot in (90, 270) else page.rect.width
+            eff_h = page.rect.width if rot in (90, 270) else page.rect.height
+            eff_w = max(1.0, eff_w)
+            eff_h = max(1.0, eff_h)
+
+            fit_width_zoom = sw / eff_w
+            fit_height_zoom = sh / eff_h
+
+            if getattr(self, "_fit_width_mode", True) or (eff_h >= eff_w) or (eff_h * fit_width_zoom > sh):
+                base_zoom = fit_width_zoom
+            else:
+                base_zoom = min(fit_width_zoom, fit_height_zoom)
+
             zoom = base_zoom * self._zoom_factor
             rz = zoom * dpr
 
-            max_d = max(page.rect.width, page.rect.height)
+            max_d = max(eff_w, eff_h)
             if max_d * rz > 8192:
                 rz = 8192.0 / max_d
 
-            pix = page.get_pixmap(matrix=fitz.Matrix(rz, rz))
+            mat = fitz.Matrix(rz, rz)
+            if rot:
+                mat = mat.prerotate(rot)
+
+            pix = page.get_pixmap(matrix=mat)
             if pix.n != 3:
                 pix = fitz.Pixmap(fitz.csRGB, pix)
 
@@ -240,6 +320,25 @@ class PresentationWidget(QWidget):
             qp = QPixmap.fromImage(qi)
             qp.setDevicePixelRatio(dpr)
             self._pixmap = qp
+
+            pw = qp.width() / dpr
+            ph = qp.height() / dpr
+
+            if not transition and self._initial_scroll_pt_y is not None:
+                init_dy = self._initial_scroll_pt_y * zoom
+                self._pan_y = -int(round(init_dy))
+                self._initial_scroll_pt_y = None
+                if self._initial_scroll_pt_x is not None:
+                    init_dx = self._initial_scroll_pt_x * zoom
+                    self._pan_x = -int(round(init_dx))
+                    self._initial_scroll_pt_x = None
+
+            if ph > sh:
+                min_pan_y = sh - ph
+                max_pan_y = 0.0
+                self._pan_y = int(round(max(min_pan_y, min(max_pan_y, float(self._pan_y)))))
+            else:
+                self._pan_y = 0
 
             # Check /Dur for auto-advance
             val_dur = self._doc.xref_get_key(page.xref, "Dur")
@@ -364,8 +463,9 @@ class PresentationWidget(QWidget):
             dpr = pixmap.devicePixelRatio() or 1.0
             pw = pixmap.width() / dpr
             ph = pixmap.height() / dpr
-            x = (self.width() - pw) / 2 + self._pan_x
-            y = (self.height() - ph) / 2 + self._pan_y
+            x = (self.width() - pw) / 2.0 + self._pan_x
+            base_y = (self.height() - ph) / 2.0 if ph <= self.height() else 0.0
+            y = base_y + self._pan_y
 
             t = self._trans_progress
             prev_pixmap = self._prev_pixmap
@@ -373,8 +473,9 @@ class PresentationWidget(QWidget):
                 old_dpr = prev_pixmap.devicePixelRatio() or 1.0
                 old_w = prev_pixmap.width() / old_dpr
                 old_h = prev_pixmap.height() / old_dpr
-                old_x = (self.width() - old_w) / 2
-                old_y = (self.height() - old_h) / 2
+                old_x = (self.width() - old_w) / 2.0
+                old_base_y = (self.height() - old_h) / 2.0 if old_h <= self.height() else 0.0
+                old_y = old_base_y
 
                 style = self._trans_style
                 if style == "Push":
@@ -524,11 +625,27 @@ class PresentationWidget(QWidget):
 
         if key == Qt.Key.Key_Escape:
             self.close()
-        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Space, Qt.Key.Key_PageDown):
+        elif key == Qt.Key.Key_Right:
             if self._current < self._total - 1:
                 self._go_to_page(self._current + 1)
-        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
+        elif key in (Qt.Key.Key_Space, Qt.Key.Key_PageDown):
+            dpr = self._pixmap.devicePixelRatio() or 1.0 if self._pixmap else 1.0
+            ph = self._pixmap.height() / dpr if self._pixmap else 0.0
+            sh = float(self.height())
+            if ph > sh and self._pan_y > (sh - ph) + 10:
+                self._scroll_page(up=False, amount=sh * 0.8)
+            elif self._current < self._total - 1:
+                self._go_to_page(self._current + 1)
+        elif key == Qt.Key.Key_Left:
             if self._current > 0:
+                self._go_to_page(self._current - 1)
+        elif key in (Qt.Key.Key_Backspace, Qt.Key.Key_PageUp):
+            dpr = self._pixmap.devicePixelRatio() or 1.0 if self._pixmap else 1.0
+            ph = self._pixmap.height() / dpr if self._pixmap else 0.0
+            sh = float(self.height())
+            if ph > sh and self._pan_y < -10:
+                self._scroll_page(up=True, amount=sh * 0.8)
+            elif self._current > 0:
                 self._go_to_page(self._current - 1)
         elif key == Qt.Key.Key_Home:
             self._go_to_page(0)
@@ -538,7 +655,7 @@ class PresentationWidget(QWidget):
     def mousePressEvent(self, e):
         if (e.button() == Qt.MouseButton.MiddleButton or
                 (e.button() == Qt.MouseButton.LeftButton and
-                 self._overlay.tool() == int(ToolMode.POINTER) and self._zoom_factor > 1.0)):
+                 self._overlay.tool() == int(ToolMode.POINTER) and (self._zoom_factor > 1.0 or (self._pixmap and self._pixmap.height() / (self._pixmap.devicePixelRatio() or 1.0) > self.height())))):
             self._is_panning = True
             self._pan_start_pos = e.position().toPoint()
             self._pan_start_offset = QPoint(int(self._pan_x), int(self._pan_y))
@@ -552,7 +669,14 @@ class PresentationWidget(QWidget):
         if self._is_panning:
             delta = e.position().toPoint() - self._pan_start_pos
             self._pan_x = int(self._pan_start_offset.x() + delta.x())
-            self._pan_y = int(self._pan_start_offset.y() + delta.y())
+            new_y = self._pan_start_offset.y() + delta.y()
+            if self._pixmap:
+                dpr = self._pixmap.devicePixelRatio() or 1.0
+                ph = self._pixmap.height() / dpr
+                sh = float(self.height())
+                if ph > sh:
+                    new_y = max(sh - ph, min(0.0, float(new_y)))
+            self._pan_y = int(new_y)
             self.update()
             e.accept()
             return
@@ -586,48 +710,72 @@ class PresentationWidget(QWidget):
         """Burn overlay strokes and text boxes into the PDF document."""
         if not self._doc:
             return False
-            
+
         any_modified = False
         import fitz
-        
+
         pages_with_annots = set(self._overlay._strokes.keys()) | set(self._overlay._text_boxes.keys())
         if not pages_with_annots:
             return False
-            
+
+        screen = self.screen() or QApplication.primaryScreen()
+        geom = screen.geometry()
+        dpr = screen.devicePixelRatio() or 1.0
+        sw, sh = float(geom.width()), float(geom.height())
+
         for page_idx in pages_with_annots:
             if page_idx < 0 or page_idx >= self._doc.page_count:
                 continue
-                
+
             page = self._doc[page_idx]
-            screen = self.screen() or QApplication.primaryScreen()
-            dpr = screen.devicePixelRatio() or 1.0
-            geom = screen.geometry()
-            sw, sh = geom.width(), geom.height()
-            
-            base_zoom = min(sw / page.rect.width, sh / page.rect.height)
+
+            crop = self._page_crops.get(page_idx)
+            if crop:
+                crop_rect = fitz.Rect(crop) & page.mediabox
+                if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
+                    page.set_cropbox(crop_rect)
+
+            rot = self._page_rotations.get(page_idx, 0) % 360
+
+            eff_w = page.rect.height if rot in (90, 270) else page.rect.width
+            eff_h = page.rect.width if rot in (90, 270) else page.rect.height
+            eff_w = max(1.0, eff_w)
+            eff_h = max(1.0, eff_h)
+
+            fit_width_zoom = sw / eff_w
+            fit_height_zoom = sh / eff_h
+
+            if getattr(self, "_fit_width_mode", True) or (eff_h >= eff_w) or (eff_h * fit_width_zoom > sh):
+                base_zoom = fit_width_zoom
+            else:
+                base_zoom = min(fit_width_zoom, fit_height_zoom)
+
             zoom = base_zoom * self._zoom_factor
             rz = zoom * dpr
-            
-            max_d = max(page.rect.width, page.rect.height)
+
+            max_d = max(eff_w, eff_h)
             if max_d * rz > 8192:
                 rz = 8192.0 / max_d
-                
+
             mat = fitz.Matrix(rz, rz)
+            if rot:
+                mat = mat.prerotate(rot)
             ir = (page.rect * mat).round()
             pw = max(1.0, ir.width / dpr)
             ph = max(1.0, ir.height / dpr)
-            
-            offset_x = (self.width() - pw) / 2 + self._pan_x
-            offset_y = (self.height() - ph) / 2 + self._pan_y
-            
+
+            offset_x = (self.width() - pw) / 2.0 + self._pan_x
+            base_y = (self.height() - ph) / 2.0 if ph <= self.height() else 0.0
+            offset_y = base_y + self._pan_y
+
             scale_x = page.rect.width / pw
             scale_y = page.rect.height / ph
-            
+
             def to_pdf_pt(pt):
                 x_pdf = (pt.x() - offset_x) * scale_x + page.rect.x0
                 y_pdf = (pt.y() - offset_y) * scale_y + page.rect.y0
                 return fitz.Point(x_pdf, y_pdf)
-                
+
             strokes = self._overlay._strokes.get(page_idx, [])
             for stroke in strokes:
                 any_modified = True
@@ -636,11 +784,11 @@ class PresentationWidget(QWidget):
                     annot = page.add_ink_annot([pts])
                     annot.set_colors(stroke=(stroke.color.redF(), stroke.color.greenF(), stroke.color.blueF()))
                     annot.set_border(width=max(0.5, stroke.width * scale_x))
-                    
+
                     if stroke.kind == ToolMode.HIGHLIGHTER:
                         annot.set_opacity(90 / 255.0)
                     annot.update()
-                    
+
             text_boxes = self._overlay._text_boxes.get(page_idx, [])
             for box in text_boxes:
                 if not box.text.strip():
@@ -649,18 +797,18 @@ class PresentationWidget(QWidget):
                 pdf_p1 = to_pdf_pt(box.rect.topLeft())
                 pdf_p2 = to_pdf_pt(box.rect.bottomRight())
                 pdf_rect = fitz.Rect(pdf_p1, pdf_p2)
-                
+
                 pdf_font_size = box.font_size * scale_y
-                
+
                 if box.has_cloud:
                     bg_annot = page.add_rect_annot(pdf_rect)
                     bg_annot.set_colors(stroke=None, fill=(1, 1, 1))
                     bg_annot.set_opacity(102 / 255.0)
                     bg_annot.update()
-                    
+
                 text_color = (box.color.redF(), box.color.greenF(), box.color.blueF())
                 inner_rect = pdf_rect + fitz.Rect(7 * scale_x, 5 * scale_y, -7 * scale_x, -5 * scale_y)
-                
+
                 if box.has_stroke:
                     offsets = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
                     for dx, dy in offsets:
@@ -672,7 +820,7 @@ class PresentationWidget(QWidget):
                             color=(0, 0, 0),
                             fontname="helv"
                         )
-                
+
                 page.insert_textbox(
                     inner_rect,
                     box.text,
@@ -680,12 +828,12 @@ class PresentationWidget(QWidget):
                     color=text_color,
                     fontname="helv"
                 )
-                
+
         return any_modified
 
     def closeEvent(self, event):
         any_modified = self._burn_annotations_to_doc()
-        
+
         if isValid(self._overlay):
             self._overlay.clear_all(record_undo=False)
         for tmr in (
@@ -696,21 +844,24 @@ class PresentationWidget(QWidget):
         ):
             if tmr is not None and isValid(tmr):
                 tmr.stop()
-                
+
         doc_to_save = None
         if any_modified and self._doc is not None:
             doc_to_save = self._doc
-            
-        if doc_to_save and getattr(self, "_viewer", None):
+
+        viewer: Any = getattr(self, "_viewer", None)
+        if doc_to_save and viewer is not None:
             try:
-                self._viewer._save_and_reload(doc_to_save, target_page=self._current)
+                save_and_reload = getattr(viewer, "_save_and_reload", None)
+                if callable(save_and_reload):
+                    save_and_reload(doc_to_save, target_page=self._current)
             except Exception as e:
-                _log.error(f"Failed to save presentation annotations: {e}")
-            self._doc = None  # Handed off
+                _log.error("Failed to save presentation annotations: %s", e)
+            self._doc = None  # Handed off to viewer
         else:
             if self._doc is not None:
                 with contextlib.suppress(Exception):
                     self._doc.close()
                 self._doc = None
-                
+
         super().closeEvent(event)

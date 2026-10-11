@@ -869,8 +869,13 @@ class WindowActionsMixin(_Base):
         start_page = canvas.page_at_y(sb.value()) if canvas.page_count() > 0 and sb else 0
         try:
             pres = PresentationWidget(
-                viewer._current_path, getattr(viewer, "_pdf_password", ""),
-                start_page, canvas.page_count(), dark_mode=self._dark_mode, viewer=viewer)
+                viewer._current_path,
+                getattr(viewer, "_pdf_password", ""),
+                start_page,
+                canvas.page_count(),
+                dark_mode=self._dark_mode,
+                viewer=viewer,
+            )
         except Exception as e:
             show_error(self, e)
             return
