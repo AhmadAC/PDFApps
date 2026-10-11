@@ -42,20 +42,38 @@ from app.styles import STYLE, STYLE_LIGHT
 from app.utils import _make_palette, setup_logging
 
 
+def _ensure_icons():
+    """Ensure icon_512.png and icon.ico are generated and in sync with pdfapps.svg."""
+    ico_path = PROJECT_ROOT / "icon.ico"
+    png_path = PROJECT_ROOT / "icon_512.png"
+    svg_path = PROJECT_ROOT / "pdfapps.svg"
+
+    if not svg_path.is_file():
+        return
+
+    needs_generation = False
+    if not ico_path.is_file() or not png_path.is_file():
+        needs_generation = True
+    else:
+        try:
+            svg_mtime = svg_path.stat().st_mtime
+            if svg_mtime > ico_path.stat().st_mtime or svg_mtime > png_path.stat().st_mtime:
+                needs_generation = True
+        except Exception:
+            pass
+
+    if needs_generation:
+        try:
+            from generate_icons import generate_all_icons
+            generate_all_icons(PROJECT_ROOT)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Icon auto-generation skipped: %s", exc)
+
+
 def _excepthook(exc_type, exc_value, exc_traceback):
     """Route uncaught exceptions through the logging framework so
     PyInstaller --windowed builds still surface crashes in the log
     file instead of silently swallowing them on closed stderr.
-
-    Without this hook (R7 I2), tracebacks raised from queued Qt slots
-    in console=False builds (Windows/macOS PyInstaller --windowed) are
-    written to a stderr stream wired to ``NUL`` / ``/dev/null`` and
-    never reach ``pdfapps.log`` either. The default :data:`sys.excepthook`
-    only prints to stderr, so the user sees a silent "nothing happened"
-    while we have zero diagnostic trail.
-
-    KeyboardInterrupt keeps the default behavior so Ctrl-C in a console
-    build still exits cleanly without spamming the log.
     """
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
@@ -64,9 +82,6 @@ def _excepthook(exc_type, exc_value, exc_traceback):
         "Uncaught exception",
         exc_info=(exc_type, exc_value, exc_traceback),
     )
-    # Best-effort: surface a user-facing dialog so the app doesn't appear
-    # to silently hang after a slot blew up. Guarded against the (rare)
-    # case where the QApplication is gone or QMessageBox itself raises.
     try:
         from PySide6.QtWidgets import QApplication, QMessageBox
         if QApplication.instance() is not None:
@@ -89,16 +104,7 @@ def _load_dark_pref() -> bool:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the PDFApps command-line.
-
-    Accepting *multiple* positional PDF paths fixes R8-M1: previously
-    only ``sys.argv[1]`` was loaded, so dragging-and-dropping more than
-    one file onto the executable (or "Open With" multi-selection on
-    Windows / macOS) silently dropped every file after the first.
-    ``argparse`` also brings standard ``--help`` / ``--version`` for
-    free; the old hand-rolled parser treated ``-h`` as an invalid path
-    and launched into the welcome screen.
-    """
+    """Parse the PDFApps command-line."""
     parser = argparse.ArgumentParser(
         prog="pdfapps",
         description="PDFApps — fast desktop PDF editor.",
@@ -128,21 +134,9 @@ def main():
 
     setup_logging()
     print("[PDFApps] Initializing application...")
-    # Install the global excepthook AFTER setup_logging (so the rotating
-    # file handler is in place) and BEFORE QApplication so any crash in
-    # window construction is already covered.
     sys.excepthook = _excepthook
-    # Parse BEFORE QApplication so --help / --version exit cleanly
-    # without bringing up the Qt event loop (and the splash screen).
     args = _parse_args(sys.argv[1:])
 
-    # Single-instance forwarding: if PDFApps is already running and the
-    # user double-clicked a PDF (or invoked us with one or more files),
-    # ship the paths over QLocalSocket and exit. The running instance
-    # opens them as new tabs and raises its window — much faster and
-    # less RAM than a second full process. Must happen BEFORE
-    # QApplication() so we never pay the splash/startup cost in the
-    # second invocation.
     pdf_files = [
         os.path.abspath(f) for f in (args.files or [])
         if os.path.isfile(f) and f.lower().endswith(".pdf")
@@ -150,19 +144,21 @@ def main():
     if pdf_files:
         from app.single_instance import send_to_existing
         if send_to_existing(pdf_files):
-            # Paths delivered to the existing instance — quit silently.
             sys.exit(0)
 
-    # Disable Qt's default 256 MB memory allocation limit for image readers,
-    # preventing crashes and "Rejecting image as it exceeds current allocation limit" errors.
+    # Disable Qt's default 256 MB memory allocation limit for image readers
     QImageReader.setAllocationLimit(0)
 
     app = QApplication(sys.argv)
 
+    # Synchronize icon assets from pdfapps.svg if missing or modified
+    _ensure_icons()
+
     # Set application & taskbar icon
     ico_path = PROJECT_ROOT / "icon.ico"
     png_path = PROJECT_ROOT / "icon_512.png"
-    icon_file = ico_path if ico_path.is_file() else (png_path if png_path.is_file() else None)
+    svg_path = PROJECT_ROOT / "pdfapps.svg"
+    icon_file = ico_path if ico_path.is_file() else (png_path if png_path.is_file() else (svg_path if svg_path.is_file() else None))
     if icon_file:
         app_icon = QIcon(str(icon_file))
         app.setWindowIcon(app_icon)
@@ -179,10 +175,6 @@ def main():
         window.setWindowIcon(QIcon(str(icon_file)))
     window.showMaximized()
 
-    # Open PDFs passed as arguments (e.g.: double-click on a .pdf file
-    # or multi-select "Open With" on Windows/macOS). Each valid path
-    # opens through _load_and_track so it lands in a new tab and is
-    # appended to the recents list, matching drag-and-drop semantics.
     for pdf_arg in args.files:
         abs_arg = os.path.abspath(pdf_arg)
         if os.path.isfile(abs_arg) and abs_arg.lower().endswith(".pdf"):

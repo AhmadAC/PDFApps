@@ -2,7 +2,7 @@
 from the project's icon_512.png and pdfapps.svg.
 
 Microsoft Store / sideload requires PNGs at specific resolutions.
-This script produces them all from the existing 512×512 master so
+This script produces them all from the master SVG / 512×512 master so
 the package only carries ONE source-of-truth icon.
 
 Usage (from project root):
@@ -12,6 +12,7 @@ Output: msix/Assets/*.png at the resolutions listed below.
 """
 import os
 import sys
+from pathlib import Path
 
 try:
     from PIL import Image
@@ -31,54 +32,60 @@ TARGETS = [
     ("SplashScreen.png",      620, 300, False),
 ]
 
-# Target-size variants of Square44x44Logo. Windows shell picks the best
-# match for each rendering context: small (16) for tooltip/treeview,
-# 24-40 for list view, 48 for medium desktop icons, 96 for large desktop
-# icons, 256 for extra-large/jumbo desktop icons. Without these, Windows
-# stretches the 44×44 base PNG, which looks pixelated at 256×256 — the
-# default desktop "Large icons" size for PDF file association icons.
 TARGETSIZE_VARIANTS = [16, 24, 32, 48, 96, 256]
 
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(here)
-    src = os.path.join(project_root, "icon_512.png")
-    if not os.path.isfile(src):
+    project_root = Path(here).parent
+    src = project_root / "icon_512.png"
+    svg_src = project_root / "pdfapps.svg"
+
+    # If icon_512.png is absent or older than pdfapps.svg, regenerate it
+    if svg_src.is_file():
+        need_rebuild = not src.is_file()
+        if not need_rebuild:
+            try:
+                need_rebuild = svg_src.stat().st_mtime > src.stat().st_mtime
+            except Exception:
+                pass
+        if need_rebuild:
+            try:
+                if str(project_root) not in sys.path:
+                    sys.path.insert(0, str(project_root))
+                from generate_icons import generate_all_icons
+                generate_all_icons(project_root)
+            except Exception as exc:
+                print(f"Warning: could not run generate_all_icons: {exc}")
+
+    if not src.is_file():
         print(f"error: {src} not found")
         sys.exit(2)
 
     assets_dir = os.path.join(here, "Assets")
     os.makedirs(assets_dir, exist_ok=True)
 
-    master = Image.open(src).convert("RGBA")
+    master = Image.open(str(src)).convert("RGBA")
 
     for name, w, h, _ in TARGETS:
         out = os.path.join(assets_dir, name)
         if w == h:
-            # Square — fit master, pad transparent if needed (master is
-            # already square so this is a straight resize).
             img = master.resize((w, h), Image.LANCZOS)
         else:
-            # Wide / splash — center the master on a transparent canvas.
             canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             inner = min(w, h)
             scaled = master.resize((inner, inner), Image.LANCZOS)
-            canvas.paste(scaled, ((w - inner) // 2, (h - inner) // 2),
-                         scaled)
+            canvas.paste(scaled, ((w - inner) // 2, (h - inner) // 2), scaled)
             img = canvas
         img.save(out, "PNG", optimize=True)
-        print(f"wrote {os.path.relpath(out, project_root)} ({w}x{h})")
+        print(f"wrote {os.path.relpath(out, str(project_root))} ({w}x{h})")
 
-    # Generate Square44x44Logo.targetsize-N.png variants so Windows can
-    # render the PDF file association icon at the right resolution on
-    # desktop and in Explorer instead of stretching the 44×44 base.
     for size in TARGETSIZE_VARIANTS:
         name = f"Square44x44Logo.targetsize-{size}.png"
         out = os.path.join(assets_dir, name)
         img = master.resize((size, size), Image.LANCZOS)
         img.save(out, "PNG", optimize=True)
-        print(f"wrote {os.path.relpath(out, project_root)} ({size}x{size})")
+        print(f"wrote {os.path.relpath(out, str(project_root))} ({size}x{size})")
 
     total = len(TARGETS) + len(TARGETSIZE_VARIANTS)
     print(f"\n[OK] {total} MSIX assets generated in {assets_dir}")

@@ -269,7 +269,7 @@ QStatusBar {{ background: {BG_SIDE}; border-top: 1px solid {BORDER};
                    min-width: 54px; }}
 #viewer_nav_btn  {{ background: #333333; border: 1px solid #555555;
                    border-radius: 6px; color: {TEXT_PRI};
-                   min-width: 30px; min-height: 30px; padding: 0; }}
+                   padding: 0; margin: 0; }}
 #viewer_nav_btn:hover   {{ background: #4F5254; border-color: {ACCENT}; color: #FFFFFF; }}
 #viewer_nav_btn:pressed {{ background: {ACCENT}; color: #FFFFFF; }}
 #viewer_nav_btn:disabled {{ background: #242424; border-color: #333333; color: #555555; }}
@@ -536,10 +536,9 @@ QStatusBar {{ background: {_LS}; border-top: 1px solid {_LO};
 #viewer_header {{ background: {_LC}; border-bottom: 1px solid {_LO}; }}
 #viewer_title  {{ font-size: 10.5pt; font-weight: 600; color: {_LP}; background: transparent; }}
 #viewer_page_lbl {{ font-size: 10pt; color: {_LQ}; background: transparent; min-width: 54px; }}
-
 #viewer_nav_btn  {{ background: #FFFFFF; border: 1px solid #CBD5E1;
                    border-radius: 6px; color: {_LP};
-                   min-width: 30px; min-height: 30px; padding: 0; }}
+                   padding: 0; margin: 0; }}
 #viewer_nav_btn:hover   {{ background: #E2E8F0; border-color: {_LA}; color: {_LP}; }}
 #viewer_nav_btn:pressed {{ background: #CBD5E1; }}
 #viewer_nav_btn:disabled {{ background: {_LN}; border-color: {_LO}; color: {_LO}; }}

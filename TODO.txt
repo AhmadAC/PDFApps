@@ -3,3 +3,4 @@ refactor
 # app/viewer/panel_search_print.py
 crop
 Convert
+window actions

@@ -870,7 +870,7 @@ class WindowActionsMixin(_Base):
         try:
             pres = PresentationWidget(
                 viewer._current_path, getattr(viewer, "_pdf_password", ""),
-                start_page, canvas.page_count(), dark_mode=self._dark_mode)
+                start_page, canvas.page_count(), dark_mode=self._dark_mode, viewer=viewer)
         except Exception as e:
             show_error(self, e)
             return

@@ -37,7 +37,7 @@ class PresentationWidget(QWidget):
     discarded on close."""
 
     def __init__(self, path: str, password: str, start_page: int,
-                 total_pages: int, dark_mode: bool = True):
+                 total_pages: int, dark_mode: bool = True, viewer=None):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._path = path
@@ -49,6 +49,7 @@ class PresentationWidget(QWidget):
         self._ready = False
         self._dark_mode = bool(dark_mode)
         self._hud_last_shown_ms = 0.0
+        self._viewer = viewer
 
         # Zoom and Pan state
         self._zoom_factor: float = 1.0
@@ -581,7 +582,110 @@ class PresentationWidget(QWidget):
         self._update_counter()
         QTimer.singleShot(0, lambda: self._render(transition=False))
 
+    def _burn_annotations_to_doc(self) -> bool:
+        """Burn overlay strokes and text boxes into the PDF document."""
+        if not self._doc:
+            return False
+            
+        any_modified = False
+        import fitz
+        
+        pages_with_annots = set(self._overlay._strokes.keys()) | set(self._overlay._text_boxes.keys())
+        if not pages_with_annots:
+            return False
+            
+        for page_idx in pages_with_annots:
+            if page_idx < 0 or page_idx >= self._doc.page_count:
+                continue
+                
+            page = self._doc[page_idx]
+            screen = self.screen() or QApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() or 1.0
+            geom = screen.geometry()
+            sw, sh = geom.width(), geom.height()
+            
+            base_zoom = min(sw / page.rect.width, sh / page.rect.height)
+            zoom = base_zoom * self._zoom_factor
+            rz = zoom * dpr
+            
+            max_d = max(page.rect.width, page.rect.height)
+            if max_d * rz > 8192:
+                rz = 8192.0 / max_d
+                
+            mat = fitz.Matrix(rz, rz)
+            ir = (page.rect * mat).round()
+            pw = max(1.0, ir.width / dpr)
+            ph = max(1.0, ir.height / dpr)
+            
+            offset_x = (self.width() - pw) / 2 + self._pan_x
+            offset_y = (self.height() - ph) / 2 + self._pan_y
+            
+            scale_x = page.rect.width / pw
+            scale_y = page.rect.height / ph
+            
+            def to_pdf_pt(pt):
+                x_pdf = (pt.x() - offset_x) * scale_x + page.rect.x0
+                y_pdf = (pt.y() - offset_y) * scale_y + page.rect.y0
+                return fitz.Point(x_pdf, y_pdf)
+                
+            strokes = self._overlay._strokes.get(page_idx, [])
+            for stroke in strokes:
+                any_modified = True
+                pts = [to_pdf_pt(p) for p in stroke.points]
+                if len(pts) >= 2:
+                    annot = page.add_ink_annot([pts])
+                    annot.set_colors(stroke=(stroke.color.redF(), stroke.color.greenF(), stroke.color.blueF()))
+                    annot.set_border(width=max(0.5, stroke.width * scale_x))
+                    
+                    if stroke.kind == ToolMode.HIGHLIGHTER:
+                        annot.set_opacity(90 / 255.0)
+                    annot.update()
+                    
+            text_boxes = self._overlay._text_boxes.get(page_idx, [])
+            for box in text_boxes:
+                if not box.text.strip():
+                    continue
+                any_modified = True
+                pdf_p1 = to_pdf_pt(box.rect.topLeft())
+                pdf_p2 = to_pdf_pt(box.rect.bottomRight())
+                pdf_rect = fitz.Rect(pdf_p1, pdf_p2)
+                
+                pdf_font_size = box.font_size * scale_y
+                
+                if box.has_cloud:
+                    bg_annot = page.add_rect_annot(pdf_rect)
+                    bg_annot.set_colors(stroke=None, fill=(1, 1, 1))
+                    bg_annot.set_opacity(102 / 255.0)
+                    bg_annot.update()
+                    
+                text_color = (box.color.redF(), box.color.greenF(), box.color.blueF())
+                inner_rect = pdf_rect + fitz.Rect(7 * scale_x, 5 * scale_y, -7 * scale_x, -5 * scale_y)
+                
+                if box.has_stroke:
+                    offsets = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]
+                    for dx, dy in offsets:
+                        out_rect = inner_rect + fitz.Rect(dx * scale_x, dy * scale_y, dx * scale_x, dy * scale_y)
+                        page.insert_textbox(
+                            out_rect,
+                            box.text,
+                            fontsize=pdf_font_size,
+                            color=(0, 0, 0),
+                            fontname="helv"
+                        )
+                
+                page.insert_textbox(
+                    inner_rect,
+                    box.text,
+                    fontsize=pdf_font_size,
+                    color=text_color,
+                    fontname="helv"
+                )
+                
+        return any_modified
+
     def closeEvent(self, event):
+        any_modified = self._burn_annotations_to_doc()
+        
         if isValid(self._overlay):
             self._overlay.clear_all(record_undo=False)
         for tmr in (
@@ -592,8 +696,21 @@ class PresentationWidget(QWidget):
         ):
             if tmr is not None and isValid(tmr):
                 tmr.stop()
-        if self._doc is not None:
-            with contextlib.suppress(Exception):
-                self._doc.close()
-            self._doc = None
+                
+        doc_to_save = None
+        if any_modified and self._doc is not None:
+            doc_to_save = self._doc
+            
+        if doc_to_save and getattr(self, "_viewer", None):
+            try:
+                self._viewer._save_and_reload(doc_to_save, target_page=self._current)
+            except Exception as e:
+                _log.error(f"Failed to save presentation annotations: {e}")
+            self._doc = None  # Handed off
+        else:
+            if self._doc is not None:
+                with contextlib.suppress(Exception):
+                    self._doc.close()
+                self._doc = None
+                
         super().closeEvent(event)
