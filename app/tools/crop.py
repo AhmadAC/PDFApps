@@ -704,15 +704,29 @@ class TabCortar(BasePage):
                 if idx < 0 or idx >= doc.page_count:
                     continue
                 page = doc[idx]
+                user_rot = viewer._canvas._page_rotations.get(idx, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
+                total_rot = (page.rotation + user_rot) % 360
+
+                u_left, u_top, u_right, u_bottom = left_m, top_m, right_m, bot_m
+                if total_rot == 90:
+                    u_left, u_top, u_right, u_bottom = top_m, right_m, bot_m, left_m
+                elif total_rot == 180:
+                    u_left, u_top, u_right, u_bottom = right_m, bot_m, left_m, top_m
+                elif total_rot == 270:
+                    u_left, u_top, u_right, u_bottom = bot_m, left_m, top_m, right_m
+
                 if idx in self._applied_crops:
                     base_x0, base_y0, base_x1, base_y1 = self._applied_crops[idx]
                 else:
+                    orig_rot = page.rotation
+                    page.set_rotation(0)
                     base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
+                    page.set_rotation(orig_rot)
 
-                new_x0 = base_x0 + left_m
-                new_y0 = base_y0 + top_m
-                new_x1 = base_x1 - right_m
-                new_y1 = base_y1 - bot_m
+                new_x0 = base_x0 + u_left
+                new_y0 = base_y0 + u_top
+                new_x1 = base_x1 - u_right
+                new_y1 = base_y1 - u_bottom
 
                 if (new_x1 - new_x0 < 10) or (new_y1 - new_y0 < 10):
                     continue
@@ -764,19 +778,42 @@ class TabCortar(BasePage):
             if viewer and viewer.current_path():
                 pdf_path = viewer.current_path()
         ref_idx = max(0, min(self.spin_current_page.value() - 1, self._page_count - 1))
-        if ref_idx in self._applied_crops:
-            c = self._applied_crops[ref_idx]
-            self._ref_width = c[2] - c[0]
-            self._ref_height = c[3] - c[1]
-        elif pdf_path and os.path.isfile(pdf_path):
+        
+        user_rot = viewer._canvas._page_rotations.get(ref_idx, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
+        total_rot = 0
+        
+        u_w, u_h = self._ref_width, self._ref_height
+        
+        if pdf_path and os.path.isfile(pdf_path):
             try:
                 doc = self._open_fitz(pdf_path)
-                r = doc[ref_idx].rect
-                self._ref_width = r.width
-                self._ref_height = r.height
+                page = doc[ref_idx]
+                total_rot = (page.rotation + user_rot) % 360
+                
+                if ref_idx in self._applied_crops:
+                    c = self._applied_crops[ref_idx]
+                    u_w = c[2] - c[0]
+                    u_h = c[3] - c[1]
+                else:
+                    orig_rot = page.rotation
+                    page.set_rotation(0)
+                    u_w = page.rect.width
+                    u_h = page.rect.height
+                    page.set_rotation(orig_rot)
                 doc.close()
             except Exception:
                 pass
+        elif ref_idx in self._applied_crops:
+            c = self._applied_crops[ref_idx]
+            u_w = c[2] - c[0]
+            u_h = c[3] - c[1]
+
+        if total_rot in (90, 270):
+            self._ref_width = u_h
+            self._ref_height = u_w
+        else:
+            self._ref_width = u_w
+            self._ref_height = u_h
 
         self._updating = True
         self.spin_top.setValue(0)
@@ -816,14 +853,29 @@ class TabCortar(BasePage):
             if doc_path and os.path.isfile(doc_path):
                 try:
                     doc = self._open_fitz(doc_path)
-                    p_rect = doc[page_idx].rect
+                    page = doc[page_idx]
+                    
+                    user_rot = viewer._canvas._page_rotations.get(page_idx, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
+                    total_rot = (page.rotation + user_rot) % 360
+                    
                     if page_idx in self._applied_crops:
                         c = self._applied_crops[page_idx]
-                        self._ref_width = c[2] - c[0]
-                        self._ref_height = c[3] - c[1]
+                        u_w = c[2] - c[0]
+                        u_h = c[3] - c[1]
                     else:
-                        self._ref_width = p_rect.width
-                        self._ref_height = p_rect.height
+                        orig_rot = page.rotation
+                        page.set_rotation(0)
+                        u_w = page.rect.width
+                        u_h = page.rect.height
+                        page.set_rotation(orig_rot)
+                        
+                    if total_rot in (90, 270):
+                        self._ref_width = u_h
+                        self._ref_height = u_w
+                    else:
+                        self._ref_width = u_w
+                        self._ref_height = u_h
+                        
                     doc.close()
                 except Exception:
                     pass
@@ -874,9 +926,25 @@ class TabCortar(BasePage):
             doc = self._open_fitz(p)
             self._page_count = doc.page_count
             if self._page_count > 0:
-                r0 = doc[0].rect
-                self._ref_width = r0.width
-                self._ref_height = r0.height
+                page = doc[0]
+                win: Any = self.window()
+                viewer = getattr(win, "_viewer", None)
+                user_rot = viewer._canvas._page_rotations.get(0, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
+                total_rot = (page.rotation + user_rot) % 360
+                
+                orig_rot = page.rotation
+                page.set_rotation(0)
+                u_w = page.rect.width
+                u_h = page.rect.height
+                page.set_rotation(orig_rot)
+                
+                if total_rot in (90, 270):
+                    self._ref_width = u_h
+                    self._ref_height = u_w
+                else:
+                    self._ref_width = u_w
+                    self._ref_height = u_h
+                    
                 self.spin_current_page.setMaximum(self._page_count)
             doc.close()
         except Exception as e:
@@ -935,14 +1003,31 @@ class TabCortar(BasePage):
                     if idx < 0 or idx >= doc_probe.page_count:
                         continue
                     page = doc_probe[idx]
+                    
+                    user_rot = viewer._canvas._page_rotations.get(idx, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
+                    total_rot = (page.rotation + user_rot) % 360
+
+                    u_left, u_top, u_right, u_bottom = left_m, top_m, right_m, bot_m
+                    if total_rot == 90:
+                        u_left, u_top, u_right, u_bottom = top_m, right_m, bot_m, left_m
+                    elif total_rot == 180:
+                        u_left, u_top, u_right, u_bottom = right_m, bot_m, left_m, top_m
+                    elif total_rot == 270:
+                        u_left, u_top, u_right, u_bottom = bot_m, left_m, top_m, right_m
+
                     if idx in crops_to_save:
                         base_x0, base_y0, base_x1, base_y1 = crops_to_save[idx]
                     else:
+                        orig_rot = page.rotation
+                        page.set_rotation(0)
                         base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
-                    new_x0 = base_x0 + left_m
-                    new_y0 = base_y0 + top_m
-                    new_x1 = base_x1 - right_m
-                    new_y1 = base_y1 - bot_m
+                        page.set_rotation(orig_rot)
+                        
+                    new_x0 = base_x0 + u_left
+                    new_y0 = base_y0 + u_top
+                    new_x1 = base_x1 - u_right
+                    new_y1 = base_y1 - u_bottom
+                    
                     crop_rect = fitz.Rect(new_x0, new_y0, new_x1, new_y1) & page.mediabox
                     if not crop_rect.is_empty and crop_rect.width >= 10 and crop_rect.height >= 10:
                         crops_to_save[idx] = (crop_rect.x0, crop_rect.y0, crop_rect.x1, crop_rect.y1)

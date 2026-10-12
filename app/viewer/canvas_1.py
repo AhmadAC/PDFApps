@@ -394,11 +394,30 @@ class _SelectCanvas(QWidget):
 
         vp_w = self.get_viewport_width()
 
-        page0 = self._doc[0]
-        rot0 = self._page_rotations.get(0, 0) % 360
-        r0 = page0.rect
-        ref_w = r0.height if rot0 in (90, 270) else r0.width
-        ref_w = max(ref_w, 1.0)
+        first_src_idx = self._page_order[0] if self._page_order is not None and len(self._page_order) > 0 else 0
+        if first_src_idx < 0 or first_src_idx >= self._doc.page_count:
+            first_src_idx = 0
+            
+        page0 = self._doc[first_src_idx]
+        rot0 = self._page_rotations.get(first_src_idx, 0) % 360
+        crop0 = self._page_crops.get(first_src_idx)
+        
+        orig_rot0 = page0.rotation
+        orig_crop0 = page0.cropbox
+        try:
+            if crop0:
+                cr0 = fitz.Rect(crop0) & page0.mediabox
+                if not cr0.is_empty and cr0.width >= 10 and cr0.height >= 10:
+                    page0.set_cropbox(cr0)
+            if rot0:
+                page0.set_rotation((orig_rot0 + rot0) % 360)
+            
+            ref_w = max(page0.rect.width, 1.0)
+        finally:
+            if rot0:
+                page0.set_rotation(orig_rot0)
+            if crop0:
+                page0.set_cropbox(orig_crop0)
 
         target_fit_w = max(400, vp_w - 36)
         self._base_avail = target_fit_w
@@ -416,15 +435,24 @@ class _SelectCanvas(QWidget):
             pg = self._doc[src_idx]
             rot = self._page_rotations.get(src_idx, 0) % 360
             crop = self._page_crops.get(src_idx)
-            if crop:
-                cr = fitz.Rect(crop) & pg.mediabox
-                w = cr.width if not cr.is_empty else pg.rect.width
-                h = cr.height if not cr.is_empty else pg.rect.height
-            else:
+            
+            orig_rot = pg.rotation
+            orig_crop = pg.cropbox
+            try:
+                if crop:
+                    cr = fitz.Rect(crop) & pg.mediabox
+                    if not cr.is_empty and cr.width >= 10 and cr.height >= 10:
+                        pg.set_cropbox(cr)
+                if rot:
+                    pg.set_rotation((orig_rot + rot) % 360)
+                
                 w = pg.rect.width
                 h = pg.rect.height
-            if rot in (90, 270):
-                w, h = h, w
+            finally:
+                if rot:
+                    pg.set_rotation(orig_rot)
+                if crop:
+                    pg.set_cropbox(orig_crop)
 
             pw = round(w * self._zoom)
             ph = round(h * self._zoom)
