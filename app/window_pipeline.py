@@ -1,3 +1,4 @@
+
 # app/window_pipeline.py
 """PDFApps – Pipeline processing, state saving, and security wiping mixin."""
 from __future__ import annotations
@@ -127,7 +128,11 @@ class WindowPipelineMixin(_Base):
             return
         orig = ps["original_path"]
         base, ext = os.path.splitext(os.path.basename(orig))
-        suggested = os.path.join(os.path.dirname(orig), base + "_edited" + ext)
+        if ext.lower() == ".pdf":
+            default_name = f"{base}_edited.pdf"
+        else:
+            default_name = f"{base}.pdf"
+        suggested = os.path.join(os.path.dirname(orig), default_name)
         path, _ = QFileDialog.getSaveFileName(self, t("btn.choose"), suggested, t("file_filter.pdf"))
         if not path:
             return

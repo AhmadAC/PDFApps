@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 import fitz
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QEvent, QTimer, QPoint
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QWidget, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QMessageBox, QDialog, QTreeWidgetItem,
     QScrollArea, QSplitter, QTabWidget, QTreeWidget, QVBoxLayout,
+    QMenu,
 )
 import qtawesome as qta
 
-from app.constants import ACCENT, TEXT_SEC, _LQ, DESKTOP
+from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, _LP, DESKTOP, OPEN_ALL_FILES_FILTER
 from app.pdf_password import authenticate_fitz
-from app.utils import _paint_bg
+from app.utils import _paint_bg, reveal_file
 from app.i18n import t
 
 if TYPE_CHECKING:
@@ -73,6 +75,7 @@ class PanelNavMixin(_Base):
         _recents_layout: QVBoxLayout
         _undo_stack: list[dict]
         _redo_stack: list[dict]
+        _history_temp_files: set[str]
 
         def _cleanup_history_files(self) -> None: ...
         def _reset_search_state(self) -> None: ...
@@ -129,21 +132,21 @@ class PanelNavMixin(_Base):
             self._canvas.set_numbers_preview(preview_data)
 
     def set_page_rotations(self, rotations: dict[int, int]):
-        """Update live preview rotations across continuous scroll and thumbnail sidebar."""
+        """Update live preview rotation angles in memory without saving to disk."""
         if hasattr(self, "_canvas"):
             self._canvas.set_page_rotations(rotations)
         if hasattr(self, "_thumbnails"):
             self._thumbnails.set_page_rotations(rotations)
 
     def set_page_crops(self, crops: dict[int, tuple[float, float, float, float]]):
-        """Update live preview crops across continuous scroll and thumbnail sidebar."""
+        """Update live preview crops in memory without saving to disk."""
         if hasattr(self, "_canvas"):
             self._canvas.set_page_crops(crops)
         if hasattr(self, "_thumbnails"):
             self._thumbnails.set_page_crops(crops)
 
     def set_page_order(self, order: list[int] | None):
-        """Update live preview page order across continuous scroll and thumbnail sidebar."""
+        """Update live preview page order in memory without saving to disk."""
         if hasattr(self, "_canvas"):
             self._canvas.set_page_order(order)
         if hasattr(self, "_thumbnails"):
@@ -249,6 +252,17 @@ class PanelNavMixin(_Base):
             link.setFlat(True)
             link.setStyleSheet(link_style)
             link.clicked.connect(lambda checked=False, p=rp, r=row: self._on_recent_clicked(p, r))
+            
+            # Enable right-click context menu on recent file
+            row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            row.customContextMenuRequested.connect(
+                lambda pt, p=rp, r=row: self._show_recent_context_menu(row.mapToGlobal(pt), p, r)
+            )
+            link.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            link.customContextMenuRequested.connect(
+                lambda pt, p=rp, r=row: self._show_recent_context_menu(link.mapToGlobal(pt), p, r)
+            )
+
             self._recent_links.append(link)
             del_btn = QPushButton()
             del_btn.setIcon(qta.icon("fa5s.trash-alt", color=TEXT_SEC if dark else _LQ))
@@ -266,6 +280,50 @@ class PanelNavMixin(_Base):
             row_h.addWidget(link, 1)
             row_h.addWidget(del_btn)
             lay.addWidget(row)
+
+    def _show_recent_context_menu(self, global_pos: QPoint, path: str, row_widget: QWidget):
+        """Show context menu for recent files offering Open, Reveal, Copy Path, and Remove."""
+        dark = getattr(self.window(), "_dark_mode", True) if self.window() else True
+        icon_color = TEXT_PRI if dark else _LQ
+
+        menu = QMenu(self)
+
+        act_open = menu.addAction(
+            qta.icon("fa5s.file-pdf", color=icon_color),
+            t("widget.open", default="Open"),
+        )
+        act_open.triggered.connect(lambda: self._on_recent_clicked(path, row_widget))
+
+        menu.addSeparator()
+
+        if sys.platform == "win32":
+            reveal_label = "Reveal in File Explorer"
+        elif sys.platform == "darwin":
+            reveal_label = "Reveal in Finder"
+        else:
+            reveal_label = "Reveal in File Manager"
+
+        act_reveal = menu.addAction(
+            qta.icon("fa5s.folder-open", color=icon_color),
+            reveal_label,
+        )
+        act_reveal.triggered.connect(lambda: reveal_file(path))
+
+        act_copy = menu.addAction(
+            qta.icon("fa5s.copy", color=icon_color),
+            "Copy Path",
+        )
+        act_copy.triggered.connect(lambda: QApplication.clipboard().setText(path))
+
+        menu.addSeparator()
+
+        act_remove = menu.addAction(
+            qta.icon("fa5s.trash-alt", color="#EF4444"),
+            t("btn.remove", default="Remove from Recent"),
+        )
+        act_remove.triggered.connect(lambda: self._remove_recent(path, row_widget))
+
+        menu.exec(global_pos)
 
     def _on_recent_clicked(self, path: str, row_widget=None):
         _log.info("Recent file clicked: %s", path)
@@ -309,14 +367,15 @@ class PanelNavMixin(_Base):
         row_widget.setVisible(False)
 
     def _open_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self.window(), t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
-        if path:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self.window(), t("btn.open_pdf"), DESKTOP, OPEN_ALL_FILES_FILTER)
+        if paths:
             win: Any = self.window()
-            if win and hasattr(win, "_load_and_track"):
-                win._load_and_track(path)
-            else:
-                self.load(path)
+            for path in paths:
+                if win and hasattr(win, "_load_and_track"):
+                    win._load_and_track(path)
+                else:
+                    self.load(path)
 
     def current_path(self) -> str:
         return self._current_path
@@ -481,9 +540,24 @@ class PanelNavMixin(_Base):
                 is_pdf_format = False
 
         if not is_pdf_format:
-            _log.warning("Invalid PDF format: %s", path)
-            QMessageBox.warning(self, t("viewer.invalid_format"), t("viewer.invalid_msg"))
-            return
+            # Auto-convert non-PDF files (DOCX, PPTX, XLSX, TXT, images, etc.) to PDF
+            try:
+                from app.tools.import_pdf import convert_file_to_pdf
+                temp_pdf = convert_file_to_pdf(path)
+                self._history_temp_files.add(temp_pdf)
+                orig_path = self._original_doc_path or path
+                self._original_doc_path = orig_path
+                win: Any = self.window()
+                if win and hasattr(win, "_pipeline_state"):
+                    win._pipeline_state[id(self)] = {
+                        "original_path": orig_path,
+                        "temp_path": temp_pdf,
+                    }
+                path = temp_pdf
+            except Exception as ex:
+                _log.exception("Error converting file to PDF: %s", path)
+                QMessageBox.critical(self, t("viewer.error_open"), f"Could not convert '{os.path.basename(path)}' to PDF:\n{ex}")
+                return
 
         if not _is_history_step:
             self._original_doc_path = path

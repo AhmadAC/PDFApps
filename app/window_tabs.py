@@ -19,10 +19,11 @@ from PySide6.QtWidgets import (
 )
 import qtawesome as qta
 
-from app.constants import TEXT_PRI, _LQ
+from app.constants import TEXT_PRI, _LQ, OPEN_ALL_FILES_FILTER
 from app.i18n import add_recent_file, t
-from app.utils import reveal_file
+from app.utils import reveal_file, show_error
 from app.viewer.panel import PdfViewerPanel
+from app.tools.import_pdf import convert_file_to_pdf
 
 if TYPE_CHECKING:
     from PySide6.QtGui import QDragEnterEvent, QDropEvent
@@ -132,6 +133,7 @@ class WindowTabsMixin(_Base):
         _current_tool: int
         _dark_mode: bool
         _sb: QStatusBar
+        _pipeline_state: dict[int, dict[str, Any]]
 
         def _set_status(self, msg: str) -> None: ...
         def _handle_global_undo(self) -> None: ...
@@ -380,12 +382,16 @@ class WindowTabsMixin(_Base):
                     self._sb.showMessage(f"✔ Deleted '{filename}' from disc")
 
     def _load_and_track(self, path: str) -> PdfViewerPanel | None:
+        """Open a file; if it's a non-PDF (DOCX, PPTX, XLSX, TXT, image, etc.), automatically convert to PDF and load."""
         if not path or not os.path.isfile(path):
             return None
         norm_path = os.path.abspath(path)
 
+        # 1. Switch to tab if already open
         for i, v in enumerate(self._viewers):
-            if v.current_path() and os.path.abspath(v.current_path()) == norm_path:
+            orig_p = getattr(v, "_original_doc_path", "")
+            curr_p = v.current_path()
+            if (orig_p and os.path.abspath(orig_p) == norm_path) or (curr_p and os.path.abspath(curr_p) == norm_path):
                 self._tab_bar.setCurrentIndex(i)
                 self._viewer_stack.setCurrentIndex(i)
                 add_recent_file(norm_path)
@@ -396,6 +402,30 @@ class WindowTabsMixin(_Base):
                     self._update_breadcrumb()
                 return v
 
+        # 2. Check if file is PDF or requires automatic conversion
+        is_pdf = norm_path.lower().endswith(".pdf")
+        if not is_pdf:
+            try:
+                with open(norm_path, "rb") as f:
+                    header = f.read(1024)
+                    if b"%PDF-" in header:
+                        is_pdf = True
+            except Exception:
+                is_pdf = False
+
+        temp_pdf = None
+        target_load_path = norm_path
+
+        if not is_pdf:
+            try:
+                if hasattr(self, "_set_status"):
+                    self._set_status(f"Converting {os.path.basename(norm_path)} to PDF...")
+                temp_pdf = convert_file_to_pdf(norm_path)
+                target_load_path = temp_pdf
+            except Exception as exc:
+                show_error(self, exc)
+                return None
+
         cur_v = self._viewer
         if cur_v and not cur_v.current_path():
             target_v = cur_v
@@ -404,10 +434,30 @@ class WindowTabsMixin(_Base):
             target_v = self._add_viewer_tab()
             idx = len(self._viewers) - 1
 
-        target_v.load(norm_path)
+        target_v._original_doc_path = norm_path
+        if temp_pdf:
+            target_v._history_temp_files.add(temp_pdf)
+            vid = id(target_v)
+            ps = getattr(self, "_pipeline_state", None)
+            if ps is not None:
+                ps[vid] = {
+                    "original_path": norm_path,
+                    "temp_path": temp_pdf,
+                }
+
+        target_v.load(target_load_path, _is_history_step=bool(temp_pdf))
+        target_v._original_doc_path = norm_path
         add_recent_file(norm_path)
-        self._tab_bar.setTabText(idx, os.path.basename(norm_path))
-        self._tab_bar.setTabToolTip(idx, norm_path)
+
+        tab_title = os.path.basename(norm_path)
+        if temp_pdf:
+            tab_title = f"● {tab_title}"
+            tooltip = f"{norm_path} (Converted to PDF)"
+        else:
+            tooltip = norm_path
+
+        self._tab_bar.setTabText(idx, tab_title)
+        self._tab_bar.setTabToolTip(idx, tooltip)
         self._update_tab_bar_visibility()
         if hasattr(self, "_update_breadcrumb"):
             self._update_breadcrumb()
@@ -418,7 +468,10 @@ class WindowTabsMixin(_Base):
             tool_w = self.stack.widget(self._current_tool)
             fn = getattr(tool_w, "auto_load", None)
             if callable(fn):
-                fn(norm_path)
+                fn(target_load_path)
+
+        if temp_pdf and hasattr(self, "_set_status"):
+            self._set_status(f"✔ Converted {os.path.basename(norm_path)} to PDF (Ctrl+S to save as PDF)")
         return target_v
 
     def _on_second_instance(self, paths: list[str]) -> None:
@@ -429,7 +482,7 @@ class WindowTabsMixin(_Base):
         self.raise_()
         self.activateWindow()
         for p in paths:
-            if os.path.isfile(p) and p.lower().endswith(".pdf"):
+            if os.path.isfile(p):
                 self._load_and_track(p)
 
     def _on_canvas_crop_selected(self, page_idx: int, rect: tuple) -> None:
@@ -455,20 +508,21 @@ class WindowTabsMixin(_Base):
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith(".pdf"):
+                local = url.toLocalFile()
+                if local and (os.path.isfile(local) or os.path.isdir(local)):
                     event.acceptProposedAction()
                     return
         super().dragEnterEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
         urls = event.mimeData().urls()
-        pdf_paths = [
+        files = [
             u.toLocalFile()
             for u in urls
-            if u.toLocalFile().lower().endswith(".pdf") and os.path.isfile(u.toLocalFile())
+            if u.toLocalFile() and os.path.isfile(u.toLocalFile())
         ]
-        if pdf_paths:
-            for p in pdf_paths:
+        if files:
+            for p in files:
                 self._load_and_track(p)
             event.acceptProposedAction()
             return

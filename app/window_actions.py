@@ -6,7 +6,7 @@ import contextlib
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import Qt, QTimer, QProcess, QProcessEnvironment
 from PySide6.QtGui import QColor
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 from shiboken6 import isValid
 
-from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, _LP, DESKTOP
+from app.constants import ACCENT, TEXT_PRI, TEXT_SEC, _LQ, _LP, DESKTOP, OPEN_ALL_FILES_FILTER
 from app.i18n import t, set_language, get_language, add_recent_file
 from app.styles import STYLE, STYLE_LIGHT
 from app.utils import _make_palette, show_error
@@ -510,32 +510,26 @@ class WindowActionsMixin(_Base):
         self._update_undo_redo_buttons()
 
     def _open_pdf(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, t("btn.open_pdf"), DESKTOP, t("file_filter.pdf"))
+        """Open files via Ctrl+O or Toolbar button, supporting all files and auto-conversion."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            t("btn.open_pdf"),
+            DESKTOP,
+            OPEN_ALL_FILES_FILTER,
+        )
         for path in paths:
             self._load_and_track(path)
 
     def _load_and_track(self, path: str):
-        path = os.path.abspath(os.path.normpath(path))
-        viewer = self._viewer
-        if viewer and viewer.current_path():
-            self._add_viewer_tab(path)
-        elif viewer:
-            viewer.load(path)
-        if viewer and viewer.current_path():
-            add_recent_file(path)
-        for v in self._viewers:
-            refresh = getattr(v, "_refresh_recents", None)
-            if callable(refresh):
-                with contextlib.suppress(Exception):
-                    refresh()
-        self._refresh_viewer_top_buttons()
-        self._update_tab_bar_visibility()
-        self._update_breadcrumb()
+        # WindowTabsMixin provides the primary _load_and_track implementation;
+        # delegate cleanly to it on composite instances.
+        from app.window_tabs import WindowTabsMixin
+        return WindowTabsMixin._load_and_track(cast(Any, self), path)
 
     def _on_second_instance(self, paths: list):
         _wlog = logging.getLogger(__name__)
         for path in paths:
-            if isinstance(path, str) and os.path.isfile(path) and path.lower().endswith(".pdf"):
+            if isinstance(path, str) and os.path.isfile(path):
                 try:
                     self._load_and_track(path)
                 except Exception as exc:
@@ -754,7 +748,7 @@ class WindowActionsMixin(_Base):
     def _restart_app(self):
         self._wait_for_workers_on_all_pages()
         self._wipe_all_pdf_passwords()
-        pdf_args = [a for a in sys.argv[1:] if a.lower().endswith(".pdf")]
+        pdf_args = [a for a in sys.argv[1:] if os.path.isfile(a)]
         if getattr(sys, "frozen", False):
             program = sys.executable
             args = pdf_args
@@ -785,7 +779,7 @@ class WindowActionsMixin(_Base):
             local = url.toLocalFile()
             if not local:
                 continue
-            if local.lower().endswith(".pdf") or os.path.isdir(local):
+            if os.path.isfile(local) or os.path.isdir(local):
                 e.acceptProposedAction()
                 return
 
@@ -803,16 +797,16 @@ class WindowActionsMixin(_Base):
                     entries = os.listdir(path)
                 except OSError:
                     entries = []
-                pdfs = sorted(os.path.join(path, f) for f in entries if f.lower().endswith(".pdf") and os.path.isfile(os.path.join(path, f)))
-                if len(pdfs) > 20:
-                    reply = QMessageBox.question(self, t("msg.confirm"), t("viewer.drop_many_pdfs_confirm", count=len(pdfs)),
+                valid_files = sorted(os.path.join(path, f) for f in entries if os.path.isfile(os.path.join(path, f)))
+                if len(valid_files) > 20:
+                    reply = QMessageBox.question(self, t("msg.confirm"), t("viewer.drop_many_pdfs_confirm", count=len(valid_files)),
                                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
                     if reply != QMessageBox.StandardButton.Yes:
                         continue
-                for pdf in pdfs:
-                    self._load_and_track(pdf)
+                for fpath in valid_files:
+                    self._load_and_track(fpath)
                 continue
-            if path.lower().endswith(".pdf"):
+            if os.path.isfile(path):
                 self._load_and_track(path)
 
     def _toggle_night_mode_top(self):
@@ -976,10 +970,8 @@ class WindowActionsMixin(_Base):
                 for child in w.findChildren(cls):
                     child_fn = getattr(child, "update_theme", None)
                     if callable(child_fn):
-                        try:
+                        with contextlib.suppress(RuntimeError):
                             child_fn(self._dark_mode)
-                        except RuntimeError:
-                            pass
         pres = getattr(self, "_presentation", None)
         if pres is not None and isValid(pres):
             pres.update_theme(self._dark_mode)

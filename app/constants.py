@@ -6,6 +6,17 @@ DESKTOP = _os.path.join(_os.path.expanduser("~"), "Desktop")
 APP_VERSION = "1.15.0"
 GITHUB_REPO = "nelsonduarte/PDFApps"
 
+# Unified open filter allowing all files and supported conversion types
+OPEN_ALL_FILES_FILTER = (
+    "All Files (*);;"
+    "All Supported Files (*.pdf *.docx *.doc *.pptx *.ppt *.xlsx *.xls *.txt *.md *.markdown *.html *.htm *.epub *.png *.jpg *.jpeg *.bmp *.tiff *.webp *.gif);;"
+    "PDF Files (*.pdf);;"
+    "Office Documents (*.docx *.pptx *.xlsx);;"
+    "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.webp *.gif);;"
+    "Text & Markdown (*.txt *.md *.markdown);;"
+    "HTML & eBooks (*.html *.htm *.epub)"
+)
+
 # PyperPoint Dark Theme Palette
 ACCENT   = "#0078D4"   # PyperPoint / Fluent blue
 ACCENT_H = "#106EBE"   # hover blue
