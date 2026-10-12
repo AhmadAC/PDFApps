@@ -251,3 +251,19 @@ class UpdateController(QObject):
             from app.updater import UpdateDialog
             dlg = UpdateDialog(self._update_release, parent=self._window)
             dlg.exec()
+            
+            
+            
+# When you click "Yes" on that pop-up, it does not instantly install or close your app. Here is the step-by-step process defined in the code (app/update_controller.py and app/updater.py):
+# 1. It opens the Update Window (UpdateDialog)
+# Clicking Yes opens a separate update window where you can see:
+# The release notes and changelog detailing what changed in v1.15.1.
+# Two buttons: "Install" and "Cancel".
+# 2. If you click "Install" inside that window:
+# Downloads the setup file: It connects to the official GitHub repository (nelsonduarte/PDFApps) and downloads the Windows installer (PDFAppsSetup.exe) into your Windows temporary directory (%TEMP%).
+# Verifies SHA-256 integrity: Before running anything, it calculates the SHA-256 checksum of the downloaded file and verifies it against the hash published on GitHub to ensure the file isn't corrupted or tampered with.
+# 3. Runs the Installer & Closes the App
+# Launches the installer: It invokes PDFAppsSetup.exe with administrator privileges (triggering the standard Windows UAC "Do you want to allow this app to make changes?" prompt).
+# Closes the running PDFApps: It closes the active PDFApps instance so the Windows installer can replace the executable and libraries without file-lock conflicts.
+# Preserves your data: The installer updates the software files, leaving your settings (config.json), recent files, signatures, and printer preferences intact.
+# (If you click "No", it simply dismisses the dialog for that session and leaves the small update icon visible in the toolbar.)

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import fitz
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap, QPageLayout
 from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -203,6 +203,7 @@ class _FastPrintWorker(QThread):
         paper = self.kwargs.get("paper", "A4")
         color = self.kwargs.get("color", "Color")
         user = self.kwargs.get("user", "")
+        orient = self.kwargs.get("orient", "Auto (Match PDF)")
 
         is_color = (color == "Color")
 
@@ -218,6 +219,11 @@ class _FastPrintWorker(QThread):
 
         if paper:
             cmd.extend(["-o", f"media={paper}"])
+
+        if "Landscape" in orient:
+            cmd.extend(["-o", "orientation-requested=4", "-o", "landscape"])
+        elif "Portrait" in orient:
+            cmd.extend(["-o", "orientation-requested=3", "-o", "portrait"])
 
         if is_color:
             cmd.extend(["-o", "ColorModel=Color", "-o", "print-color-mode=color"])
@@ -246,6 +252,7 @@ class _FastPrintWorker(QThread):
         page_indices = self.kwargs.get("page_indices", [])
         copies = self.kwargs.get("copies", 1)
         color = self.kwargs.get("color", "Color")
+        orient = self.kwargs.get("orient", "Auto (Match PDF)")
         is_color = (color == "Color")
 
         self.progress.emit(15, f"Initializing {printer_name}...")
@@ -257,6 +264,11 @@ class _FastPrintWorker(QThread):
             printer.setColorMode(QPrinter.ColorMode.Color)
         else:
             printer.setColorMode(QPrinter.ColorMode.GrayScale)
+
+        if "Landscape" in orient:
+            printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        elif "Portrait" in orient:
+            printer.setPageOrientation(QPageLayout.Orientation.Portrait)
 
         if printer.supportsMultipleCopies():
             printer.setCopyCount(copies)
@@ -679,10 +691,7 @@ class _PdfPrintDialog(QDialog):
         self.cmb_printer.currentIndexChanged.connect(self._on_printer_changed)
         f_dest.addRow("Printer:", self.cmb_printer)
 
-        # Quick note and navigation link when Direct Network Printer is selected
-        self.lbl_direct_socket_hint = QLabel(
-            " "
-        )
+        self.lbl_direct_socket_hint = QLabel(" ")
         self.lbl_direct_socket_hint.setWordWrap(True)
         self.lbl_direct_socket_hint.setStyleSheet(f"color: {ACCENT}; font-size: 9pt;")
         f_dest.addRow("", self.lbl_direct_socket_hint)
@@ -777,6 +786,7 @@ class _PdfPrintDialog(QDialog):
         idx_dup = self.cmb_duplex.findText(self.saved_duplex)
         if idx_dup >= 0:
             self.cmb_duplex.setCurrentIndex(idx_dup)
+        self.cmb_duplex.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Duplex:", self.cmb_duplex)
 
         self.cmb_paper = NoWheelComboBox()
@@ -785,6 +795,7 @@ class _PdfPrintDialog(QDialog):
         idx_paper = self.cmb_paper.findText(self.saved_paper)
         if idx_paper >= 0:
             self.cmb_paper.setCurrentIndex(idx_paper)
+        self.cmb_paper.currentIndexChanged.connect(lambda _: self._update_preview())
         f_opts.addRow("Paper Size:", self.cmb_paper)
 
         self.cmb_color = NoWheelComboBox()
@@ -829,7 +840,6 @@ class _PdfPrintDialog(QDialog):
         v_accounting.setContentsMargins(8, 8, 12, 8)
         v_accounting.setSpacing(12)
 
-        # 1. Network & Port 9100 Setup Group (Moved here from main tab)
         grp_net = QGroupBox("Printer Network Address")
         f_net = QFormLayout(grp_net)
         f_net.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -861,7 +871,6 @@ class _PdfPrintDialog(QDialog):
 
         v_accounting.addWidget(grp_net)
 
-        # 2. Accounting Credentials Group
         grp_acct = QGroupBox("Printer Accounting (Fuji Xerox ApeosPort / Auditron)")
         f_acct = QFormLayout(grp_acct)
         f_acct.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1057,7 +1066,6 @@ class _PdfPrintDialog(QDialog):
 
     def _update_preview(self):
         self.rad_current.setText(f"Current Page (Page {self.current_preview_page + 1})")
-        self.lbl_page_count.setText(f"Page {self.current_preview_page + 1} of {self.total_pages}")
         self.btn_first_page.setEnabled(self.current_preview_page > 0)
         self.btn_prev_page.setEnabled(self.current_preview_page > 0)
         self.btn_next_page.setEnabled(self.current_preview_page < self.total_pages - 1)
@@ -1074,21 +1082,71 @@ class _PdfPrintDialog(QDialog):
                 avail_w = max(100, vp.width() - 32)
                 avail_h = max(100, vp.height() - 32)
 
+                # Determine effective base orientation
+                orient = self.cmb_orient.currentText()
+                is_natural_landscape = (page.rect.width > page.rect.height)
+                if "Landscape" in orient:
+                    effective_is_landscape = True
+                elif "Portrait" in orient:
+                    effective_is_landscape = False
+                else:  # "Auto (Match PDF)"
+                    effective_is_landscape = is_natural_landscape
+
+                # Orientation rotation delta
+                orient_rot = 0
+                if effective_is_landscape and not is_natural_landscape:
+                    orient_rot = 90
+                elif not effective_is_landscape and is_natural_landscape:
+                    orient_rot = 90
+
+                # Determine duplex flip on back pages
+                duplex_text = self.cmb_duplex.currentText()
+                is_duplex = "2-Sided" in duplex_text
+
+                try:
+                    target_pages = self._resolve_target_pages()
+                except Exception:
+                    target_pages = list(range(self.total_pages))
+
+                if self.current_preview_page in target_pages:
+                    sheet_slot = target_pages.index(self.current_preview_page)
+                else:
+                    sheet_slot = self.current_preview_page
+
+                is_back_page = is_duplex and (sheet_slot % 2 == 1)
+
+                duplex_rot = 0
+                if is_back_page:
+                    if "Short Edge" in duplex_text:
+                        # In portrait, flipping on short edge inverts the back side (180°)
+                        # In landscape, flipping on short edge is book-style (no inversion)
+                        duplex_rot = 0 if effective_is_landscape else 180
+                    elif "Long Edge" in duplex_text:
+                        # In landscape, flipping on long edge inverts the back side (180°)
+                        # In portrait, flipping on long edge is book-style (no inversion)
+                        duplex_rot = 180 if effective_is_landscape else 0
+
+                total_rot = (orient_rot + duplex_rot) % 360
+                new_rotation = (page.rotation + total_rot) % 360
+                page.set_rotation(new_rotation)
+
+                # Update label to reflect front/back/inverted status
+                page_desc = f"Page {self.current_preview_page + 1} of {self.total_pages}"
+                if is_duplex:
+                    if is_back_page:
+                        status_tag = "Back — Inverted" if duplex_rot == 180 else "Back"
+                    else:
+                        status_tag = "Front"
+                    page_desc += f" ({status_tag})"
+                self.lbl_page_count.setText(page_desc)
+
                 pw = page.rect.width
                 ph = page.rect.height
-                orient = self.cmb_orient.currentText()
-                if ("Landscape" in orient and pw < ph) or ("Portrait" in orient and pw > ph):
-                    pw, ph = ph, pw
 
                 zoom = min(avail_w / max(1.0, pw), avail_h / max(1.0, ph))
                 zoom = max(0.05, zoom * 0.95)
 
                 mat = fitz.Matrix(zoom, zoom)
-                if "Landscape" in orient and page.rect.width < page.rect.height:
-                    mat = mat.prerotate(90)
-                elif "Portrait" in orient and page.rect.width > page.rect.height:
-                    mat = mat.prerotate(90)
-
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 if "Black & White" in self.cmb_color.currentText() and pix.n != 1:
                     pix = fitz.Pixmap(fitz.csGRAY, pix)
@@ -1103,6 +1161,7 @@ class _PdfPrintDialog(QDialog):
             doc.close()
         except Exception:
             pass
+        self.lbl_page_count.setText(f"Page {self.current_preview_page + 1} of {self.total_pages}")
         self.lbl_preview_img.setText(f"Preview unavailable for Page {self.current_preview_page + 1}")
 
     def _resolve_target_pages(self) -> list[int]:
@@ -1136,6 +1195,7 @@ class _PdfPrintDialog(QDialog):
         duplex = self.cmb_duplex.currentText()
         paper = self.cmb_paper.currentText()
         color = self.cmb_color.currentText()
+        orient_setting = self.cmb_orient.currentText()
         is_color = (color == "Color")
         is_grayscale = not is_color
 
@@ -1146,7 +1206,8 @@ class _PdfPrintDialog(QDialog):
         target_file = self.doc_path
         self.temp_slice_path = None
 
-        need_temp = (is_grayscale or len(pages) != self.total_pages or pages != list(range(self.total_pages)))
+        need_orient_rotate = (orient_setting != "Auto (Match PDF)")
+        need_temp = (is_grayscale or len(pages) != self.total_pages or pages != list(range(self.total_pages)) or need_orient_rotate)
         if need_temp:
             try:
                 doc = fitz.open(self.doc_path)
@@ -1156,8 +1217,18 @@ class _PdfPrintDialog(QDialog):
 
                 for p in pages:
                     if 0 <= p < doc.page_count:
+                        page = doc[p]
+                        page_rot_delta = 0
+                        is_nat_land = (page.rect.width > page.rect.height)
+                        if "Landscape" in orient_setting and not is_nat_land:
+                            page_rot_delta = 90
+                        elif "Portrait" in orient_setting and is_nat_land:
+                            page_rot_delta = 90
+
+                        if page_rot_delta:
+                            page.set_rotation((page.rotation + page_rot_delta) % 360)
+
                         if is_grayscale:
-                            page = doc[p]
                             pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
                             new_page = sliced_doc.new_page(width=page.rect.width, height=page.rect.height)
                             new_page.insert_image(page.rect, stream=pix.tobytes("jpeg"))
@@ -1198,6 +1269,11 @@ class _PdfPrintDialog(QDialog):
                 pjl.append(f"@PJL SET COPIES = {copies}")
                 pjl.append(f"@PJL SET PAPER = {paper}")
 
+                if "Landscape" in orient_setting:
+                    pjl.append("@PJL SET ORIENTATION = LANDSCAPE")
+                elif "Portrait" in orient_setting:
+                    pjl.append("@PJL SET ORIENTATION = PORTRAIT")
+
                 if is_color:
                     pjl.append("@PJL SET COLORMODE = COLOR")
                     pjl.append("@PJL SET RENDERMODE = COLOR")
@@ -1218,7 +1294,7 @@ class _PdfPrintDialog(QDialog):
                 pjl.append("@PJL ENTER LANGUAGE = PDF\r\n")
                 payload = "\r\n".join(pjl).encode("latin-1") + pdf_bytes + b"\r\n\x1b%-12345X"
 
-                self._dispatch_worker("socket", ip, payload, {"port": 9100})
+                self._dispatch_worker("socket", ip, payload, {"port": 9100, "orient": orient_setting})
             except Exception as e:
                 self._cleanup_temp_slice()
                 QMessageBox.critical(self, "Setup Error", str(e))
@@ -1237,6 +1313,7 @@ class _PdfPrintDialog(QDialog):
                     "paper": paper,
                     "color": color,
                     "user": user,
+                    "orient": orient_setting,
                 },
             )
 
@@ -1250,6 +1327,7 @@ class _PdfPrintDialog(QDialog):
                 {
                     "copies": copies,
                     "color": color,
+                    "orient": orient_setting,
                     "page_indices": pages if not self.temp_slice_path else None,
                 },
             )

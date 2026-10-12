@@ -384,7 +384,6 @@ class FujiAccountingManager(QWidget):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(8)
 
-        # Header bar
         header_bar = QHBoxLayout()
         title_lbl = QLabel(f"<b>Print Suite & Manager</b> <span style='color: #7aa2f7;'>[{self.os_title}]</span>")
         title_lbl.setStyleSheet("font-size: 11pt; color: #c0caf5;")
@@ -399,21 +398,16 @@ class FujiAccountingManager(QWidget):
         self.tabs = QTabWidget()
         root_layout.addWidget(self.tabs)
 
-        # Tab 1: PDF Print & Preview (Document SVG)
         self.tab_preview = QWidget()
         self.init_preview_tab()
         doc_icon = get_svg_icon(SVG_DOCUMENT, "#c0caf5", 18)
         self.tabs.addTab(self.tab_preview, doc_icon, "Print & Preview")
 
-        # Tab 2: Settings & Accounting Setup (Gear SVG)
         self.tab_setup = QWidget()
         self.init_setup_tab()
         gear_icon = get_svg_icon(SVG_GEAR, "#c0caf5", 18)
         self.tabs.addTab(self.tab_setup, gear_icon, "Printer & Accounting Setup")
 
-    # -------------------------------------------------------------
-    # Drag and Drop Support
-    # -------------------------------------------------------------
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
@@ -430,9 +424,6 @@ class FujiAccountingManager(QWidget):
                 event.acceptProposedAction()
                 break
 
-    # -------------------------------------------------------------
-    # TAB 1: Print & Preview
-    # -------------------------------------------------------------
     def init_preview_tab(self):
         layout = QHBoxLayout(self.tab_preview)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -441,7 +432,6 @@ class FujiAccountingManager(QWidget):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setSpacing(8)
 
-        # 1. Document Selection
         file_group = QGroupBox("Document Selection")
         f_layout = QVBoxLayout()
         self.file_input = QLineEdit()
@@ -456,7 +446,6 @@ class FujiAccountingManager(QWidget):
         file_group.setLayout(f_layout)
         left_layout.addWidget(file_group)
 
-        # 2. Destination & Mode
         dest_group = QGroupBox("Printer Destination & Mode")
         d_layout = QVBoxLayout()
         d_layout.setSpacing(6)
@@ -489,7 +478,6 @@ class FujiAccountingManager(QWidget):
         self.cups_queue_combo.setVisible(False)
         d_layout.addWidget(self.cups_queue_combo)
 
-        # Dynamic Accounting Banner
         self.acct_banner_lbl = QLabel("Accounting: Not configured")
         self.acct_banner_lbl.setStyleSheet("color: #7aa2f7; font-size: 8.5pt;")
         d_layout.addWidget(self.acct_banner_lbl)
@@ -497,7 +485,6 @@ class FujiAccountingManager(QWidget):
         dest_group.setLayout(d_layout)
         left_layout.addWidget(dest_group)
 
-        # 3. Page Range Selector
         page_group = QGroupBox("Page Range")
         pg_layout = QVBoxLayout()
         pg_layout.setSpacing(5)
@@ -534,7 +521,6 @@ class FujiAccountingManager(QWidget):
         page_group.setLayout(pg_layout)
         left_layout.addWidget(page_group)
 
-        # 4. Print Settings Group
         settings_group = QGroupBox("Layout & Quality Settings")
         s_layout = QVBoxLayout()
         s_layout.setSpacing(5)
@@ -547,6 +533,7 @@ class FujiAccountingManager(QWidget):
             "2-Sided (Flip on Short Edge)"
         ])
         self.duplex_combo.setCurrentIndex(1)
+        self.duplex_combo.currentIndexChanged.connect(lambda _: self.jump_to_page(self.current_page))
         s_layout.addWidget(self.duplex_combo)
 
         s_layout.addWidget(QLabel("Paper Size:"))
@@ -575,13 +562,11 @@ class FujiAccountingManager(QWidget):
 
         left_layout.addStretch()
 
-        # Progress bar
         self.print_progress = QProgressBar()
         self.print_progress.setVisible(False)
         self.print_progress.setFixedHeight(14)
         left_layout.addWidget(self.print_progress)
 
-        # Send Button
         self.send_pdf_btn = QPushButton("Print")
         self.send_pdf_btn.setObjectName("ActionBtn")
         self.send_pdf_btn.setIcon(get_svg_icon(SVG_BOLT, "#1a1b26", 18))
@@ -590,7 +575,6 @@ class FujiAccountingManager(QWidget):
 
         splitter.addWidget(left_widget)
 
-        # Right Column: PDF Preview Area
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
 
@@ -643,9 +627,6 @@ class FujiAccountingManager(QWidget):
 
         layout.addWidget(splitter)
 
-    # -------------------------------------------------------------
-    # TAB 2: Setup & Credentials
-    # -------------------------------------------------------------
     def init_setup_tab(self):
         layout = QVBoxLayout(self.tab_setup)
         layout.setSpacing(12)
@@ -769,9 +750,6 @@ class FujiAccountingManager(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Offline", f"Cannot connect to {ip}:9100:\n{e}")
 
-    # -------------------------------------------------------------
-    # Auto-Generated Preferences Persistence (JSON)
-    # -------------------------------------------------------------
     def load_preferences(self):
         target_file = ensure_preferences_file()
         if not os.path.exists(target_file):
@@ -854,9 +832,6 @@ class FujiAccountingManager(QWidget):
         self.save_preferences()
         super().closeEvent(event)
 
-    # -------------------------------------------------------------
-    # Page Navigation & Preview Logic
-    # -------------------------------------------------------------
     def browse_pdf(self):
         current_val = self.file_input.text().strip()
         if current_val and os.path.exists(os.path.dirname(current_val)):
@@ -919,7 +894,17 @@ class FujiAccountingManager(QWidget):
         self.update_page_indicator()
 
     def update_page_indicator(self):
-        self.page_indicator_lbl.setText(f"Viewing: {self.current_page} / {self.total_pages}")
+        duplex_txt = self.duplex_combo.currentText()
+        is_duplex = "2-Sided" in duplex_txt
+        is_back = is_duplex and (self.current_page % 2 == 0)
+        tag = ""
+        if is_duplex:
+            if is_back:
+                tag = " (Back — Inverted)" if "Short Edge" in duplex_txt else " (Back)"
+            else:
+                tag = " (Front)"
+
+        self.page_indicator_lbl.setText(f"Viewing: {self.current_page} / {self.total_pages}{tag}")
         if self.page_scope_combo.currentIndex() == 1:
             self.page_scope_combo.setItemText(1, f"Current Page Only (Page {self.current_page})")
 
@@ -943,13 +928,29 @@ class FujiAccountingManager(QWidget):
             self.render_fallback_page(self.file_input.text().strip(), page_num)
 
     def render_fitz_page(self, file_path: str, page_num: int):
-        """Instant in-memory rendering via PyMuPDF without spawning pdftoppm."""
+        """Instant in-memory rendering via PyMuPDF with duplex rotation support."""
         if not HAS_FITZ or fitz is None:
             return
         try:
             doc = fitz.open(file_path)
             if 1 <= page_num <= doc.page_count:
                 page = doc[page_num - 1]
+
+                duplex_txt = self.duplex_combo.currentText()
+                is_duplex = "2-Sided" in duplex_txt
+                is_back_page = is_duplex and (page_num % 2 == 0)
+                is_natural_landscape = (page.rect.width > page.rect.height)
+
+                duplex_rot = 0
+                if is_back_page:
+                    if "Short Edge" in duplex_txt:
+                        duplex_rot = 0 if is_natural_landscape else 180
+                    elif "Long Edge" in duplex_txt:
+                        duplex_rot = 180 if is_natural_landscape else 0
+
+                if duplex_rot:
+                    page.set_rotation((page.rotation + duplex_rot) % 360)
+
                 target_w = max(400, (self.scroll_area.width() - 40) if self.scroll_area else 400)
                 zoom = target_w / max(1.0, page.rect.width)
                 mat = fitz.Matrix(zoom, zoom)
@@ -1009,9 +1010,6 @@ class FujiAccountingManager(QWidget):
             evens = [str(p) for p in range(2, self.total_pages + 1, 2)]
             self.custom_range_input.setText(", ".join(evens))
 
-    # -------------------------------------------------------------
-    # High-Speed Slicing & Direct Print Execution
-    # -------------------------------------------------------------
     def parse_pages(self, scope_idx: int, total_pages: int) -> list[int]:
         if scope_idx == 0:
             return list(range(1, total_pages + 1))
@@ -1049,7 +1047,6 @@ class FujiAccountingManager(QWidget):
         tmp_fd, out_path = tempfile.mkstemp(suffix=".pdf")
         os.close(tmp_fd)
 
-        # 1. PyMuPDF (Fastest, zero process overhead)
         if HAS_FITZ and fitz is not None:
             doc = fitz.open(input_pdf)
             new_doc = fitz.open()
@@ -1061,7 +1058,6 @@ class FujiAccountingManager(QWidget):
             doc.close()
             return out_path
 
-        # 2. pypdf
         if HAS_PYPDF and PdfReader is not None and PdfWriter is not None:
             reader = PdfReader(input_pdf)
             writer = PdfWriter()
@@ -1072,7 +1068,6 @@ class FujiAccountingManager(QWidget):
                 writer.write(f)
             return out_path
 
-        # 3. qpdf fallback
         page_str = ",".join(str(p) for p in page_list)
         try:
             res = subprocess.run(["qpdf", "--empty", "--pages", input_pdf, page_str, "--", out_path], capture_output=True)
@@ -1081,7 +1076,6 @@ class FujiAccountingManager(QWidget):
         except FileNotFoundError:
             pass
 
-        # 4. pdfseparate / pdfunite fallback
         try:
             temp_dir = tempfile.mkdtemp()
             chunk_files = []
@@ -1176,7 +1170,6 @@ class FujiAccountingManager(QWidget):
                 QMessageBox.critical(self, "Page Processing Error", f"Failed to prepare pages for printing:\n{e}")
                 return
 
-        # If CUPS Mode on Linux
         if not is_direct:
             try:
                 cmd = ["lp", "-d", queue, "-n", str(copies_val)]
@@ -1217,7 +1210,6 @@ class FujiAccountingManager(QWidget):
                         os.remove(target_pdf)
             return
 
-        # Direct Socket Port 9100 Mode (Foxit-speed)
         try:
             with open(target_pdf, "rb") as f:
                 pdf_data = f.read()
@@ -1305,9 +1297,6 @@ class FujiAccountingManager(QWidget):
                     os.remove(target_pdf)
             QMessageBox.critical(self, "Print Setup Error", str(e))
 
-    # -------------------------------------------------------------
-    # CUPS / System Configuration
-    # -------------------------------------------------------------
     def load_printer_list(self):
         try:
             res = subprocess.run(["lpstat", "-e"], capture_output=True, text=True)
