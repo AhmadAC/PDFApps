@@ -718,10 +718,7 @@ class TabCortar(BasePage):
                 if idx in self._applied_crops:
                     base_x0, base_y0, base_x1, base_y1 = self._applied_crops[idx]
                 else:
-                    orig_rot = page.rotation
-                    page.set_rotation(0)
-                    base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
-                    page.set_rotation(orig_rot)
+                    base_x0, base_y0, base_x1, base_y1 = page.cropbox.x0, page.cropbox.y0, page.cropbox.x1, page.cropbox.y1
 
                 new_x0 = base_x0 + u_left
                 new_y0 = base_y0 + u_top
@@ -795,11 +792,8 @@ class TabCortar(BasePage):
                     u_w = c[2] - c[0]
                     u_h = c[3] - c[1]
                 else:
-                    orig_rot = page.rotation
-                    page.set_rotation(0)
-                    u_w = page.rect.width
-                    u_h = page.rect.height
-                    page.set_rotation(orig_rot)
+                    u_w = page.cropbox.width
+                    u_h = page.cropbox.height
                 doc.close()
             except Exception:
                 pass
@@ -863,11 +857,8 @@ class TabCortar(BasePage):
                         u_w = c[2] - c[0]
                         u_h = c[3] - c[1]
                     else:
-                        orig_rot = page.rotation
-                        page.set_rotation(0)
-                        u_w = page.rect.width
-                        u_h = page.rect.height
-                        page.set_rotation(orig_rot)
+                        u_w = page.cropbox.width
+                        u_h = page.cropbox.height
                         
                     if total_rot in (90, 270):
                         self._ref_width = u_h
@@ -932,11 +923,8 @@ class TabCortar(BasePage):
                 user_rot = viewer._canvas._page_rotations.get(0, 0) if (viewer and hasattr(viewer, "_canvas")) else 0
                 total_rot = (page.rotation + user_rot) % 360
                 
-                orig_rot = page.rotation
-                page.set_rotation(0)
-                u_w = page.rect.width
-                u_h = page.rect.height
-                page.set_rotation(orig_rot)
+                u_w = page.cropbox.width
+                u_h = page.cropbox.height
                 
                 if total_rot in (90, 270):
                     self._ref_width = u_h
@@ -1018,10 +1006,7 @@ class TabCortar(BasePage):
                     if idx in crops_to_save:
                         base_x0, base_y0, base_x1, base_y1 = crops_to_save[idx]
                     else:
-                        orig_rot = page.rotation
-                        page.set_rotation(0)
-                        base_x0, base_y0, base_x1, base_y1 = page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1
-                        page.set_rotation(orig_rot)
+                        base_x0, base_y0, base_x1, base_y1 = page.cropbox.x0, page.cropbox.y0, page.cropbox.x1, page.cropbox.y1
                         
                     new_x0 = base_x0 + u_left
                     new_y0 = base_y0 + u_top
