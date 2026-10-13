@@ -1,13 +1,13 @@
 # app/editor/canvas_painter1.py
 
-"""Canvas painter: renders pages, overlays, text modifications, notes, and previews."""
+"""Canvas painter: renders pages, overlays, vector check/cross stamps, text modifications, notes, and smoothed freehand drawings."""
 
 from __future__ import annotations
 
 import os
 import fitz
-from PySide6.QtCore import Qt, QRect, QPoint
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPixmap
+from PySide6.QtCore import Qt, QRect, QPoint, QPointF
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPixmap, QPainterPath
 
 from app.constants import ACCENT, TEXT_SEC
 from app.i18n import t
@@ -18,6 +18,8 @@ class CanvasPainter:
     @staticmethod
     def paint(canvas, painter: QPainter):
         p = painter
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.fillRect(canvas.rect(), QColor(canvas._bg_color))
 
         if not canvas._page_pixmaps:
@@ -34,7 +36,6 @@ class CanvasPainter:
                 p.drawPixmap(0, yo, qpix)
             elif i < len(canvas._page_prev_pixmaps) and canvas._page_prev_pixmaps[i] is not None:
                 p.save()
-                p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                 p.drawPixmap(page_r, canvas._page_prev_pixmaps[i])
                 p.restore()
             else:
@@ -76,6 +77,71 @@ class CanvasPainter:
                 p.fillRect(qr, QColor(int(fill[0]*255), int(fill[1]*255), int(fill[2]*255), 210))
                 p.setPen(QPen(QColor("#EF4444"), 1)); p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(qr)
+
+            elif etype == "check":
+                r = e["rect"]
+                sx0 = int(r.x0 * z)
+                sy0 = yo + int(r.y0 * z)
+                sw = max(4, int(r.width * z))
+                sh = max(4, int(r.height * z))
+                c = e.get("color", (0, 0, 0))
+                col = QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255))
+                stroke_w = max(1.5, float(e.get("width", min(sw, sh) * 0.12)))
+                pen = QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p1 = QPointF(sx0 + 0.16 * sw, sy0 + 0.52 * sh)
+                p2 = QPointF(sx0 + 0.40 * sw, sy0 + 0.82 * sh)
+                p3 = QPointF(sx0 + 0.86 * sw, sy0 + 0.18 * sh)
+                check_path = QPainterPath()
+                check_path.moveTo(p1)
+                check_path.lineTo(p2)
+                check_path.lineTo(p3)
+                p.drawPath(check_path)
+
+                if is_selected:
+                    p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                    p.drawRect(QRect(sx0 - 2, sy0 - 2, sw + 4, sh + 4))
+                    hs = 8
+                    p.setBrush(QColor("#FFFFFF"))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
+                    for hpt in [
+                        QPoint(sx0 - 2, sy0 - 2),
+                        QPoint(sx0 + sw + 2, sy0 - 2),
+                        QPoint(sx0 - 2, sy0 + sh + 2),
+                        QPoint(sx0 + sw + 2, sy0 + sh + 2),
+                    ]:
+                        p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))
+
+            elif etype == "cross":
+                r = e["rect"]
+                sx0 = int(r.x0 * z)
+                sy0 = yo + int(r.y0 * z)
+                sw = max(4, int(r.width * z))
+                sh = max(4, int(r.height * z))
+                c = e.get("color", (0, 0, 0))
+                col = QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255))
+                stroke_w = max(1.5, float(e.get("width", min(sw, sh) * 0.12)))
+                pen = QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawLine(QPointF(sx0 + 0.20 * sw, sy0 + 0.20 * sh), QPointF(sx0 + 0.80 * sw, sy0 + 0.80 * sh))
+                p.drawLine(QPointF(sx0 + 0.80 * sw, sy0 + 0.20 * sh), QPointF(sx0 + 0.20 * sw, sy0 + 0.80 * sh))
+
+                if is_selected:
+                    p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                    p.drawRect(QRect(sx0 - 2, sy0 - 2, sw + 4, sh + 4))
+                    hs = 8
+                    p.setBrush(QColor("#FFFFFF"))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
+                    for hpt in [
+                        QPoint(sx0 - 2, sy0 - 2),
+                        QPoint(sx0 + sw + 2, sy0 - 2),
+                        QPoint(sx0 - 2, sy0 + sh + 2),
+                        QPoint(sx0 + sw + 2, sy0 + sh + 2),
+                    ]:
+                        p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))
+
             elif etype == "highlight":
                 c = e.get("color", (1, 1, 0))
                 col = QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255), 120)
@@ -88,6 +154,7 @@ class CanvasPainter:
                     r = e["rect"]
                     qr = QRect(int(r.x0*z), yo+int(r.y0*z), max(1,int(r.width*z)), max(1,int(r.height*z)))
                     p.fillRect(qr, col)
+
             elif etype == "text":
                 pt = e["point"]; c = e["color"]
                 p.setPen(QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255)))
@@ -230,6 +297,7 @@ class CanvasPainter:
                     p.drawText(QRect(bx+10, by+8, bw-20, bh-16),
                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
                                e["text"])
+
             elif etype == "draw":
                 pts = e.get("points", [])
                 if len(pts) >= 2:
@@ -239,12 +307,25 @@ class CanvasPainter:
                                max(1, int(w * z)))
                     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-                    p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
-                    prev = pts[0]
-                    for cur in pts[1:]:
-                        p.drawLine(int(prev[0]*z), yo+int(prev[1]*z),
-                                   int(cur[0]*z),  yo+int(cur[1]*z))
-                        prev = cur
+                    p.setPen(pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+
+                    path = QPainterPath()
+                    p0 = (pts[0][0] * z, yo + pts[0][1] * z)
+                    path.moveTo(p0[0], p0[1])
+                    if len(pts) == 2:
+                        p1 = (pts[1][0] * z, yo + pts[1][1] * z)
+                        path.lineTo(p1[0], p1[1])
+                    else:
+                        for i in range(1, len(pts) - 1):
+                            cur = (pts[i][0] * z, yo + pts[i][1] * z)
+                            nxt = (pts[i + 1][0] * z, yo + pts[i + 1][1] * z)
+                            mid_x = (cur[0] + nxt[0]) / 2.0
+                            mid_y = (cur[1] + nxt[1]) / 2.0
+                            path.quadTo(cur[0], cur[1], mid_x, mid_y)
+                        p_last = (pts[-1][0] * z, yo + pts[-1][1] * z)
+                        path.lineTo(p_last[0], p_last[1])
+                    p.drawPath(path)
 
         # 3. Interactive signature follow preview
         if canvas._placing_signature and canvas._sig_cursor_pos and canvas._placing_sig_pixmap:
@@ -263,20 +344,61 @@ class CanvasPainter:
                 p.drawRect(preview_r)
                 p.restore()
 
-        # 4. Interactive freehand stroke preview
+        # 4. Interactive check/cross vector stamp placement follow preview
+        if getattr(canvas, "_placing_stamp", False) and getattr(canvas, "_stamp_cursor_pos", None):
+            pos = canvas._stamp_cursor_pos
+            st_size = getattr(canvas, "_stamp_size", 20.0) * z
+            sw = max(8, int(st_size))
+            sh = sw
+            sx0 = pos.x() - sw // 2
+            sy0 = pos.y() - sh // 2
+            c_val = getattr(canvas, "_stamp_color", (0, 0, 0))
+            col = QColor(int(c_val[0]*255), int(c_val[1]*255), int(c_val[2]*255))
+            stroke_w = max(1.5, sw * 0.12)
+            pen = QPen(col, stroke_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+            p.save()
+            p.setOpacity(0.85)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            st_type = getattr(canvas, "_placing_stamp_type", "check")
+            if st_type == "check":
+                p1 = QPointF(sx0 + 0.16 * sw, sy0 + 0.52 * sh)
+                p2 = QPointF(sx0 + 0.40 * sw, sy0 + 0.82 * sh)
+                p3 = QPointF(sx0 + 0.86 * sw, sy0 + 0.18 * sh)
+                cp = QPainterPath()
+                cp.moveTo(p1); cp.lineTo(p2); cp.lineTo(p3)
+                p.drawPath(cp)
+            else:
+                p.drawLine(QPointF(sx0 + 0.20 * sw, sy0 + 0.20 * sh), QPointF(sx0 + 0.80 * sw, sy0 + 0.80 * sh))
+                p.drawLine(QPointF(sx0 + 0.80 * sw, sy0 + 0.20 * sh), QPointF(sx0 + 0.20 * sw, sy0 + 0.80 * sh))
+            p.setPen(QPen(QColor(ACCENT), 1.0, Qt.PenStyle.DashLine))
+            p.drawRect(QRect(sx0 - 2, sy0 - 2, sw + 4, sh + 4))
+            p.restore()
+
+        # 5. Interactive smoothed freehand stroke preview
         if canvas._draw_mode and canvas._current_stroke and len(canvas._current_stroke) >= 2:
             col = canvas._draw_color
             pen = QPen(QColor(int(col[0]*255), int(col[1]*255), int(col[2]*255)),
                        max(1, int(canvas._draw_width * canvas._zoom)))
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
-            prev = canvas._current_stroke[0]
-            for cur in canvas._current_stroke[1:]:
-                p.drawLine(int(prev[0]), int(prev[1]), int(cur[0]), int(cur[1]))
-                prev = cur
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
 
-        # 5. Drag selection rectangle
+            pts = canvas._current_stroke
+            path = QPainterPath()
+            path.moveTo(pts[0][0], pts[0][1])
+            if len(pts) == 2:
+                path.lineTo(pts[1][0], pts[1][1])
+            else:
+                for i in range(1, len(pts) - 1):
+                    mid_x = (pts[i][0] + pts[i + 1][0]) / 2.0
+                    mid_y = (pts[i][1] + pts[i + 1][1]) / 2.0
+                    path.quadTo(pts[i][0], pts[i][1], mid_x, mid_y)
+                path.lineTo(pts[-1][0], pts[-1][1])
+            p.drawPath(path)
+
+        # 6. Drag selection rectangle
         if canvas._drag_rect:
             if canvas._select_mode:
                 p.setPen(QPen(QColor("#3B82F6"), 2, Qt.PenStyle.SolidLine))
@@ -294,7 +416,7 @@ class CanvasPainter:
                 p.setBrush(QColor(239, 68, 68, 50))
                 p.drawRect(canvas._drag_rect)
 
-        # 6. Active persistent selection rectangle in Select mode (Foxit style)
+        # 7. Active persistent selection rectangle in Select mode (Foxit style)
         if getattr(canvas, "_select_mode", False) and getattr(canvas, "_active_sel_rect", None) and not canvas._drag_rect:
             sel_r = canvas._active_sel_rect
             sel_pg = getattr(canvas, "_active_sel_page", 0)

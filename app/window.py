@@ -1,3 +1,5 @@
+
+
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
@@ -148,7 +150,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
             if os.path.exists(_svg):
                 self.setWindowIcon(QIcon(_svg))
         self.resize(1220, 700)
-        self.setMinimumSize(860, 540)
+        self.setMinimumSize(480, 360)
 
         self._sb = QStatusBar()
         self.setStatusBar(self._sb)
@@ -384,7 +386,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         rc_lay.setSpacing(0)
         rc_lay.addWidget(self.stack, 1)
         self._right_tool_container.setVisible(False)
-        self._saved_right_width = 400
+        self._saved_right_width = 380
 
         # ── Tabbed Viewer Containers ─────────────────────────────────────────
         self._tab_container = QWidget()
@@ -422,7 +424,7 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         self._splitter.addWidget(self._right_tool_container)
         self._splitter.setCollapsible(0, False)
         self._splitter.setCollapsible(1, False)
-        self._splitter.setSizes([1200, 0])
+        self._splitter.setSizes([800, 0])
 
         self._content_area = QWidget()
         content_v = QVBoxLayout(self._content_area)
@@ -578,3 +580,4 @@ class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMain
         except Exception:
             pass
         super().closeEvent(event)
+

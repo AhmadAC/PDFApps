@@ -1,5 +1,5 @@
 # app/editor/apply_edits.py 
-"""PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification and multi-rect text highlight support."""
+"""PDFApps – pure edit-application dispatcher for the PDF editor with media deletion/modification, vector check/cross stamps, and multi-rect text highlight support."""
 
 import os
 import logging
@@ -19,7 +19,7 @@ class ApplyResult:
 
 
 def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
-    """Apply pending edits to open doc, supporting transparent SVG/PNG signatures and clean media manipulation."""
+    """Apply pending edits to open doc, supporting transparent SVG/PNG signatures, vector check/cross stamps, and clean media manipulation."""
     import fitz
 
     result = ApplyResult()
@@ -62,6 +62,42 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
         if etype == "redact":
             pg.add_redact_annot(e["rect"], fill=e["fill"])
             pg.apply_redactions()
+
+        elif etype == "check":
+            if e.get("_deleted"):
+                continue
+            r = fitz.Rect(e["rect"])
+            w = r.width
+            h = r.height
+            p1 = fitz.Point(r.x0 + 0.16 * w, r.y0 + 0.52 * h)
+            p2 = fitz.Point(r.x0 + 0.40 * w, r.y0 + 0.82 * h)
+            p3 = fitz.Point(r.x0 + 0.86 * w, r.y0 + 0.18 * h)
+            stroke_w = max(1.5, float(e.get("width", min(w, h) * 0.12)))
+            color = e.get("color", (0, 0, 0))
+            col = tuple(float(x) for x in color[:3]) if isinstance(color, (list, tuple)) and len(color) >= 3 else (0.0, 0.0, 0.0)
+            shape = pg.new_shape()
+            shape.draw_polyline([p1, p2, p3])
+            shape.finish(color=col, width=stroke_w, lineCap=1, lineJoin=1)
+            shape.commit()
+
+        elif etype == "cross":
+            if e.get("_deleted"):
+                continue
+            r = fitz.Rect(e["rect"])
+            w = r.width
+            h = r.height
+            p1 = fitz.Point(r.x0 + 0.20 * w, r.y0 + 0.20 * h)
+            p2 = fitz.Point(r.x0 + 0.80 * w, r.y0 + 0.80 * h)
+            p3 = fitz.Point(r.x0 + 0.80 * w, r.y0 + 0.20 * h)
+            p4 = fitz.Point(r.x0 + 0.20 * w, r.y0 + 0.80 * h)
+            stroke_w = max(1.5, float(e.get("width", min(w, h) * 0.12)))
+            color = e.get("color", (0, 0, 0))
+            col = tuple(float(x) for x in color[:3]) if isinstance(color, (list, tuple)) and len(color) >= 3 else (0.0, 0.0, 0.0)
+            shape = pg.new_shape()
+            shape.draw_line(p1, p2)
+            shape.draw_line(p3, p4)
+            shape.finish(color=col, width=stroke_w, lineCap=1, lineJoin=1)
+            shape.commit()
 
         elif etype == "text":
             if e.get("_deleted"):

@@ -1,5 +1,6 @@
+
 # app/editor/tab_ui.py
-"""PDFApps – tab_ui: UI builder and styling manager for TabEditar."""
+"""PDFApps – tab_ui: UI builder and styling manager for TabEditar with Fill & Sign check/cross tools."""
 
 import json
 import os
@@ -183,7 +184,7 @@ def setup_editor_ui(tab) -> None:
     canvas_scroll.setWidgetResizable(False)
     canvas_scroll.setStyleSheet(f"QScrollArea {{ background: {BG_INNER}; }}")
     canvas_scroll.setWidget(tab._canvas)
-    canvas_scroll.setMinimumWidth(320)
+    canvas_scroll.setMinimumWidth(150)
     canvas_scroll.viewport().installEventFilter(tab)
     canvas_scroll.verticalScrollBar().valueChanged.connect(tab._on_canvas_scroll)
     canvas_scroll.horizontalScrollBar().valueChanged.connect(tab._on_canvas_scroll)
@@ -241,10 +242,10 @@ def setup_editor_ui(tab) -> None:
     tab._edit_splitter.setStretchFactor(0, 0)
     tab._edit_splitter.setStretchFactor(1, 1)
     if initial_open:
-        tab._edit_splitter.setSizes([tab._saved_sidebar_width, 800])
+        tab._edit_splitter.setSizes([tab._saved_sidebar_width, 500])
         tab._sidebar_panel.setVisible(True)
     else:
-        tab._edit_splitter.setSizes([0, 1020])
+        tab._edit_splitter.setSizes([0, 500])
         tab._sidebar_panel.setVisible(False)
     tab._edit_splitter.setCollapsible(0, True)
     tab._edit_splitter.setCollapsible(1, False)
@@ -259,7 +260,8 @@ def setup_editor_ui(tab) -> None:
     # Control Sidebar (Right window)
     ctrl_inner = QWidget()
     ctrl_inner.setObjectName("scroll_inner")
-    ctrl_inner.setFixedWidth(380)
+    ctrl_inner.setMinimumWidth(260)
+    ctrl_inner.setMaximumWidth(400)
     cv = QVBoxLayout(ctrl_inner)
     cv.setContentsMargins(10, 10, 10, 10)
     cv.setSpacing(8)
@@ -389,8 +391,9 @@ def setup_editor_ui(tab) -> None:
     ctrl_scroll.setFrameShape(QFrame.Shape.NoFrame)
     ctrl_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     ctrl_scroll.setWidget(ctrl_inner)
-    ctrl_scroll.setFixedWidth(400)
-    ctrl_scroll.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+    ctrl_scroll.setMinimumWidth(280)
+    ctrl_scroll.setMaximumWidth(400)
+    ctrl_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
     body_h.addWidget(ctrl_scroll)
     tab._ctrl_scroll = ctrl_scroll
 
@@ -542,21 +545,70 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(tab._form_status); v5.addWidget(tab._form_status)
     tab._opt_stack.addWidget(w5)
 
-    # 7 - Signature
+    # 7 - Fill & Sign (Vector Checkmarks, Crossmarks & Digital Signature)
     w6 = QWidget(); v6s = QVBoxLayout(w6); v6s.setContentsMargins(0, 4, 0, 0); v6s.setSpacing(6)
+    
+    lbl_fill_title = QLabel("Form Stamps (Never stripped on save):")
+    lbl_fill_title.setStyleSheet(f"color:{TEXT_PRI}; font-size:10pt; font-weight:600;")
+    v6s.addWidget(lbl_fill_title)
+
+    stamp_btn_row = QHBoxLayout()
+    stamp_btn_row.setSpacing(6)
+    tab._btn_stamp_check = QPushButton("✔ " + t("tool.stamp.check", default="Checkmark"))
+    tab._btn_stamp_check.setStyleSheet(f"QPushButton {{ background: #264F78; border: 1.5px solid {ACCENT}; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }} QPushButton:hover {{ background: #326496; }}")
+    tab._btn_stamp_check.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_stamp_check.setToolTip("Place a vector checkmark (✔) in form boxes or cells")
+    tab._btn_stamp_check.clicked.connect(tab._start_stamp_check)
+
+    tab._btn_stamp_cross = QPushButton("✖ " + t("tool.stamp.cross", default="Crossmark"))
+    tab._btn_stamp_cross.setStyleSheet("QPushButton { background: #452424; border: 1.5px solid #EF4444; color: #FCA5A5; font-weight: bold; padding: 6px; border-radius: 4px; } QPushButton:hover { background: #5E2F2F; color: white; }")
+    tab._btn_stamp_cross.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_stamp_cross.setToolTip("Place a vector crossmark (✖) in form boxes or cells")
+    tab._btn_stamp_cross.clicked.connect(tab._start_stamp_cross)
+
+    stamp_btn_row.addWidget(tab._btn_stamp_check)
+    stamp_btn_row.addWidget(tab._btn_stamp_cross)
+    v6s.addLayout(stamp_btn_row)
+
+    stamp_opt_row = QHBoxLayout()
+    stamp_opt_row.addWidget(QLabel("Size:"))
+    tab._stamp_size = FocusSpinBox()
+    tab._stamp_size.setRange(8, 72)
+    tab._stamp_size.setValue(20)
+    tab._stamp_size.setSuffix(" pt")
+    stamp_opt_row.addWidget(tab._stamp_size)
+
+    stamp_opt_row.addWidget(QLabel("Color:"))
+    tab._stamp_color = ColorPickerButton((0, 0, 0))
+    stamp_opt_row.addWidget(tab._stamp_color)
+    v6s.addLayout(stamp_opt_row)
+
+    hint_fill = QLabel("💡 Click Checkmark or Crossmark, then click directly inside any box on the page to stamp it.")
+    hint_fill.setStyleSheet(f"color:{ACCENT}; font-size:11px;")
+    hint_fill.setWordWrap(True)
+    v6s.addWidget(hint_fill)
+
+    v6s.addSpacing(6)
+    lbl_sig_title = QLabel("Digital Signature:")
+    lbl_sig_title.setStyleSheet(f"color:{TEXT_PRI}; font-size:10pt; font-weight:600;")
+    v6s.addWidget(lbl_sig_title)
+
     tab._sig_preview = QLabel(t("edit.signature.none"))
     tab._sig_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
     tab._sig_preview.setMinimumHeight(60)
     tab._sig_preview.setStyleSheet("background: white; border: 1.5px dashed #ccc; border-radius: 6px;")
     v6s.addWidget(tab._sig_preview)
+
     tab._sig_choose = QPushButton(t("edit.signature.choose"))
     tab._sig_choose.setIcon(qta.icon("fa5s.signature", color=TEXT_PRI))
     tab._sig_choose.clicked.connect(tab._pick_signature)
     v6s.addWidget(tab._sig_choose)
+
     sig_clear = QPushButton(t("edit.signature.clear"))
     sig_clear.clicked.connect(tab._clear_signature)
     v6s.addWidget(sig_clear)
-    hint6s = QLabel("💡 Click on any placed signature to move (Arrow keys), resize (Ctrl +/- or wheel), or delete (<kbd>Del</kbd>).")
+
+    hint6s = QLabel("💡 Click placed signatures, checkmarks, or stamps to resize or move (Del to delete).")
     hint6s.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint6s.setWordWrap(True)
     tab._hint_labels.append(hint6s); v6s.addWidget(hint6s); v6s.addStretch()
     tab._opt_stack.addWidget(w6)
@@ -711,3 +763,4 @@ def update_tab_theme(tab, dark: bool) -> None:
                 if dark else
                 f"background:#D6E8FA; border:1px solid #70A7DB; color:{ACCENT}; border-radius:6px;"
             )
+

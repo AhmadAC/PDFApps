@@ -1,3 +1,5 @@
+
+
 # app/editor/tab_history.py
 """PDFApps – tab_history: history, undo/redo, and pending edits management."""
 
@@ -48,6 +50,8 @@ class TabHistoryManager:
                 if e.get("new_text") else (f"🗑 Text {suffix}")
             ),
             "signature":    lambda e: t("edit.mode.signature") + suffix,
+            "check":        lambda e: "✔ " + t("tool.stamp.check", default="Checkmark") + suffix,
+            "cross":        lambda e: "✖ " + t("tool.stamp.cross", default="Crossmark") + suffix,
             "draw":         lambda e: t("edit.mode.draw") + suffix,
             "delete_annot": lambda e: t("edit.label.note_delete") + suffix,
         }
@@ -174,3 +178,4 @@ class TabHistoryManager:
             self.tab._canvas.set_overlays(self.pending)
         except Exception as ex:
             self.tab._status(t("edit.status.annot_error", ex=ex))
+

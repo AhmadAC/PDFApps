@@ -1,5 +1,5 @@
 # app/editor/tab.py
-"""PDFApps – TabEditar: visual PDF editor tool tab with media object manipulation & typography styling."""
+"""PDFApps – TabEditar: visual PDF editor tool tab with Fill & Sign checkmarks/crossmarks, media object manipulation & typography styling."""
 
 from __future__ import annotations
 
@@ -117,6 +117,10 @@ class TabEditar(QWidget):
     _form_status: QLabel
     _sig_preview: QLabel
     _sig_choose: QPushButton
+    _btn_stamp_check: QPushButton
+    _btn_stamp_cross: QPushButton
+    _stamp_size: FocusSpinBox
+    _stamp_color: ColorPickerButton
     _draw_color_cb: ColorPickerButton
     _draw_width_slider: QSlider
     _draw_width_lbl: QLabel
@@ -148,7 +152,7 @@ class TabEditar(QWidget):
     def _user_pending(self) -> list:
         return [
             e for e in self._pending
-            if not e.get("_existing") or e.get("_deleted") or e.get("type") in ("delete_annot", "text_edit", "image", "signature")
+            if not e.get("_existing") or e.get("_deleted") or e.get("type") in ("delete_annot", "text_edit", "image", "signature", "check", "cross")
         ]
 
     def __init__(self, status_fn: Callable[[str], None]):
@@ -179,6 +183,7 @@ class TabEditar(QWidget):
         self._canvas.text_inserted.connect(self._on_text_edit_committed)
         self._canvas.text_edit_started.connect(self._on_text_edit_started)
         self._canvas.signature_added.connect(self._on_signature_added)
+        self._canvas.stamp_added.connect(self._on_stamp_added)
         self._canvas.overlay_changed.connect(self.update)
         self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
         self._canvas.zoom_changed.connect(lambda _: self._update_page_nav_and_thumbnails())
@@ -186,10 +191,39 @@ class TabEditar(QWidget):
             self._canvas.delete_selection_requested.connect(self._delete_selection)
         if hasattr(self._canvas, "edit_selection_requested"):
             self._canvas.edit_selection_requested.connect(self._edit_selection)
+        if hasattr(self._canvas, "highlight_selection_requested"):
+            self._canvas.highlight_selection_requested.connect(self._highlight_selection)
+        if hasattr(self._canvas, "redact_selection_requested"):
+            self._canvas.redact_selection_requested.connect(self._redact_selection)
 
         self._set_text_submode("edit")
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
         self._update_nav()
+
+    def _start_stamp_check(self):
+        """Enter vector checkmark placement mode: click directly inside any box to stamp."""
+        sz = float(self._stamp_size.value()) if hasattr(self, "_stamp_size") else 20.0
+        col = self._stamp_color.color_tuple() if hasattr(self, "_stamp_color") else (0.0, 0.0, 0.0)
+        self._canvas.begin_stamp_placement("check", color=col, size=sz)
+        self._status("✔ Click directly inside any box or cell to place the checkmark (Right-click to cancel).")
+
+    def _start_stamp_cross(self):
+        """Enter vector crossmark placement mode: click directly inside any box to stamp."""
+        sz = float(self._stamp_size.value()) if hasattr(self, "_stamp_size") else 20.0
+        col = self._stamp_color.color_tuple() if hasattr(self, "_stamp_color") else (0.0, 0.0, 0.0)
+        self._canvas.begin_stamp_placement("cross", color=col, size=sz)
+        self._status("✖ Click directly inside any box or cell to place the crossmark (Right-click to cancel).")
+
+    def _on_stamp_added(self, page_idx: int, rect, stamp_type: str):
+        col = self._stamp_color.color_tuple() if hasattr(self, "_stamp_color") else (0.0, 0.0, 0.0)
+        size = float(rect.width)
+        self._add({
+            "type": stamp_type,
+            "page": page_idx,
+            "rect": rect,
+            "color": col,
+            "width": max(1.5, size * 0.12),
+        })
 
     def toggle_controls(self) -> bool:
         """Toggle the right-hand controls sidebar within the editor."""
@@ -281,8 +315,8 @@ class TabEditar(QWidget):
                 if hasattr(self, "_thumbnails"):
                     self._thumbnails.fit_window_to_thumbnails()
                     return True
-        if obj is self._canvas_scroll.viewport() and event.type() == QEvent.Type.Resize:
-            if self._canvas._doc and self._canvas._zoom_factor == 1.0:
+        if hasattr(self, "_canvas_scroll") and obj is self._canvas_scroll.viewport() and event.type() == QEvent.Type.Resize:
+            if hasattr(self, "_canvas") and self._canvas._doc and self._canvas._zoom_factor == 1.0:
                 QTimer.singleShot(0, self._canvas._layout_and_schedule)
         return super().eventFilter(obj, event)
 
@@ -424,8 +458,9 @@ class TabEditar(QWidget):
         except Exception:
             toc = []
         if not toc:
-            if hasattr(self._sidebar_tabs, "setTabVisible"):
-                self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
+            if hasattr(self, "_sidebar_tabs"):
+                if hasattr(self._sidebar_tabs, "setTabVisible"):
+                    self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
             pages_idx = self._sidebar_tabs.indexOf(self._thumbnails)
             if pages_idx >= 0:
                 self._sidebar_tabs.setCurrentIndex(pages_idx)
@@ -441,14 +476,14 @@ class TabEditar(QWidget):
                 item.setToolTip(0, title)
                 stack.append((level, item))
             self._toc_tree.expandToDepth(1)
-            if hasattr(self._sidebar_tabs, "setTabVisible"):
+            if hasattr(self, "_sidebar_tabs"):
                 self._sidebar_tabs.setTabVisible(self._toc_tab_idx, True)
             pages_idx = self._sidebar_tabs.indexOf(self._thumbnails)
             if pages_idx >= 0:
                 self._sidebar_tabs.setCurrentIndex(pages_idx)
         except Exception:
             self._toc_tree.clear()
-            if hasattr(self._sidebar_tabs, "setTabVisible"):
+            if hasattr(self, "_sidebar_tabs"):
                 self._sidebar_tabs.setTabVisible(self._toc_tab_idx, False)
 
     def _on_mode_btn(self, btn: QPushButton):

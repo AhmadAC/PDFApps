@@ -1,12 +1,12 @@
 # app/editor/canvas_events1.py
 
-"""Canvas interaction handler: mouse, drag handles, keyboard and context menus."""
+"""Canvas interaction handler: mouse, drag handles, keyboard, stroke smoothing, vector stamps, and context menus."""
 
 from __future__ import annotations
 
 import fitz
 from PySide6.QtCore import Qt, QRect, QPoint
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
+from PySide6.QtWidgets import QMenu, QMessageBox, QApplication
 import qtawesome as qta
 
 from app.constants import ACCENT
@@ -15,6 +15,25 @@ from app.editor.canvas_overlay1 import CanvasOverlayManager
 
 # Safe fallback for PyMuPDF annotation constant to satisfy Pylance
 _PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
+
+
+def smooth_stroke_points(pts: list[tuple[float, float]], iterations: int = 2) -> list[tuple[float, float]]:
+    """Apply Chaikin's corner-cutting curve algorithm to smooth freehand strokes into natural curves."""
+    if len(pts) <= 2:
+        return pts
+    smoothed = pts
+    for _ in range(iterations):
+        new_pts = [smoothed[0]]
+        for i in range(len(smoothed) - 1):
+            p0 = smoothed[i]
+            p1 = smoothed[i + 1]
+            q = (0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1])
+            r = (0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1])
+            new_pts.append(q)
+            new_pts.append(r)
+        new_pts.append(smoothed[-1])
+        smoothed = new_pts
+    return smoothed
 
 
 class CanvasEventHandler:
@@ -73,7 +92,43 @@ class CanvasEventHandler:
                 e.accept()
                 return
 
-        # 2. Selected overlay handle or drag move
+        # 2. Placing vector checkmark or crossmark stamp (Fill & Sign)
+        if getattr(c, "_placing_stamp", False):
+            if e.button() == Qt.MouseButton.RightButton:
+                c.cancel_stamp_placement()
+                e.accept()
+                return
+            if e.button() == Qt.MouseButton.LeftButton:
+                page_idx, lx, ly = c._page_and_local(pos.x(), pos.y())
+                z = c._zoom or 1.0
+                px = lx / z
+                py = ly / z
+                st_size = getattr(c, "_stamp_size", 20.0)
+                st_type = getattr(c, "_placing_stamp_type", "check")
+                r = fitz.Rect(max(0.0, px - st_size / 2.0),
+                              max(0.0, py - st_size / 2.0),
+                              px + st_size / 2.0,
+                              py + st_size / 2.0)
+                color = getattr(c, "_stamp_color", (0, 0, 0))
+                edit = {
+                    "type": st_type,
+                    "page": page_idx,
+                    "rect": r,
+                    "color": color,
+                    "width": max(1.5, st_size * 0.12),
+                }
+                c._overlays.append(edit)
+                c._selected_overlay_idx = len(c._overlays) - 1
+                c._placing_stamp = False
+                c._placing_stamp_type = ""
+                c._stamp_cursor_pos = None
+                c.setCursor(Qt.CursorShape.ArrowCursor)
+                c.stamp_added.emit(page_idx, r, st_type)
+                c.update()
+                e.accept()
+                return
+
+        # 3. Selected overlay handle or drag move
         if c._selected_overlay_idx >= 0 and e.button() == Qt.MouseButton.LeftButton:
             handle = c._overlay_mgr.get_overlay_handle_at(c._selected_overlay_idx, pos)
             if handle != CanvasOverlayManager.HANDLE_NONE:
@@ -95,7 +150,7 @@ class CanvasEventHandler:
             c._selected_overlay_idx = -1
             c.update()
 
-        # 3. Hit testing overlays
+        # 4. Hit testing overlays
         if e.button() == Qt.MouseButton.LeftButton:
             for idx in reversed(range(len(c._overlays))):
                 if c._overlay_mgr.is_pos_inside_overlay(idx, pos):
@@ -126,7 +181,7 @@ class CanvasEventHandler:
                     e.accept()
                     return
 
-            # 4. Check existing media in PDF
+            # 5. Check existing media in PDF
             page_idx, lx, ly = c._page_and_local(pos.x(), pos.y())
             pdf_pt = c._to_pdf(page_idx, lx, ly)
             existing_media = c._overlay_mgr.detect_existing_media_at(page_idx, pdf_pt)
@@ -140,7 +195,7 @@ class CanvasEventHandler:
                 e.accept()
                 return
 
-            # 5. In Select Mode: Check if clicking active selection handles or text
+            # 6. In Select Mode: Check active selection handles or existing text
             if getattr(c, "_select_mode", False):
                 if c._active_sel_rect is not None and c._active_sel_page == page_idx:
                     h_id = self._get_active_sel_handle_at(pos)
@@ -187,7 +242,7 @@ class CanvasEventHandler:
         if c._draw_mode and c._page_offsets:
             page_idx, _lx, _ly = c._page_and_local(pos.x(), pos.y())
             c._stroke_page = page_idx
-            c._current_stroke = [(pos.x(), pos.y())]
+            c._current_stroke = [(float(pos.x()), float(pos.y()))]
             c.update()
             return
 
@@ -235,6 +290,12 @@ class CanvasEventHandler:
 
         if c._placing_signature:
             c._sig_cursor_pos = pos
+            c.update()
+            e.accept()
+            return
+
+        if getattr(c, "_placing_stamp", False):
+            c._stamp_cursor_pos = pos
             c.update()
             e.accept()
             return
@@ -299,7 +360,7 @@ class CanvasEventHandler:
                 dy = (pos.y() - start.y()) / z
                 handle = c._drag_handle
                 r = fitz.Rect(orig)
-                min_s = 15.0
+                min_s = 10.0
 
                 if handle == CanvasOverlayManager.HANDLE_BR:
                     r.x1 = max(r.x0 + min_s, orig.x1 + dx)
@@ -362,10 +423,10 @@ class CanvasEventHandler:
             if c._stroke_page < 0 or c._stroke_page >= len(c._page_offsets):
                 return
             yo, pw, ph = c._page_offsets[c._stroke_page]
-            sx = max(0, min(pos.x(), pw))
-            sy = max(yo, min(pos.y(), yo + ph))
+            sx = float(max(0, min(pos.x(), pw)))
+            sy = float(max(yo, min(pos.y(), yo + ph)))
             last = c._current_stroke[-1]
-            if (sx - last[0]) ** 2 + (sy - last[1]) ** 2 >= 4:
+            if (sx - last[0]) ** 2 + (sy - last[1]) ** 2 >= 3:
                 c._current_stroke.append((sx, sy))
                 c.update()
             return
@@ -403,8 +464,9 @@ class CanvasEventHandler:
             if len(c._current_stroke) >= 2 and c._stroke_page >= 0:
                 z = c._zoom or 1.0
                 yo = c._page_offsets[c._stroke_page][0]
+                smoothed_screen = smooth_stroke_points(c._current_stroke, iterations=2)
                 pdf_points = [(round(x / z, 2), round((y - yo) / z, 2))
-                              for x, y in c._current_stroke]
+                              for x, y in smoothed_screen]
                 c._page_idx = c._stroke_page
                 c.stroke_finished.emit(c._stroke_page, pdf_points)
             c._current_stroke = None
@@ -462,6 +524,10 @@ class CanvasEventHandler:
         if key == Qt.Key.Key_Escape:
             if c._placing_signature:
                 c.cancel_signature_placement()
+                e.accept()
+                return
+            if getattr(c, "_placing_stamp", False):
+                c.cancel_stamp_placement()
                 e.accept()
                 return
             if c._selected_overlay_idx >= 0:
@@ -563,6 +629,9 @@ class CanvasEventHandler:
         if c._placing_signature:
             c.cancel_signature_placement()
             return
+        if getattr(c, "_placing_stamp", False):
+            c.cancel_stamp_placement()
+            return
 
         # Context menu for selected or clicked overlay
         if c._selected_overlay_idx >= 0 and c._overlay_mgr.is_pos_inside_overlay(c._selected_overlay_idx, pos):
@@ -607,9 +676,14 @@ class CanvasEventHandler:
             act_copy = menu.addAction(qta.icon("fa5s.copy", color=ACCENT), t("btn.copy", default="Copy"))
             act_copy.triggered.connect(lambda: QApplication.clipboard().setText(c._sel_text if hasattr(c, "_sel_text") else ""))
             act_hi = menu.addAction(qta.icon("fa5s.highlighter", color=ACCENT), "Highlight Selection")
-            act_hi.triggered.connect(lambda: c.parent().parent().parent()._highlight_selection() if hasattr(c.parent().parent().parent(), "_highlight_selection") else None)
+            act_hi.triggered.connect(c.highlight_selection_requested.emit)
             act_redact = menu.addAction(qta.icon("fa5s.eraser", color="#EF4444"), "Redact Selection")
-            act_redact.triggered.connect(lambda: c.parent().parent().parent()._redact_selection() if hasattr(c.parent().parent().parent(), "_redact_selection") else None)
+            act_redact.triggered.connect(c.redact_selection_requested.emit)
+            menu.addSeparator()
+            act_add_check = menu.addAction(qta.icon("fa5s.check", color=ACCENT), "Add Checkmark (✔)")
+            act_add_check.triggered.connect(lambda: c.begin_stamp_placement("check"))
+            act_add_cross = menu.addAction(qta.icon("fa5s.times", color="#EF4444"), "Add Crossmark (✖)")
+            act_add_cross.triggered.connect(lambda: c.begin_stamp_placement("cross"))
             menu.exec(e.globalPos())
             return
 
@@ -648,7 +722,13 @@ class CanvasEventHandler:
                 c.update()
             return
 
+        # General Canvas context menu
         menu = QMenu(c)
+        act_add_check = menu.addAction(qta.icon("fa5s.check", color=ACCENT), "Add Checkmark (✔)")
+        act_add_check.triggered.connect(lambda: c.begin_stamp_placement("check"))
+        act_add_cross = menu.addAction(qta.icon("fa5s.times", color="#EF4444"), "Add Crossmark (✖)")
+        act_add_cross.triggered.connect(lambda: c.begin_stamp_placement("cross"))
+        menu.addSeparator()
         act_add_sig = menu.addAction(qta.icon("fa5s.signature", color=ACCENT), t("viewer.add_signature"))
         act_add_sig.triggered.connect(lambda: c.start_add_signature_flow(pos))
         menu.exec(e.globalPos())

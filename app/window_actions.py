@@ -1,3 +1,4 @@
+
 # app/window_actions.py
 """PDFApps – Navigation, themes, UI interactions, and page control mixin."""
 from __future__ import annotations
@@ -199,15 +200,15 @@ class WindowActionsMixin(_Base):
                 edit_w.toggle_controls()
             return
         if self._right_tool_container.isVisible():
-            self._saved_right_width = max(320, self._right_tool_container.width())
+            self._saved_right_width = max(260, self._right_tool_container.width())
             self._right_tool_container.setVisible(False)
             total = self._splitter.width()
             self._splitter.setSizes([total, 0])
         else:
             self._right_tool_container.setVisible(True)
             total = self._splitter.width()
-            tool_w = max(320, getattr(self, "_saved_right_width", 380))
-            self._splitter.setSizes([max(300, total - tool_w), tool_w])
+            tool_w = max(280, getattr(self, "_saved_right_width", 380))
+            self._splitter.setSizes([max(260, total - tool_w), tool_w])
 
     def _on_rotations_changed(self, rotations: dict[int, int]):
         if self._viewer:
@@ -458,14 +459,14 @@ class WindowActionsMixin(_Base):
                     viewer.set_page_order(None)
             else:
                 self._pages_toggle_btn.setVisible(True)
-                self.stack.setMinimumWidth(320)
+                self.stack.setMinimumWidth(260)
                 self.stack.setMaximumWidth(600)
-                self._right_tool_container.setMinimumWidth(320)
+                self._right_tool_container.setMinimumWidth(260)
                 self._right_tool_container.setMaximumWidth(600)
                 self._tab_container.setVisible(True)
                 total = self._splitter.width()
-                tool_w = max(380, min(450, total // 3))
-                self._splitter.setSizes([total - tool_w, tool_w])
+                tool_w = max(280, min(420, total // 3))
+                self._splitter.setSizes([max(260, total - tool_w), tool_w])
 
                 if row == rotate_idx:
                     rot_w = self.stack.widget(rotate_idx)
@@ -521,8 +522,6 @@ class WindowActionsMixin(_Base):
             self._load_and_track(path)
 
     def _load_and_track(self, path: str):
-        # WindowTabsMixin provides the primary _load_and_track implementation;
-        # delegate cleanly to it on composite instances.
         from app.window_tabs import WindowTabsMixin
         return WindowTabsMixin._load_and_track(cast(Any, self), path)
 
