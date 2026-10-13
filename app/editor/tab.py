@@ -122,6 +122,11 @@ class TabEditar(QWidget):
     _draw_width_lbl: QLabel
     _sel_result: QTextEdit
     _btn_copy: QPushButton
+    _btn_edit_sel: QPushButton
+    _btn_apply_sel_edit: QPushButton
+    _btn_delete_sel: QPushButton
+    _btn_highlight: QPushButton
+    _btn_redact_sel: QPushButton
 
     @property
     def _HI_COLORS(self):
@@ -160,6 +165,7 @@ class TabEditar(QWidget):
         self._page_idx: int = 0
         self._last_selected_page: int = -1
         self._last_selected_rect: fitz.Rect | None = None
+        self._last_selected_original_text: str = ""
 
         self._history = TabHistoryManager(self)
         setup_editor_ui(self)
@@ -176,6 +182,10 @@ class TabEditar(QWidget):
         self._canvas.overlay_changed.connect(self.update)
         self._canvas.overlay_deleted.connect(self._on_overlay_deleted)
         self._canvas.zoom_changed.connect(lambda _: self._update_page_nav_and_thumbnails())
+        if hasattr(self._canvas, "delete_selection_requested"):
+            self._canvas.delete_selection_requested.connect(self._delete_selection)
+        if hasattr(self._canvas, "edit_selection_requested"):
+            self._canvas.edit_selection_requested.connect(self._edit_selection)
 
         self._set_text_submode("edit")
         self._on_mode_btn(self._mode_btns[_MODE_TEXT])
@@ -737,6 +747,133 @@ class TabEditar(QWidget):
             "width": self._draw_width_slider.value(),
         })
 
+    def _delete_selection(self):
+        """Delete whatever element or text is currently selected in Select mode (Foxit style)."""
+        if self._canvas._selected_overlay_idx >= 0:
+            self._canvas.delete_selected_overlay()
+            return
+        page_idx = getattr(self, "_last_selected_page", -1)
+        rect = getattr(self, "_last_selected_rect", None)
+        if page_idx < 0 or rect is None:
+            return
+        old_txt = self._sel_result.toPlainText().strip() if hasattr(self, "_sel_result") else ""
+        edit = {
+            "type": "text_edit",
+            "page": page_idx,
+            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+            "old_text": old_txt,
+            "new_text": "",
+            "size": max(8.0, rect.height * 0.8),
+            "font_size": max(8.0, rect.height * 0.8),
+            "color": (0, 0, 0),
+            "font": "Helvetica",
+            "flags": 0,
+            "origin": [rect.x0, rect.y1],
+            "_existing": True,
+            "_orig_rect": [rect.x0, rect.y0, rect.x1, rect.y1],
+        }
+        self._add(edit)
+        if hasattr(self._canvas, "_active_sel_rect"):
+            self._canvas._active_sel_rect = None
+        self._last_selected_rect = None
+        if hasattr(self, "_sel_result"):
+            self._sel_result.setPlainText("")
+        self._canvas.update()
+        self._status("✔ Selected element deleted (Ctrl+Z to undo)")
+
+    def _edit_selection(self):
+        """Launch inline typography editing on the selected text span or selection."""
+        page_idx = getattr(self, "_last_selected_page", -1)
+        rect = getattr(self, "_last_selected_rect", None)
+        if page_idx < 0 or rect is None:
+            if hasattr(self, "_canvas") and self._canvas._selected_overlay_idx >= 0:
+                ov = self._canvas._overlays[self._canvas._selected_overlay_idx]
+                if ov.get("type") in ("text", "text_edit"):
+                    span = {
+                        "text": ov.get("new_text", ov.get("text", "")),
+                        "bbox": ov.get("bbox", [ov.get("rect").x0, ov.get("rect").y0, ov.get("rect").x1, ov.get("rect").y1] if "rect" in ov else [0, 0, 0, 0]),
+                        "size": float(ov.get("font_size", ov.get("size", 12))),
+                        "font": ov.get("font", "Helvetica"),
+                        "color": ov.get("color", 0),
+                        "flags": int(ov.get("flags", 0) or 0),
+                    }
+                    self._canvas.begin_inline_text_edit(span, ov.get("page", 0))
+            return
+        center = fitz.Point((rect.x0 + rect.x1) / 2.0, (rect.y0 + rect.y1) / 2.0)
+        hit = self._canvas.get_span_at(page_idx, center, max_dist=12.0)
+        if hit:
+            self._canvas.begin_inline_text_edit(hit, page_idx)
+        else:
+            txt = self._sel_result.toPlainText() if hasattr(self, "_sel_result") else ""
+            span = {
+                "text": txt,
+                "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+                "size": max(8.0, rect.height * 0.8),
+                "font": "Helvetica",
+                "color": 0,
+                "flags": 0,
+                "origin": [rect.x0, rect.y1],
+            }
+            self._canvas.begin_inline_text_edit(span, page_idx)
+
+    def _apply_text_edit_from_selection(self):
+        """Apply replacement text typed in the options panel directly onto the selected page location."""
+        page_idx = getattr(self, "_last_selected_page", -1)
+        rect = getattr(self, "_last_selected_rect", None)
+        new_txt = self._sel_result.toPlainText() if hasattr(self, "_sel_result") else ""
+        if page_idx < 0 or rect is None:
+            if hasattr(self, "_canvas") and self._canvas._selected_overlay_idx >= 0:
+                ov = self._canvas._overlays[self._canvas._selected_overlay_idx]
+                if ov.get("type") in ("text", "text_edit"):
+                    ov["new_text"] = new_txt
+                    ov["text"] = new_txt
+                    self._canvas.overlay_changed.emit()
+                    self._canvas.update()
+                    self._status("✔ Updated text applied (Ctrl+Z to undo)")
+            return
+        old_txt = getattr(self, "_last_selected_original_text", "")
+        edit = {
+            "type": "text_edit",
+            "page": page_idx,
+            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+            "old_text": old_txt,
+            "new_text": new_txt,
+            "size": max(8.0, rect.height * 0.8),
+            "font_size": max(8.0, rect.height * 0.8),
+            "color": (0, 0, 0),
+            "font": "Helvetica",
+            "flags": 0,
+            "origin": [rect.x0, rect.y1],
+            "_existing": True,
+            "_orig_rect": [rect.x0, rect.y0, rect.x1, rect.y1],
+        }
+        self._add(edit)
+        if hasattr(self._canvas, "_active_sel_rect"):
+            self._canvas._active_sel_rect = None
+        self._last_selected_rect = None
+        self._canvas.update()
+        self._status("✔ Edited text applied (Ctrl+Z to undo)")
+
+    def _redact_selection(self):
+        """Redact the currently active selection."""
+        page_idx = getattr(self, "_last_selected_page", -1)
+        rect = getattr(self, "_last_selected_rect", None)
+        if page_idx < 0 or rect is None:
+            return
+        self._add({
+            "type": "redact",
+            "page": page_idx,
+            "rect": rect,
+            "fill": (0, 0, 0),
+        })
+        if hasattr(self._canvas, "_active_sel_rect"):
+            self._canvas._active_sel_rect = None
+        self._last_selected_rect = None
+        if hasattr(self, "_sel_result"):
+            self._sel_result.setPlainText("")
+        self._canvas.update()
+        self._status("✔ Selection redacted (Ctrl+Z to undo)")
+
     def _highlight_selection(self):
         """Highlight whatever text was selected in Select mode."""
         page_idx = getattr(self, "_last_selected_page", -1)
@@ -791,13 +928,18 @@ class TabEditar(QWidget):
             self._sel_result.setPlainText(text)
             self._last_selected_page = page_idx
             self._last_selected_rect = pdf_rect
+            self._last_selected_original_text = text
+            if hasattr(self._canvas, "_active_sel_rect"):
+                self._canvas._active_sel_rect = fitz.Rect(pdf_rect)
+                self._canvas._active_sel_page = page_idx
+                self._canvas.update()
             if text:
                 clipboard = QApplication.clipboard()
                 if clipboard:
                     clipboard.setText(text)
                 self._status(t("edit.status.copied_clipboard", n=len(text)))
             else:
-                self._status(t("edit.status.no_text_in_selection"))
+                self._status("Element selected (Press Del to delete or click Edit)")
             return
 
         if mode == _MODE_TEXT:
@@ -834,7 +976,6 @@ class TabEditar(QWidget):
                     return
             self._add({"type": "signature", "page": self._page_idx, "rect": pdf_rect, "path": sig})
         elif mode == _MODE_HIGHLIGHT:
-            # Mode 3: Text Highlight (snaps to words and lines like Foxit PDF)
             doc = self._canvas._doc
             line_rects = []
             hi_color = self._hi_color.color_tuple() if hasattr(self, "_hi_color") else (1.0, 1.0, 0.0)
@@ -869,7 +1010,6 @@ class TabEditar(QWidget):
                     "color": hi_color
                 })
         elif mode == _MODE_HIGHLIGHT_RECT:
-            # Mode 4: Rectangle Highlight (freeform highlight box)
             hi_color = self._hi_rect_color.color_tuple() if hasattr(self, "_hi_rect_color") else (1.0, 1.0, 0.0)
             self._add({
                 "type": "highlight",
@@ -896,7 +1036,30 @@ class TabEditar(QWidget):
                             QMessageBox.information(self, t("edit.note_popup"), txt)
                             return
         mode = self._mode_idx
-        if mode == _MODE_TEXT:
+        if mode == _MODE_SELECT:
+            hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=8.0)
+            if hit:
+                bb = fitz.Rect(hit["bbox"])
+                txt = hit.get("text", "").strip()
+                self._sel_result.setPlainText(txt)
+                self._last_selected_page = page_idx
+                self._last_selected_rect = bb
+                self._last_selected_original_text = txt
+                if hasattr(self._canvas, "_active_sel_rect"):
+                    self._canvas._active_sel_rect = bb
+                    self._canvas._active_sel_page = page_idx
+                    self._canvas.update()
+                if txt:
+                    clipboard = QApplication.clipboard()
+                    if clipboard:
+                        clipboard.setText(txt)
+                self._status(f"✔ Selected: {txt[:30]}")
+            else:
+                if hasattr(self._canvas, "_active_sel_rect"):
+                    self._canvas._active_sel_rect = None
+                    self._canvas.update()
+                self._last_selected_rect = None
+        elif mode == _MODE_TEXT:
             submode = getattr(self, "_text_submode", "edit")
             if submode != "add":
                 hit = self._canvas.get_span_at(page_idx, pdf_pt, max_dist=6.0)

@@ -202,7 +202,7 @@ class CanvasOverlayManager:
                 for r in rects:
                     if r.contains(pdf_pt):
                         for ov in c._overlays:
-                            if ov.get("_existing_xref") == xref and ov.get("page") == page_idx:
+                            if ov.get("_existing_xref") == xref and ov.get("page") == page_idx and not ov.get("_deleted"):
                                 return ov
                         pix = fitz.Pixmap(c._doc, xref)
                         if pix.n >= 5:
@@ -230,7 +230,7 @@ class CanvasOverlayManager:
                 if annot.type[0] in (_PDF_ANNOT_STAMP, _PDF_ANNOT_INK) or annot.type[1] in ("Stamp", "Ink"):
                     if annot.rect.contains(pdf_pt):
                         for ov in c._overlays:
-                            if ov.get("_existing_annot") == annot.xref and ov.get("page") == page_idx:
+                            if ov.get("_existing_annot") == annot.xref and ov.get("page") == page_idx and not ov.get("_deleted"):
                                 return ov
                         pix = annot.get_pixmap(dpi=150, alpha=True)
                         fd, tmp_path = tempfile.mkstemp(suffix=".png")
@@ -252,6 +252,41 @@ class CanvasOverlayManager:
             pass
 
         return None
+
+    def detect_existing_text_at(self, page_idx: int, pdf_pt: fitz.Point) -> dict | None:
+        """Detect existing text span under click point and wrap as an editable/movable overlay."""
+        c = self.canvas
+        if not c._doc or not (0 <= page_idx < c._doc.page_count):
+            return None
+        span = c.get_span_at(page_idx, pdf_pt, max_dist=8.0)
+        if not span:
+            return None
+        bb = list(span["bbox"])
+        for ov in c._overlays:
+            if ov.get("page") == page_idx and ov.get("_orig_rect") == bb and not ov.get("_deleted"):
+                return ov
+        visual_size = max(float(span.get("size") or 0), float(bb[3] - bb[1]))
+        font_name = span.get("font", "Helvetica")
+        entry = {
+            "type": "text_edit",
+            "page": page_idx,
+            "bbox": bb,
+            "old_text": span.get("text", ""),
+            "new_text": span.get("text", ""),
+            "size": visual_size,
+            "font_size": float(span.get("size") or visual_size),
+            "color": span.get("color", 0),
+            "font": font_name,
+            "flags": int(span.get("flags", 0) or 0),
+            "ascender": float(span.get("ascender") or 0.8),
+            "descender": float(span.get("descender") or -0.2),
+            "origin": list(span.get("origin", (bb[0], bb[3]))),
+            "_existing": True,
+            "_existing_span": True,
+            "_orig_rect": list(bb),
+        }
+        c._overlays.append(entry)
+        return entry
 
     def note_icon_at(self, pos: QPoint) -> int:
         c = self.canvas

@@ -48,14 +48,27 @@ class CanvasPainter:
         # 2. Render overlays
         z = canvas._zoom
         for ov_idx, e in enumerate(canvas._overlays):
-            if e.get("_deleted"):
-                continue
             pg = e.get("page", 0)
             if pg >= len(canvas._page_offsets):
                 continue
             yo = canvas._page_offsets[pg][0]
             etype = e["type"]
             is_selected = (ov_idx == canvas._selected_overlay_idx)
+
+            # Cleanly cover deleted items on canvas with white fill
+            if e.get("_deleted"):
+                orig_r = e.get("_orig_rect") or e.get("bbox") or e.get("rect")
+                if orig_r:
+                    if isinstance(orig_r, (list, tuple)):
+                        qr = QRect(int(orig_r[0] * z) - 1, yo + int(orig_r[1] * z) - 1,
+                                   max(1, int((orig_r[2] - orig_r[0]) * z)) + 2,
+                                   max(1, int((orig_r[3] - orig_r[1]) * z)) + 2)
+                    else:
+                        qr = QRect(int(orig_r.x0 * z) - 1, yo + int(orig_r.y0 * z) - 1,
+                                   max(1, int(orig_r.width * z)) + 2,
+                                   max(1, int(orig_r.height * z)) + 2)
+                    p.fillRect(qr, QColor("#FFFFFF"))
+                continue
 
             if etype == "redact":
                 r = e["rect"]; fill = e["fill"]
@@ -179,6 +192,17 @@ class CanvasPainter:
                     p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawRect(qr)
 
+                    hs = 8
+                    p.setBrush(QColor("#FFFFFF"))
+                    p.setPen(QPen(QColor(ACCENT), 1.5))
+                    for hpt in [
+                        QPoint(qr.left(), qr.top()),
+                        QPoint(qr.right(), qr.top()),
+                        QPoint(qr.left(), qr.bottom()),
+                        QPoint(qr.right(), qr.bottom()),
+                    ]:
+                        p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))
+
             elif etype == "note":
                 pt = e["point"]
                 px, py = int(pt.x*z), yo+int(pt.y*z)
@@ -269,3 +293,29 @@ class CanvasPainter:
                 p.setPen(QPen(QColor("#EF4444"), 2, Qt.PenStyle.DashLine))
                 p.setBrush(QColor(239, 68, 68, 50))
                 p.drawRect(canvas._drag_rect)
+
+        # 6. Active persistent selection rectangle in Select mode (Foxit style)
+        if getattr(canvas, "_select_mode", False) and getattr(canvas, "_active_sel_rect", None) and not canvas._drag_rect:
+            sel_r = canvas._active_sel_rect
+            sel_pg = getattr(canvas, "_active_sel_page", 0)
+            if 0 <= sel_pg < len(canvas._page_offsets):
+                yo = canvas._page_offsets[sel_pg][0]
+                sx0 = int(sel_r.x0 * z)
+                sy0 = yo + int(sel_r.y0 * z)
+                sw = max(1, int(sel_r.width * z))
+                sh = max(1, int(sel_r.height * z))
+                qr = QRect(sx0, sy0, sw, sh)
+                p.setPen(QPen(QColor(ACCENT), 1.5, Qt.PenStyle.DashLine))
+                p.setBrush(QColor(59, 130, 246, 35))
+                p.drawRect(qr)
+
+                hs = 8
+                p.setBrush(QColor("#FFFFFF"))
+                p.setPen(QPen(QColor(ACCENT), 1.5))
+                for hpt in [
+                    QPoint(qr.left(), qr.top()),
+                    QPoint(qr.right(), qr.top()),
+                    QPoint(qr.left(), qr.bottom()),
+                    QPoint(qr.right(), qr.bottom()),
+                ]:
+                    p.drawRect(QRect(hpt.x() - hs//2, hpt.y() - hs//2, hs, hs))

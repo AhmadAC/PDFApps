@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import fitz
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtWidgets import QMenu, QMessageBox
+from PySide6.QtCore import Qt, QRect, QPoint
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
 import qtawesome as qta
 
 from app.constants import ACCENT
@@ -20,6 +20,19 @@ _PDF_ANNOT_TEXT: int = getattr(fitz, "PDF_ANNOT_TEXT", 0)
 class CanvasEventHandler:
     def __init__(self, canvas):
         self.canvas = canvas
+
+    def handle_mouse_double_click(self, e):
+        c = self.canvas
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = e.position().toPoint()
+        page_idx, lx, ly = c._page_and_local(pos.x(), pos.y())
+        pdf_pt = c._to_pdf(page_idx, lx, ly)
+        span = c.get_span_at(page_idx, pdf_pt, max_dist=8.0)
+        if span:
+            c.begin_inline_text_edit(span, page_idx)
+            e.accept()
+            return
 
     def handle_mouse_press(self, e):
         c = self.canvas
@@ -108,6 +121,7 @@ class CanvasEventHandler:
                             "bold": bool(flags & 16), "italic": bool(flags & 2),
                             "text": cur_ov.get("new_text", cur_ov.get("text", "")),
                         })
+                    c._active_sel_rect = None
                     c.update()
                     e.accept()
                     return
@@ -121,9 +135,51 @@ class CanvasEventHandler:
                 c._moving_overlay = True
                 c._drag_start_pos = pos
                 c._drag_start_rect = fitz.Rect(existing_media["rect"])
+                c._active_sel_rect = None
                 c.update()
                 e.accept()
                 return
+
+            # 5. In Select Mode: Check if clicking active selection handles or text
+            if getattr(c, "_select_mode", False):
+                if c._active_sel_rect is not None and c._active_sel_page == page_idx:
+                    h_id = self._get_active_sel_handle_at(pos)
+                    if h_id != CanvasOverlayManager.HANDLE_NONE:
+                        c._active_sel_handle = h_id
+                        c._active_sel_drag_start = pos
+                        c._active_sel_orig_rect = fitz.Rect(c._active_sel_rect)
+                        e.accept()
+                        return
+                    if self._is_pos_inside_active_sel(pos):
+                        c._active_sel_moving = True
+                        c._active_sel_drag_start = pos
+                        c._active_sel_orig_rect = fitz.Rect(c._active_sel_rect)
+                        e.accept()
+                        return
+
+                existing_text = c._overlay_mgr.detect_existing_text_at(page_idx, pdf_pt)
+                if existing_text:
+                    c._selected_overlay_idx = c._overlays.index(existing_text)
+                    c._moving_overlay = True
+                    c._drag_start_pos = pos
+                    cur_ov = existing_text
+                    r_val = cur_ov.get("rect") if "rect" in cur_ov else fitz.Rect(cur_ov.get("bbox", (0, 0, 0, 0)))
+                    c._drag_start_rect = fitz.Rect(r_val)
+                    c._active_sel_rect = fitz.Rect(r_val)
+                    c._active_sel_page = page_idx
+                    fn = cur_ov.get("font", "Helvetica")
+                    sz = float(cur_ov.get("font_size", cur_ov.get("size", 12)))
+                    c.text_edit_started.emit({
+                        "font": fn, "size": sz, "color": (0, 0, 0),
+                        "bold": False, "italic": False,
+                        "text": cur_ov.get("new_text", cur_ov.get("text", "")),
+                    })
+                    c.rect_selected.emit(page_idx, c._active_sel_rect)
+                    c.update()
+                    e.accept()
+                    return
+
+                c._active_sel_rect = None
 
         if e.button() != Qt.MouseButton.LeftButton:
             return
@@ -138,6 +194,41 @@ class CanvasEventHandler:
         c._drag_start = pos
         c._drag_rect = None
 
+    def _get_active_sel_handle_at(self, pos: QPoint) -> int:
+        c = self.canvas
+        if c._active_sel_rect is None or c._active_sel_page < 0 or c._active_sel_page >= len(c._page_offsets):
+            return CanvasOverlayManager.HANDLE_NONE
+        yo = c._page_offsets[c._active_sel_page][0]
+        z = c._zoom
+        r = c._active_sel_rect
+        sx0 = int(r.x0 * z)
+        sy0 = yo + int(r.y0 * z)
+        sx1 = int(r.x1 * z)
+        sy1 = yo + int(r.y1 * z)
+        hs = 10
+        if QRect(sx0 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return CanvasOverlayManager.HANDLE_TL
+        if QRect(sx1 - hs, sy0 - hs, hs * 2, hs * 2).contains(pos):
+            return CanvasOverlayManager.HANDLE_TR
+        if QRect(sx0 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return CanvasOverlayManager.HANDLE_BL
+        if QRect(sx1 - hs, sy1 - hs, hs * 2, hs * 2).contains(pos):
+            return CanvasOverlayManager.HANDLE_BR
+        return CanvasOverlayManager.HANDLE_NONE
+
+    def _is_pos_inside_active_sel(self, pos: QPoint) -> bool:
+        c = self.canvas
+        if c._active_sel_rect is None or c._active_sel_page < 0 or c._active_sel_page >= len(c._page_offsets):
+            return False
+        yo = c._page_offsets[c._active_sel_page][0]
+        z = c._zoom
+        r = c._active_sel_rect
+        sx0 = int(r.x0 * z)
+        sy0 = yo + int(r.y0 * z)
+        sx1 = int(r.x1 * z)
+        sy1 = yo + int(r.y1 * z)
+        return QRect(sx0, sy0, max(1, sx1 - sx0), max(1, sy1 - sy0)).contains(pos)
+
     def handle_mouse_move(self, e):
         c = self.canvas
         pos = e.position().toPoint()
@@ -147,6 +238,56 @@ class CanvasEventHandler:
             c.update()
             e.accept()
             return
+
+        # Handle active selection resizing/moving in Select mode
+        if getattr(c, "_select_mode", False) and c._active_sel_rect is not None:
+            z = c._zoom
+            orig = getattr(c, "_active_sel_orig_rect", None)
+            start = getattr(c, "_active_sel_drag_start", QPoint())
+            handle = getattr(c, "_active_sel_handle", CanvasOverlayManager.HANDLE_NONE)
+
+            if handle != CanvasOverlayManager.HANDLE_NONE and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                r = fitz.Rect(orig)
+                min_s = 10.0
+                if handle == CanvasOverlayManager.HANDLE_BR:
+                    r.x1 = max(r.x0 + min_s, orig.x1 + dx)
+                    r.y1 = max(r.y0 + min_s, orig.y1 + dy)
+                elif handle == CanvasOverlayManager.HANDLE_BL:
+                    r.x0 = min(r.x1 - min_s, orig.x0 + dx)
+                    r.y1 = max(r.y0 + min_s, orig.y1 + dy)
+                elif handle == CanvasOverlayManager.HANDLE_TR:
+                    r.x1 = max(r.x0 + min_s, orig.x1 + dx)
+                    r.y0 = min(r.y1 - min_s, orig.y0 + dy)
+                elif handle == CanvasOverlayManager.HANDLE_TL:
+                    r.x0 = min(r.x1 - min_s, orig.x0 + dx)
+                    r.y0 = min(r.y1 - min_s, orig.y0 + dy)
+                c._active_sel_rect = r
+                c.update()
+                e.accept()
+                return
+
+            if getattr(c, "_active_sel_moving", False) and orig:
+                dx = (pos.x() - start.x()) / z
+                dy = (pos.y() - start.y()) / z
+                w = orig.width
+                h = orig.height
+                c._active_sel_rect = fitz.Rect(orig.x0 + dx, orig.y0 + dy, orig.x0 + dx + w, orig.y0 + dy + h)
+                c.update()
+                e.accept()
+                return
+
+            h_id = self._get_active_sel_handle_at(pos)
+            if h_id in (CanvasOverlayManager.HANDLE_TL, CanvasOverlayManager.HANDLE_BR):
+                c.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                return
+            if h_id in (CanvasOverlayManager.HANDLE_TR, CanvasOverlayManager.HANDLE_BL):
+                c.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                return
+            if self._is_pos_inside_active_sel(pos):
+                c.setCursor(Qt.CursorShape.SizeAllCursor)
+                return
 
         if c._selected_overlay_idx >= 0:
             z = c._zoom
@@ -228,12 +369,24 @@ class CanvasEventHandler:
                 c._current_stroke.append((sx, sy))
                 c.update()
             return
+
         if c._drag_start and (e.buttons() & Qt.MouseButton.LeftButton):
             c._drag_rect = QRect(c._drag_start, pos).normalized()
             c.update()
 
     def handle_mouse_release(self, e):
         c = self.canvas
+
+        # Release active selection resize/move in Select mode
+        if getattr(c, "_select_mode", False):
+            if getattr(c, "_active_sel_handle", CanvasOverlayManager.HANDLE_NONE) != CanvasOverlayManager.HANDLE_NONE or getattr(c, "_active_sel_moving", False):
+                c._active_sel_handle = CanvasOverlayManager.HANDLE_NONE
+                c._active_sel_moving = False
+                c.rect_selected.emit(c._active_sel_page, c._active_sel_rect)
+                c.update()
+                e.accept()
+                return
+
         if c._selected_overlay_idx >= 0:
             if c._drag_handle != CanvasOverlayManager.HANDLE_NONE or c._moving_overlay:
                 c._drag_handle = CanvasOverlayManager.HANDLE_NONE
@@ -245,6 +398,7 @@ class CanvasEventHandler:
         if e.button() != Qt.MouseButton.LeftButton:
             return
         pos = e.position().toPoint()
+
         if c._draw_mode and c._current_stroke is not None:
             if len(c._current_stroke) >= 2 and c._stroke_page >= 0:
                 z = c._zoom or 1.0
@@ -257,6 +411,7 @@ class CanvasEventHandler:
             c._stroke_page = -1
             c.update()
             return
+
         if c._drag_rect and c._drag_rect.width() > 6 and c._drag_rect.height() > 6:
             page_idx, lx, ly = c._page_and_local(c._drag_rect.left(), c._drag_rect.top())
             yo = c._page_offsets[page_idx][0] if page_idx < len(c._page_offsets) else 0
@@ -265,6 +420,9 @@ class CanvasEventHandler:
             c._page_idx = page_idx
             pdf_rect = c._rect_to_pdf(page_idx, local_rect)
             if pdf_rect is not None:
+                if getattr(c, "_select_mode", False):
+                    c._active_sel_rect = fitz.Rect(pdf_rect)
+                    c._active_sel_page = page_idx
                 c.rect_selected.emit(page_idx, pdf_rect)
         else:
             hit = c._overlay_mgr.note_icon_at(pos)
@@ -281,7 +439,9 @@ class CanvasEventHandler:
             page_idx, lx, ly = c._page_and_local(pos.x(), pos.y())
             c._page_idx = page_idx
             c.point_clicked.emit(page_idx, c._to_pdf(page_idx, lx, ly))
-        c._drag_start = None; c._drag_rect = None
+
+        c._drag_start = None
+        c._drag_rect = None
         c.update()
 
     def handle_key_press(self, e):
@@ -292,6 +452,10 @@ class CanvasEventHandler:
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if c._selected_overlay_idx >= 0:
                 c.delete_selected_overlay()
+                e.accept()
+                return
+            if getattr(c, "_select_mode", False) and getattr(c, "_active_sel_rect", None):
+                c.delete_active_selection()
                 e.accept()
                 return
 
@@ -305,9 +469,13 @@ class CanvasEventHandler:
                 c.update()
                 e.accept()
                 return
+            if getattr(c, "_active_sel_rect", None):
+                c.clear_active_selection()
+                e.accept()
+                return
 
-        # 1. Nudge movement of selected media/image using Arrow keys
-        if c._selected_overlay_idx >= 0 and key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+        # Nudge movement of selected overlay or active selection
+        if (c._selected_overlay_idx >= 0 or (getattr(c, "_select_mode", False) and getattr(c, "_active_sel_rect", None))) and key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             step = 15.0 if (modifiers & Qt.KeyboardModifier.ShiftModifier) else (1.0 if (modifiers & Qt.KeyboardModifier.AltModifier) else 4.0)
             dx = 0.0
             dy = 0.0
@@ -315,28 +483,32 @@ class CanvasEventHandler:
             elif key == Qt.Key.Key_Right: dx = step
             elif key == Qt.Key.Key_Up: dy = -step
             elif key == Qt.Key.Key_Down: dy = step
-            ov = c._overlays[c._selected_overlay_idx]
-            if "rect" in ov:
-                r = ov["rect"]
-                ov["rect"] = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
-                if "point" in ov:
-                    ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
-            elif "bbox" in ov:
-                b = ov["bbox"]
-                ov["bbox"] = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]
-                if "origin" in ov:
-                    ov["origin"] = [b[0] + dx, b[3] + dy]
-                if "point" in ov:
-                    ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
-            elif "point" in ov:
-                ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
-            c._drag_start_rect = fitz.Rect(ov["rect"]) if "rect" in ov else fitz.Rect(ov["bbox"])
-            c.overlay_changed.emit()
+
+            if c._selected_overlay_idx >= 0:
+                ov = c._overlays[c._selected_overlay_idx]
+                if "rect" in ov:
+                    r = ov["rect"]
+                    ov["rect"] = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+                    if "point" in ov:
+                        ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
+                elif "bbox" in ov:
+                    b = ov["bbox"]
+                    ov["bbox"] = [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]
+                    if "origin" in ov:
+                        ov["origin"] = [b[0] + dx, b[3] + dy]
+                    if "point" in ov:
+                        ov["point"] = fitz.Point(ov["point"].x + dx, ov["point"].y + dy)
+                c._drag_start_rect = fitz.Rect(ov["rect"]) if "rect" in ov else fitz.Rect(ov["bbox"])
+                c.overlay_changed.emit()
+            elif c._active_sel_rect is not None:
+                r = c._active_sel_rect
+                c._active_sel_rect = fitz.Rect(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+                c.rect_selected.emit(c._active_sel_page, c._active_sel_rect)
             c.update()
             e.accept()
             return
 
-        # 2. Resizing selected media/image using Ctrl + and Ctrl -
+        # Resizing selected overlay using Ctrl + and Ctrl -
         if c._selected_overlay_idx >= 0:
             if (modifiers & Qt.KeyboardModifier.ControlModifier) or key in (Qt.Key.Key_Plus, Qt.Key.Key_Minus):
                 if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
@@ -348,7 +520,7 @@ class CanvasEventHandler:
                     e.accept()
                     return
 
-        # 3. When nothing is selected, Up/Down arrow and Page keys navigate/scroll the main page
+        # Scroll navigation when nothing is selected
         if c._selected_overlay_idx < 0 and not c._inline_mgr.edit.isVisible():
             if not (modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
                 if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown, Qt.Key.Key_Home, Qt.Key.Key_End):
@@ -392,6 +564,7 @@ class CanvasEventHandler:
             c.cancel_signature_placement()
             return
 
+        # Context menu for selected or clicked overlay
         if c._selected_overlay_idx >= 0 and c._overlay_mgr.is_pos_inside_overlay(c._selected_overlay_idx, pos):
             menu = QMenu(c)
             act_inc = menu.addAction(qta.icon("fa5s.search-plus", color=ACCENT), "Increase Size (Ctrl+)")
@@ -422,6 +595,23 @@ class CanvasEventHandler:
                 act_dup.triggered.connect(c.duplicate_selected_overlay)
                 menu.exec(e.globalPos())
                 return
+
+        # Context menu for Select Mode when active selection or text is present
+        if getattr(c, "_select_mode", False) and (getattr(c, "_active_sel_rect", None) or self._is_pos_inside_active_sel(pos)):
+            menu = QMenu(c)
+            act_edit = menu.addAction(qta.icon("fa5s.edit", color=ACCENT), "Edit Text")
+            act_edit.triggered.connect(c.edit_selection_requested.emit)
+            act_del = menu.addAction(qta.icon("fa5s.trash-alt", color="#EF4444"), "Delete (Del)")
+            act_del.triggered.connect(c.delete_active_selection)
+            menu.addSeparator()
+            act_copy = menu.addAction(qta.icon("fa5s.copy", color=ACCENT), t("btn.copy", default="Copy"))
+            act_copy.triggered.connect(lambda: QApplication.clipboard().setText(c._sel_text if hasattr(c, "_sel_text") else ""))
+            act_hi = menu.addAction(qta.icon("fa5s.highlighter", color=ACCENT), "Highlight Selection")
+            act_hi.triggered.connect(lambda: c.parent().parent().parent()._highlight_selection() if hasattr(c.parent().parent().parent(), "_highlight_selection") else None)
+            act_redact = menu.addAction(qta.icon("fa5s.eraser", color="#EF4444"), "Redact Selection")
+            act_redact.triggered.connect(lambda: c.parent().parent().parent()._redact_selection() if hasattr(c.parent().parent().parent(), "_redact_selection") else None)
+            menu.exec(e.globalPos())
+            return
 
         hit = c._overlay_mgr.note_icon_at(pos)
         if hit < 0:

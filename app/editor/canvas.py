@@ -24,51 +24,31 @@ try:
     from app.editor.canvas_painter1 import CanvasPainter
     from app.editor.canvas_events1 import CanvasEventHandler
 except ImportError:
-    try:
-        from .canvas_render1 import (  # type: ignore
-            _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
-            _EditRenderSignals, _EditPageJob,
-            _get_icon_cursor, clear_overlay_pixmap_cache,
-        )
-        from .canvas_overlay1 import CanvasOverlayManager  # type: ignore
-        from .canvas_text1 import CanvasInlineTextManager  # type: ignore
-        from .canvas_painter1 import CanvasPainter  # type: ignore
-        from .canvas_events1 import CanvasEventHandler  # type: ignore
-    except ImportError:
-        try:
-            from app.editor.canvas_render import (  # type: ignore
-                _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
-                _EditRenderSignals, _EditPageJob,
-                _get_icon_cursor, clear_overlay_pixmap_cache,
-            )
-            from app.editor.canvas_overlay import CanvasOverlayManager  # type: ignore
-            from app.editor.canvas_text import CanvasInlineTextManager  # type: ignore
-            from app.editor.canvas_painter import CanvasPainter  # type: ignore
-            from app.editor.canvas_events import CanvasEventHandler  # type: ignore
-        except ImportError:
-            from .canvas_render import (  # type: ignore
-                _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
-                _EditRenderSignals, _EditPageJob,
-                _get_icon_cursor, clear_overlay_pixmap_cache,
-            )
-            from .canvas_overlay import CanvasOverlayManager  # type: ignore
-            from .canvas_text import CanvasInlineTextManager  # type: ignore
-            from .canvas_painter import CanvasPainter  # type: ignore
-            from .canvas_events import CanvasEventHandler  # type: ignore
+    from .canvas_render1 import (  # type: ignore
+        _PAGE_GAP, _BUFFER_PGS, _MAX_THREADS,
+        _EditRenderSignals, _EditPageJob,
+        _get_icon_cursor, clear_overlay_pixmap_cache,
+    )
+    from .canvas_overlay1 import CanvasOverlayManager  # type: ignore
+    from .canvas_text1 import CanvasInlineTextManager  # type: ignore
+    from .canvas_painter1 import CanvasPainter  # type: ignore
+    from .canvas_events1 import CanvasEventHandler  # type: ignore
 
 
 class PdfEditCanvas(QWidget):
-    rect_selected        = Signal(int, object)        # (page_idx, fitz.Rect)
-    point_clicked        = Signal(int, object)        # (page_idx, fitz.Point)
-    stroke_finished      = Signal(int, object)        # (page_idx, list[fitz.Point])
-    note_deleted         = Signal(dict)
-    zoom_changed         = Signal(int)
-    text_edit_committed  = Signal(int, dict)          # (page_idx, edit_dict)
-    text_inserted        = Signal(int, dict)          # (page_idx, edit_dict)
-    text_edit_started    = Signal(dict)               # (format_dict)
-    signature_added      = Signal(int, object, str)   # (page_idx, fitz.Rect, sig_path)
-    overlay_changed      = Signal()
-    overlay_deleted      = Signal(int, dict)          # (index, overlay_dict)
+    rect_selected               = Signal(int, object)        # (page_idx, fitz.Rect)
+    point_clicked               = Signal(int, object)        # (page_idx, fitz.Point)
+    stroke_finished             = Signal(int, object)        # (page_idx, list[fitz.Point])
+    note_deleted                = Signal(dict)
+    zoom_changed                = Signal(int)
+    text_edit_committed         = Signal(int, dict)          # (page_idx, edit_dict)
+    text_inserted               = Signal(int, dict)          # (page_idx, edit_dict)
+    text_edit_started           = Signal(dict)               # (format_dict)
+    signature_added             = Signal(int, object, str)   # (page_idx, fitz.Rect, sig_path)
+    overlay_changed             = Signal()
+    overlay_deleted             = Signal(int, dict)          # (index, overlay_dict)
+    delete_selection_requested  = Signal()
+    edit_selection_requested    = Signal()
 
     HANDLE_NONE = 0
     HANDLE_TL   = 1
@@ -106,6 +86,14 @@ class PdfEditCanvas(QWidget):
         self._stroke_page = -1
         self._open_note   = None
         self._screen_signal_window = None
+
+        # Active Persistent Selection State (Foxit-style element selection)
+        self._active_sel_rect: fitz.Rect | None = None
+        self._active_sel_page: int = -1
+        self._active_sel_handle: int = self.HANDLE_NONE
+        self._active_sel_moving: bool = False
+        self._active_sel_drag_start: QPoint = QPoint()
+        self._active_sel_orig_rect: fitz.Rect | None = None
 
         # Media Overlay State
         self._placing_signature: bool = False
@@ -145,13 +133,15 @@ class PdfEditCanvas(QWidget):
         self._select_mode = active
         if active:
             self.setCursor(Qt.CursorShape.ArrowCursor)
+        else:
+            self.clear_active_selection()
 
     def set_highlight_mode(self, active: bool, color: tuple = (1.0, 1.0, 0.0), cursor_shape: Qt.CursorShape = Qt.CursorShape.IBeamCursor):
         self._highlight_mode = active
         self._highlight_color = color
         if active:
             self.setCursor(cursor_shape)
-        elif not self._draw_mode and not self._text_mode and not self._placing_signature:
+        elif not self._draw_mode and not self._text_mode and not self._placing_signature and not self._select_mode:
             self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
 
@@ -159,7 +149,7 @@ class PdfEditCanvas(QWidget):
         self._text_mode = active
         if active:
             self.setCursor(Qt.CursorShape.IBeamCursor)
-        elif not self._draw_mode and not self._placing_signature and not self._highlight_mode:
+        elif not self._draw_mode and not self._placing_signature and not self._highlight_mode and not self._select_mode:
             self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def set_draw_mode(self, active: bool, color=None, width=None):
@@ -173,7 +163,7 @@ class PdfEditCanvas(QWidget):
         else:
             self._current_stroke = None
             self._stroke_page = -1
-            if not self._text_mode and not self._placing_signature and not self._highlight_mode:
+            if not self._text_mode and not self._placing_signature and not self._highlight_mode and not self._select_mode:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
 
@@ -184,7 +174,20 @@ class PdfEditCanvas(QWidget):
             self._selected_overlay_idx = -1
         self.update()
 
-    # ── Overlay Delegation & Scaling ──────────────────────────────────────
+    # ── Selection and Overlay Delegation ──────────────────────────────────
+
+    def clear_active_selection(self):
+        self._active_sel_rect = None
+        self._active_sel_page = -1
+        self._active_sel_handle = self.HANDLE_NONE
+        self._active_sel_moving = False
+        self.update()
+
+    def delete_active_selection(self):
+        if self._selected_overlay_idx >= 0:
+            return self.delete_selected_overlay()
+        if self._active_sel_rect is not None:
+            self.delete_selection_requested.emit()
 
     def scale_selected_overlay(self, factor: float) -> bool:
         """Scale the currently selected overlay (image/media/text) by the given factor around its center."""
@@ -307,6 +310,7 @@ class PdfEditCanvas(QWidget):
         self._gen += 1
         self._pending.clear()
         self.cancel_signature_placement()
+        self.clear_active_selection()
         self._selected_overlay_idx = -1
         self._page_prev_pixmaps.clear()
         from PySide6.QtCore import QTimer
@@ -327,7 +331,6 @@ class PdfEditCanvas(QWidget):
     def wheelEvent(self, e):
         if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             pos = e.position().toPoint()
-            # If an overlay is selected and mouse is over it, scale overlay size with mouse wheel
             if self._selected_overlay_idx >= 0:
                 if self._overlay_mgr.is_pos_inside_overlay(self._selected_overlay_idx, pos) or self._moving_overlay:
                     if e.angleDelta().y() > 0:
@@ -337,7 +340,6 @@ class PdfEditCanvas(QWidget):
                     e.accept()
                     return
 
-            # Default canvas zoom
             if e.angleDelta().y() > 0:
                 self.zoom_in(anchor_pos=pos)
             else:
@@ -364,7 +366,7 @@ class PdfEditCanvas(QWidget):
                 return i
         return max(0, len(self._page_offsets) - 1)
 
-    def get_span_at(self, page_idx: int, pdf_pt: fitz.Point, max_dist: float = 6.0):
+    def get_span_at(self, page_idx: int, pdf_pt: fitz.Point, max_dist: float = 8.0):
         if not self._doc or not (0 <= page_idx < self._doc.page_count):
             return None
         page = self._doc[page_idx]
@@ -377,7 +379,7 @@ class PdfEditCanvas(QWidget):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
                     bbox = fitz.Rect(span["bbox"])
-                    if bbox.contains(click) or (bbox + fitz.Rect(-2, -2, 2, 2)).contains(click):
+                    if bbox.contains(click) or (bbox + fitz.Rect(-3, -3, 3, 3)).contains(click):
                         return span
                     cx = max(bbox.x0, min(click.x, bbox.x1))
                     cy = max(bbox.y0, min(click.y, bbox.y1))
@@ -395,6 +397,7 @@ class PdfEditCanvas(QWidget):
     def close_doc(self):
         self._cancel_inline()
         self.cancel_signature_placement()
+        self.clear_active_selection()
         self._selected_overlay_idx = -1
         self._gen += 1
         self._pending.clear()
@@ -602,6 +605,9 @@ class PdfEditCanvas(QWidget):
 
     def mouseMoveEvent(self, e):
         self._event_handler.handle_mouse_move(e)
+
+    def mouseDoubleClickEvent(self, e):
+        self._event_handler.handle_mouse_double_click(e)
 
     def mouseReleaseEvent(self, e):
         self._event_handler.handle_mouse_release(e)

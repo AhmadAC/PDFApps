@@ -224,7 +224,7 @@ def _reinsert_edited_text(fitz, doc, page, edit, warn_fn=None):
     redact_rect = _text_edit_redaction_rect(fitz, edit, size)
     try:
         page.add_redact_annot(redact_rect, fill=False, cross_out=False)
-        page.apply_redactions(images=0, graphics=0, text=0)
+        page.apply_redactions()
     except Exception:
         page.add_redact_annot(redact_rect, fill=(1, 1, 1))
         page.apply_redactions()

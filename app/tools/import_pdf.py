@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -83,10 +85,101 @@ class _NoContent:
         self.skipped = skipped
 
 
+def _find_onlyoffice_x2t() -> list[str] | None:
+    """Locate ONLYOFFICE x2t binary or flatpak command on Linux/macOS/Windows."""
+    bin_x2t = shutil.which("x2t")
+    if bin_x2t:
+        return [bin_x2t]
+
+    candidates = [
+        "/opt/onlyoffice/desktopeditors/converter/x2t",
+        "/opt/onlyoffice/desktopeditors/x2t",
+        "/usr/bin/x2t",
+        "/usr/lib/onlyoffice/desktopeditors/converter/x2t",
+        "/usr/lib64/onlyoffice/desktopeditors/converter/x2t",
+        "/usr/local/bin/x2t",
+        "/var/lib/flatpak/app/org.onlyoffice.desktopeditors/current/active/files/bin/x2t",
+    ]
+    for p in candidates:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return [p]
+
+    if shutil.which("flatpak"):
+        try:
+            res = subprocess.run(
+                ["flatpak", "info", "org.onlyoffice.desktopeditors"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            if res.returncode == 0:
+                return ["flatpak", "run", "--command=x2t", "org.onlyoffice.desktopeditors"]
+        except Exception:
+            pass
+
+    return None
+
+
+def _convert_via_onlyoffice(doc_path: str, pdf_path: str) -> bool:
+    """Convert Office document to PDF using ONLYOFFICE x2t utility."""
+    cmd_base = _find_onlyoffice_x2t()
+    if not cmd_base:
+        return False
+    try:
+        abs_doc = os.path.abspath(doc_path)
+        abs_pdf = os.path.abspath(pdf_path)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_out = os.path.join(tmp_dir, "output.pdf")
+            cmd = list(cmd_base) + [abs_doc, temp_out]
+            subprocess.run(cmd, capture_output=True, timeout=60, check=False)
+            if os.path.isfile(temp_out) and os.path.getsize(temp_out) > 0:
+                shutil.copy2(temp_out, abs_pdf)
+                return True
+    except Exception as exc:
+        _log.warning("ONLYOFFICE conversion failed for %s: %s", doc_path, exc)
+    return False
+
+
+def _convert_via_libreoffice(doc_path: str, pdf_path: str) -> bool:
+    """Attempt headless conversion using LibreOffice or OpenOffice if available on Linux/macOS/Windows."""
+    lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
+    if not lo_bin:
+        return False
+    try:
+        abs_doc = os.path.abspath(doc_path)
+        abs_pdf = os.path.abspath(pdf_path)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cmd = [
+                lo_bin,
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", tmp_dir,
+                abs_doc,
+            ]
+            if sys.platform != "win32":
+                lo_profile = os.path.join(tmp_dir, "lo_profile")
+                cmd.insert(1, f"-env:UserInstallation=file://{lo_profile}")
+            subprocess.run(cmd, capture_output=True, timeout=60, check=False)
+            stem = os.path.splitext(os.path.basename(abs_doc))[0]
+            generated = os.path.join(tmp_dir, f"{stem}.pdf")
+            if os.path.isfile(generated) and os.path.getsize(generated) > 0:
+                shutil.copy2(generated, abs_pdf)
+                return True
+            for fname in os.listdir(tmp_dir):
+                if fname.lower().endswith(".pdf"):
+                    found = os.path.join(tmp_dir, fname)
+                    if os.path.isfile(found) and os.path.getsize(found) > 0:
+                        shutil.copy2(found, abs_pdf)
+                        return True
+    except Exception as exc:
+        _log.warning("LibreOffice conversion failed for %s: %s", doc_path, exc)
+    return False
+
+
 # ── Office COM & Native Document Converters ──────────────────────────────────
 
 def convert_docx_to_pdf(doc_path: str, pdf_path: str) -> None:
-    """Convert DOCX/DOC to PDF using Microsoft Word COM if available, falling back to python-docx/XML."""
+    """Convert DOCX/DOC to PDF using Microsoft Word COM if available, ONLYOFFICE x2t, LibreOffice, or internal python-docx/XML engine."""
     abs_doc = os.path.abspath(doc_path)
     abs_pdf = os.path.abspath(pdf_path)
 
@@ -108,6 +201,12 @@ def convert_docx_to_pdf(doc_path: str, pdf_path: str) -> None:
         except Exception as com_err:
             _log.warning("Word COM conversion failed for %s: %s; falling back to internal converter.", doc_path, com_err)
 
+    if _convert_via_onlyoffice(doc_path, pdf_path):
+        return
+
+    if _convert_via_libreoffice(doc_path, pdf_path):
+        return
+
     pdf_doc = fitz.open()
     try:
         process_docx(pdf_doc, doc_path)
@@ -115,13 +214,15 @@ def convert_docx_to_pdf(doc_path: str, pdf_path: str) -> None:
             atomic_pdf_write(pdf_doc, abs_pdf, close_writer=True)
             return
     finally:
-        pdf_doc.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_doc, "is_closed", False):
+                pdf_doc.close()
 
     raise RuntimeError(f"Could not convert Word document: {doc_path}")
 
 
 def convert_pptx_to_pdf(ppt_path: str, pdf_path: str) -> None:
-    """Convert PPTX/PPT to PDF using Microsoft PowerPoint COM if available, falling back to python-pptx."""
+    """Convert PPTX/PPT to PDF using Microsoft PowerPoint COM if available, ONLYOFFICE x2t, LibreOffice, or internal python-pptx/XML engine."""
     abs_ppt = os.path.abspath(ppt_path)
     abs_pdf = os.path.abspath(pdf_path)
 
@@ -144,6 +245,12 @@ def convert_pptx_to_pdf(ppt_path: str, pdf_path: str) -> None:
         except Exception as com_err:
             _log.warning("PowerPoint COM conversion failed for %s: %s; falling back to internal converter.", ppt_path, com_err)
 
+    if _convert_via_onlyoffice(ppt_path, pdf_path):
+        return
+
+    if _convert_via_libreoffice(ppt_path, pdf_path):
+        return
+
     pdf_doc = fitz.open()
     try:
         process_pptx(pdf_doc, ppt_path)
@@ -151,13 +258,15 @@ def convert_pptx_to_pdf(ppt_path: str, pdf_path: str) -> None:
             atomic_pdf_write(pdf_doc, abs_pdf, close_writer=True)
             return
     finally:
-        pdf_doc.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_doc, "is_closed", False):
+                pdf_doc.close()
 
     raise RuntimeError(f"Could not convert PowerPoint presentation: {ppt_path}")
 
 
 def convert_xlsx_to_pdf(xlsx_path: str, pdf_path: str) -> None:
-    """Convert XLSX/XLS to PDF using Microsoft Excel COM if available, falling back to openpyxl."""
+    """Convert XLSX/XLS to PDF using Microsoft Excel COM if available, ONLYOFFICE x2t, LibreOffice, or internal openpyxl/XML engine."""
     abs_xlsx = os.path.abspath(xlsx_path)
     abs_pdf = os.path.abspath(pdf_path)
 
@@ -179,6 +288,12 @@ def convert_xlsx_to_pdf(xlsx_path: str, pdf_path: str) -> None:
         except Exception as com_err:
             _log.warning("Excel COM conversion failed for %s: %s; falling back to internal converter.", xlsx_path, com_err)
 
+    if _convert_via_onlyoffice(xlsx_path, pdf_path):
+        return
+
+    if _convert_via_libreoffice(xlsx_path, pdf_path):
+        return
+
     pdf_doc = fitz.open()
     try:
         process_xlsx(pdf_doc, xlsx_path)
@@ -186,7 +301,9 @@ def convert_xlsx_to_pdf(xlsx_path: str, pdf_path: str) -> None:
             atomic_pdf_write(pdf_doc, abs_pdf, close_writer=True)
             return
     finally:
-        pdf_doc.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_doc, "is_closed", False):
+                pdf_doc.close()
 
     raise RuntimeError(f"Could not convert Excel spreadsheet: {xlsx_path}")
 
@@ -223,7 +340,9 @@ def convert_image_to_pdf(image_path: str, pdf_path: str) -> None:
             atomic_pdf_write(pdf_doc, abs_pdf, close_writer=True)
             return
     finally:
-        pdf_doc.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_doc, "is_closed", False):
+                pdf_doc.close()
 
     raise RuntimeError(f"Could not convert image: {image_path}")
 
@@ -290,7 +409,9 @@ def convert_text_to_pdf(text_path: str, pdf_path: str) -> None:
             atomic_pdf_write(pdf_doc, pdf_path, close_writer=True)
             return
     finally:
-        pdf_doc.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_doc, "is_closed", False):
+                pdf_doc.close()
 
     raise RuntimeError(f"Could not convert text document: {text_path}")
 
@@ -312,7 +433,9 @@ def process_image(doc: fitz.Document, img_path: str) -> bool:
             page.insert_image(page.rect, filename=img_path)
             return True
         finally:
-            img.close()
+            with contextlib.suppress(Exception):
+                if not getattr(img, "is_closed", False):
+                    img.close()
     except Exception:
         try:
             with Image.open(img_path) as pimg:
@@ -566,10 +689,10 @@ def process_md(doc: fitz.Document, md_path: str) -> None:
 
 
 def process_docx(doc: fitz.Document, docx_path: str) -> None:
+    lines: list[tuple[str, int, bool]] = []
     try:
         from docx import Document
         dx = Document(docx_path)
-        lines = []
         for para in dx.paragraphs:
             text = para.text.strip()
             p_style = para.style
@@ -593,13 +716,40 @@ def process_docx(doc: fitz.Document, docx_path: str) -> None:
                 cells = [c.text.strip() for c in row.cells]
                 lines.append(("  |  ".join(cells), 9, False))
             lines.append(("", 10, False))
-        render_lines_to_doc(doc, lines)
-    except Exception:
+    except Exception as exc:
+        _log.warning("python-docx processing failed for %s: %s; using XML fallback.", docx_path, exc)
+        lines = []
+
+    if not lines or not any(txt for txt, _, _ in lines):
         fallback_lines = docx_xml_to_lines(docx_path)
         if fallback_lines:
-            render_lines_to_doc(doc, fallback_lines)
-        else:
-            raise
+            lines = fallback_lines
+
+    if lines and any(txt for txt, _, _ in lines):
+        render_lines_to_doc(doc, lines)
+
+    # If still 0 pages (e.g. document only has images or shapes), extract images from word/media/
+    if doc.page_count == 0:
+        try:
+            with zipfile.ZipFile(docx_path) as z:
+                media_files = sorted([m for m in z.namelist() if m.startswith("word/media/")])
+                for mf in media_files:
+                    img_bytes = z.read(mf)
+                    try:
+                        ext = os.path.splitext(mf)[1].lower().lstrip(".")
+                        img = fitz.open(stream=img_bytes, filetype=ext)
+                        if img.page_count > 0:
+                            r = img[0].rect
+                            page = doc.new_page(width=r.width, height=r.height)
+                            page.insert_image(page.rect, stream=img_bytes)
+                        img.close()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    if doc.page_count == 0:
+        doc.new_page(width=595, height=842)
 
 
 def process_pptx(doc: fitz.Document, pptx_path: str) -> None:
@@ -642,8 +792,8 @@ def process_pptx(doc: fitz.Document, pptx_path: str) -> None:
         fallback_lines = pptx_xml_to_lines(pptx_path)
         if fallback_lines:
             render_lines_to_doc(doc, fallback_lines)
-        else:
-            raise
+    if doc.page_count == 0:
+        doc.new_page(width=960, height=540)
 
 
 def process_xlsx(doc: fitz.Document, xlsx_path: str) -> None:
@@ -663,8 +813,8 @@ def process_xlsx(doc: fitz.Document, xlsx_path: str) -> None:
         fallback_lines = xlsx_xml_to_lines(xlsx_path)
         if fallback_lines:
             render_lines_to_doc(doc, fallback_lines)
-        else:
-            raise
+    if doc.page_count == 0:
+        doc.new_page(width=595, height=842)
 
 
 def process_html(doc: fitz.Document, html_path: str) -> None:
@@ -699,10 +849,14 @@ def process_epub(doc: fitz.Document, epub_path: str) -> None:
             try:
                 doc.insert_pdf(pdf_part)
             finally:
-                pdf_part.close()
+                with contextlib.suppress(Exception):
+                    if not getattr(pdf_part, "is_closed", False):
+                        pdf_part.close()
             converted = True
         finally:
-            epub_doc.close()
+            with contextlib.suppress(Exception):
+                if not getattr(epub_doc, "is_closed", False):
+                    epub_doc.close()
     except Exception:
         converted = False
     if not converted:
@@ -721,7 +875,9 @@ def process_epub(doc: fitz.Document, epub_path: str) -> None:
                 if lines:
                     render_lines_to_doc(doc, lines)
             finally:
-                epub_doc.close()
+                with contextlib.suppress(Exception):
+                    if not getattr(epub_doc, "is_closed", False):
+                        epub_doc.close()
         except Exception:
             pass
 
@@ -731,7 +887,9 @@ def process_pdf(doc: fitz.Document, pdf_path: str) -> None:
     try:
         doc.insert_pdf(pdf_part)
     finally:
-        pdf_part.close()
+        with contextlib.suppress(Exception):
+            if not getattr(pdf_part, "is_closed", False):
+                pdf_part.close()
 
 
 # ── Unified Converter Facade ───────────────────────────────────────────────────
@@ -780,9 +938,13 @@ def convert_file_to_pdf(file_path: str, out_pdf_path: str | None = None) -> str:
                             atomic_pdf_write(pdf_part, out_pdf_path, close_writer=True)
                             converted = True
                         finally:
-                            pdf_part.close()
+                            with contextlib.suppress(Exception):
+                                if not getattr(pdf_part, "is_closed", False):
+                                    pdf_part.close()
                 finally:
-                    src_doc.close()
+                    with contextlib.suppress(Exception):
+                        if not getattr(src_doc, "is_closed", False):
+                            src_doc.close()
             except Exception as e_conv:
                 _log.warning("PyMuPDF convert_to_pdf failed for %s: %s", file_path, e_conv)
             if not converted:
@@ -798,7 +960,9 @@ def convert_file_to_pdf(file_path: str, out_pdf_path: str | None = None) -> str:
                     process_txt(doc, file_path)
                     atomic_pdf_write(doc, out_pdf_path, close_writer=True)
                 finally:
-                    doc.close()
+                    with contextlib.suppress(Exception):
+                        if not getattr(doc, "is_closed", False):
+                            doc.close()
 
         if not os.path.isfile(out_pdf_path) or os.path.getsize(out_pdf_path) == 0:
             raise ValueError(f"No pages could be generated from '{file_path}'")
@@ -1013,7 +1177,9 @@ class TabImport(BasePage):
                         part_pdf = convert_file_to_pdf(file_path)
                         part_doc = fitz.open(part_pdf)
                         doc.insert_pdf(part_doc)
-                        part_doc.close()
+                        with contextlib.suppress(Exception):
+                            if not getattr(part_doc, "is_closed", False):
+                                part_doc.close()
                         if part_pdf != file_path and os.path.isfile(part_pdf):
                             with contextlib.suppress(Exception):
                                 os.unlink(part_pdf)
@@ -1043,7 +1209,8 @@ class TabImport(BasePage):
                 atomic_pdf_write(doc, out, close_writer=True)
             finally:
                 with contextlib.suppress(Exception):
-                    doc.close()
+                    if not getattr(doc, "is_closed", False):
+                        doc.close()
             return out
 
         self._run_background(

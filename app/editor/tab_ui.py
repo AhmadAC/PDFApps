@@ -3,6 +3,7 @@
 
 import json
 import os
+import fitz
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
@@ -26,12 +27,149 @@ from app.editor.tab_constants import (
 from app.viewer.thumbnails import ThumbnailPanel, DEFAULT_THUMB_WIDTH
 
 
+def _delete_selection_helper(tab):
+    if hasattr(tab, "_canvas") and tab._canvas._selected_overlay_idx >= 0:
+        tab._canvas.delete_selected_overlay()
+        return
+    page_idx = getattr(tab, "_last_selected_page", -1)
+    rect = getattr(tab, "_last_selected_rect", None)
+    if page_idx < 0 or rect is None:
+        return
+    old_txt = tab._sel_result.toPlainText().strip() if hasattr(tab, "_sel_result") else ""
+    edit = {
+        "type": "text_edit",
+        "page": page_idx,
+        "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+        "old_text": old_txt,
+        "new_text": "",
+        "size": max(8.0, rect.height * 0.8),
+        "font_size": max(8.0, rect.height * 0.8),
+        "color": (0, 0, 0),
+        "font": "Helvetica",
+        "flags": 0,
+        "origin": [rect.x0, rect.y1],
+        "_existing": True,
+        "_orig_rect": [rect.x0, rect.y0, rect.x1, rect.y1],
+    }
+    tab._add(edit)
+    if hasattr(tab._canvas, "_active_sel_rect"):
+        tab._canvas._active_sel_rect = None
+    tab._last_selected_rect = None
+    if hasattr(tab, "_sel_result"):
+        tab._sel_result.setPlainText("")
+    tab._canvas.update()
+    tab._status("✔ Selected element deleted (Ctrl+Z to undo)")
+
+
+def _edit_selection_helper(tab):
+    page_idx = getattr(tab, "_last_selected_page", -1)
+    rect = getattr(tab, "_last_selected_rect", None)
+    if page_idx < 0 or rect is None:
+        if hasattr(tab, "_canvas") and tab._canvas._selected_overlay_idx >= 0:
+            ov = tab._canvas._overlays[tab._canvas._selected_overlay_idx]
+            if ov.get("type") in ("text", "text_edit"):
+                span = {
+                    "text": ov.get("new_text", ov.get("text", "")),
+                    "bbox": ov.get("bbox", [ov.get("rect").x0, ov.get("rect").y0, ov.get("rect").x1, ov.get("rect").y1] if "rect" in ov else [0, 0, 0, 0]),
+                    "size": float(ov.get("font_size", ov.get("size", 12))),
+                    "font": ov.get("font", "Helvetica"),
+                    "color": ov.get("color", 0),
+                    "flags": int(ov.get("flags", 0) or 0),
+                }
+                tab._canvas.begin_inline_text_edit(span, ov.get("page", 0))
+        return
+    center = fitz.Point((rect.x0 + rect.x1) / 2.0, (rect.y0 + rect.y1) / 2.0)
+    hit = tab._canvas.get_span_at(page_idx, center, max_dist=12.0)
+    if hit:
+        tab._canvas.begin_inline_text_edit(hit, page_idx)
+    else:
+        txt = tab._sel_result.toPlainText() if hasattr(tab, "_sel_result") else ""
+        span = {
+            "text": txt,
+            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+            "size": max(8.0, rect.height * 0.8),
+            "font": "Helvetica",
+            "color": 0,
+            "flags": 0,
+            "origin": [rect.x0, rect.y1],
+        }
+        tab._canvas.begin_inline_text_edit(span, page_idx)
+
+
+def _apply_text_edit_from_selection_helper(tab):
+    page_idx = getattr(tab, "_last_selected_page", -1)
+    rect = getattr(tab, "_last_selected_rect", None)
+    new_txt = tab._sel_result.toPlainText() if hasattr(tab, "_sel_result") else ""
+    if page_idx < 0 or rect is None:
+        if hasattr(tab, "_canvas") and tab._canvas._selected_overlay_idx >= 0:
+            ov = tab._canvas._overlays[tab._canvas._selected_overlay_idx]
+            if ov.get("type") in ("text", "text_edit"):
+                ov["new_text"] = new_txt
+                ov["text"] = new_txt
+                tab._canvas.overlay_changed.emit()
+                tab._canvas.update()
+                tab._status("✔ Updated text applied (Ctrl+Z to undo)")
+        return
+    old_txt = getattr(tab, "_last_selected_original_text", "")
+    edit = {
+        "type": "text_edit",
+        "page": page_idx,
+        "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+        "old_text": old_txt,
+        "new_text": new_txt,
+        "size": max(8.0, rect.height * 0.8),
+        "font_size": max(8.0, rect.height * 0.8),
+        "color": (0, 0, 0),
+        "font": "Helvetica",
+        "flags": 0,
+        "origin": [rect.x0, rect.y1],
+        "_existing": True,
+        "_orig_rect": [rect.x0, rect.y0, rect.x1, rect.y1],
+    }
+    tab._add(edit)
+    if hasattr(tab._canvas, "_active_sel_rect"):
+        tab._canvas._active_sel_rect = None
+    tab._last_selected_rect = None
+    tab._canvas.update()
+    tab._status("✔ Edited text applied (Ctrl+Z to undo)")
+
+
+def _redact_selection_helper(tab):
+    page_idx = getattr(tab, "_last_selected_page", -1)
+    rect = getattr(tab, "_last_selected_rect", None)
+    if page_idx < 0 or rect is None:
+        return
+    tab._add({
+        "type": "redact",
+        "page": page_idx,
+        "rect": rect,
+        "fill": (0, 0, 0),
+    })
+    if hasattr(tab._canvas, "_active_sel_rect"):
+        tab._canvas._active_sel_rect = None
+    tab._last_selected_rect = None
+    if hasattr(tab, "_sel_result"):
+        tab._sel_result.setPlainText("")
+    tab._canvas.update()
+    tab._status("✔ Selection redacted (Ctrl+Z to undo)")
+
+
 def setup_editor_ui(tab) -> None:
     """Build and attach all UI components to the TabEditar facade instance."""
     tab.setObjectName("content_area")
     root = QVBoxLayout(tab)
     root.setContentsMargins(0, 0, 0, 0)
     root.setSpacing(0)
+
+    # Attach selection helpers dynamically if not yet declared
+    if not hasattr(tab, "_delete_selection"):
+        tab._delete_selection = lambda: _delete_selection_helper(tab)
+    if not hasattr(tab, "_edit_selection"):
+        tab._edit_selection = lambda: _edit_selection_helper(tab)
+    if not hasattr(tab, "_apply_text_edit_from_selection"):
+        tab._apply_text_edit_from_selection = lambda: _apply_text_edit_from_selection_helper(tab)
+    if not hasattr(tab, "_redact_selection"):
+        tab._redact_selection = lambda: _redact_selection_helper(tab)
 
     body = QWidget()
     body_h = QHBoxLayout(body)
@@ -447,26 +585,74 @@ def _build_mode_options(tab) -> None:
     tab._hint_labels.append(hint_d); v_d.addWidget(hint_d); v_d.addStretch()
     tab._opt_stack.addWidget(w_draw)
 
-    # 9 - Select / Copy / Highlight text
+    # 9 - Select / Copy / Edit / Delete text and elements (Foxit-style workflow)
     w8 = QWidget(); v8 = QVBoxLayout(w8); v8.setContentsMargins(0, 4, 0, 0); v8.setSpacing(6)
-    hint8 = QLabel(t("edit.hint.select")); hint8.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint8.setWordWrap(True)
+    hint8 = QLabel(t("edit.hint.select", default="💡 Drag or click to select elements. Edit, delete, copy, or press Del key."))
+    hint8.setStyleSheet(f"color:{TEXT_SEC}; font-size:11px;"); hint8.setWordWrap(True)
     tab._hint_labels.append(hint8)
-    tab._sel_result = QTextEdit(); tab._sel_result.setReadOnly(True); tab._sel_result.setMaximumHeight(80)
-    tab._sel_result.setPlaceholderText(t("edit.select_placeholder"))
-    
-    sel_btn_row = QHBoxLayout()
-    tab._btn_copy = QPushButton(t("btn.copy"))
-    tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=TEXT_PRI))
-    tab._btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(tab._sel_result.toPlainText()))
-    
-    tab._btn_highlight = QPushButton(t("edit.mode.highlight", default="Highlight Text"))
-    tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
-    tab._btn_highlight.clicked.connect(tab._highlight_selection)
-    
-    sel_btn_row.addWidget(tab._btn_copy)
-    sel_btn_row.addWidget(tab._btn_highlight)
 
-    v8.addWidget(hint8); v8.addWidget(tab._sel_result); v8.addLayout(sel_btn_row); v8.addStretch()
+    lbl_sel = QLabel(t("edit.selected_text", default="Selected text:"))
+    lbl_sel.setStyleSheet(f"color:{TEXT_PRI}; font-size:10pt; font-weight:600;")
+
+    tab._sel_result = QTextEdit()
+    tab._sel_result.setReadOnly(False)
+    tab._sel_result.setMaximumHeight(85)
+    tab._sel_result.setPlaceholderText(t("edit.select_placeholder", default="No element selected. Drag on page or click any element to select."))
+
+    sel_btn_row1 = QHBoxLayout()
+    sel_btn_row1.setSpacing(4)
+    tab._btn_edit_sel = QPushButton("✏ " + t("tool.text.edit_mode", default="Edit Text"))
+    tab._btn_edit_sel.setToolTip("Edit selected text in-place on canvas")
+    tab._btn_edit_sel.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_edit_sel.clicked.connect(tab._edit_selection)
+
+    tab._btn_apply_sel_edit = QPushButton("✔ " + t("btn.apply", default="Apply Edit"))
+    tab._btn_apply_sel_edit.setObjectName("btn_primary")
+    tab._btn_apply_sel_edit.setToolTip("Replace selected text with the text typed above")
+    tab._btn_apply_sel_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_apply_sel_edit.clicked.connect(tab._apply_text_edit_from_selection)
+    sel_btn_row1.addWidget(tab._btn_edit_sel)
+    sel_btn_row1.addWidget(tab._btn_apply_sel_edit)
+
+    sel_btn_row2 = QHBoxLayout()
+    sel_btn_row2.setSpacing(4)
+    tab._btn_delete_sel = QPushButton(t("btn.delete", default="Delete"))
+    tab._btn_delete_sel.setIcon(qta.icon("fa5s.trash-alt", color="#EF4444"))
+    tab._btn_delete_sel.setToolTip("Delete selected element from page (Del)")
+    tab._btn_delete_sel.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_delete_sel.clicked.connect(tab._delete_selection)
+
+    tab._btn_copy = QPushButton(t("btn.copy", default="Copy"))
+    tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=TEXT_PRI))
+    tab._btn_copy.setToolTip("Copy selected text to clipboard (Ctrl+C)")
+    tab._btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(tab._sel_result.toPlainText()))
+    sel_btn_row2.addWidget(tab._btn_delete_sel)
+    sel_btn_row2.addWidget(tab._btn_copy)
+
+    sel_btn_row3 = QHBoxLayout()
+    sel_btn_row3.setSpacing(4)
+    tab._btn_highlight = QPushButton(t("edit.mode.highlight", default="Highlight"))
+    tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
+    tab._btn_highlight.setToolTip("Highlight selected text")
+    tab._btn_highlight.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_highlight.clicked.connect(tab._highlight_selection)
+
+    tab._btn_redact_sel = QPushButton(t("edit.mode.redact", default="Redact"))
+    tab._btn_redact_sel.setIcon(qta.icon("fa5s.eraser", color="#EF4444"))
+    tab._btn_redact_sel.setToolTip("Redact and blackout selected area")
+    tab._btn_redact_sel.setCursor(Qt.CursorShape.PointingHandCursor)
+    tab._btn_redact_sel.clicked.connect(tab._redact_selection)
+    sel_btn_row3.addWidget(tab._btn_highlight)
+    sel_btn_row3.addWidget(tab._btn_redact_sel)
+
+    v8.addWidget(hint8)
+    v8.addWidget(lbl_sel)
+    v8.addWidget(tab._sel_result)
+    v8.addLayout(sel_btn_row1)
+    v8.addLayout(sel_btn_row2)
+    v8.addLayout(sel_btn_row3)
+    v8.addStretch()
     tab._opt_stack.addWidget(w8)
 
 
@@ -488,6 +674,10 @@ def update_tab_theme(tab, dark: bool) -> None:
     tab._btn_copy.setIcon(qta.icon("fa5s.copy", color=pri))
     if hasattr(tab, "_btn_highlight"):
         tab._btn_highlight.setIcon(qta.icon("fa5s.highlighter", color=ACCENT))
+    if hasattr(tab, "_btn_delete_sel"):
+        tab._btn_delete_sel.setIcon(qta.icon("fa5s.trash-alt", color="#EF4444" if dark else "#DC2626"))
+    if hasattr(tab, "_btn_redact_sel"):
+        tab._btn_redact_sel.setIcon(qta.icon("fa5s.eraser", color="#EF4444" if dark else "#DC2626"))
     tab._sig_choose.setIcon(qta.icon("fa5s.signature", color=pri))
     tab._btn_bold.setIcon(qta.icon("fa5s.bold", color=pri))
     tab._btn_italic.setIcon(qta.icon("fa5s.italic", color=pri))

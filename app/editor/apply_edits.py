@@ -43,13 +43,21 @@ def apply_pending_edits(doc, pending, *, warn_fn=None) -> ApplyResult:
                             pg.delete_annot(annot)
                             break
                 elif e.get("_orig_rect"):
-                    pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
-                    pg.apply_redactions()
+                    try:
+                        pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
+                        pg.apply_redactions()
+                    except Exception:
+                        pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=(1, 1, 1))
+                        pg.apply_redactions()
                 continue
             elif etype in ("image", "signature") and e.get("_orig_rect"):
                 # Cleanly redact old position before inserting at new position
-                pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
-                pg.apply_redactions()
+                try:
+                    pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=False)
+                    pg.apply_redactions()
+                except Exception:
+                    pg.add_redact_annot(fitz.Rect(e["_orig_rect"]), fill=(1, 1, 1))
+                    pg.apply_redactions()
 
         if etype == "redact":
             pg.add_redact_annot(e["rect"], fill=e["fill"])
