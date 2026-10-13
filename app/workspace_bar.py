@@ -1,5 +1,3 @@
-app/workspace_bar.py
-
 """PDFApps – WorkspaceBar: top toolbar for workspace actions and navigation."""
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (

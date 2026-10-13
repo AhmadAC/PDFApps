@@ -38,9 +38,9 @@ from app.tools.page_numbers import TabPageNumbers
 from app.workspace_bar import WorkspaceBar
 from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
 
-from app.window_tabs import _ViewerTabBar, WindowTabsMixin
-from app.window_pipeline import WindowPipelineMixin
-from app.window_actions import WindowActionsMixin
+from app.window_tabs import _ViewerTabBar, WindowTabsMixin as _WindowTabsMixin
+from app.window_pipeline import WindowPipelineMixin as _WindowPipelineMixin
+from app.window_actions import WindowActionsMixin as _WindowActionsMixin
 
 
 _NAV_ICON_CACHE: dict[tuple[str, str], QIcon] = {}
@@ -136,7 +136,7 @@ class NavItemDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class MainWindow(WindowTabsMixin, WindowPipelineMixin, WindowActionsMixin, QMainWindow):
+class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QMainWindow):
     """Main Application Window."""
 
     def __init__(self):
