@@ -419,13 +419,13 @@ def _build_mode_options(tab) -> None:
 
     mode_btn_row = QHBoxLayout()
     mode_btn_row.setSpacing(4)
-    tab._btn_text_add = QPushButton("➕ " + t("tool.text.add_mode", default="Add Text"))
+    tab._btn_text_add = QPushButton("➕ " + t("Add Text", default="Add Text"))
     tab._btn_text_add.setCheckable(True)
     tab._btn_text_add.setChecked(True)
     tab._btn_text_add.setFixedHeight(28)
     tab._btn_text_add.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    tab._btn_text_edit = QPushButton("✏ " + t("tool.text.edit_mode", default="Edit Text"))
+    tab._btn_text_edit = QPushButton("✏ " + t("Edit Text", default="Edit Text"))
     tab._btn_text_edit.setCheckable(True)
     tab._btn_text_edit.setChecked(False)
     tab._btn_text_edit.setFixedHeight(28)
