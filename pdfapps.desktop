@@ -4,7 +4,7 @@ Type=Application
 Name=PDFApps
 GenericName=PDF Editor
 Comment=Fast desktop PDF editor
-Exec="/usr/bin/python3" "/var/mnt/shared-drive/2027/PDFApps/pdfapps.py" %F
+Exec=env QT_USE_PORTAL=1 "/usr/bin/python3" "/var/mnt/shared-drive/2027/PDFApps/pdfapps.py" %F
 Path=/var/mnt/shared-drive/2027/PDFApps
 Icon=/var/mnt/shared-drive/2027/PDFApps/icon_512.png
 Terminal=false

@@ -6,9 +6,11 @@ import contextlib
 import logging
 import logging.handlers
 import os
+import shutil
 import subprocess
 import sys
 import traceback
+from typing import Any, cast
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPalette, QColor, QPainter
@@ -37,14 +39,18 @@ def resource_path(rel):
 
 def reveal_file(path: str) -> None:
     """Open the OS file manager and highlight the given file when possible.
-    Falls back to opening the parent folder on Linux."""
+    Uses Dolphin on KDE Plasma / Linux when available, falling back to xdg-open."""
     try:
         if sys.platform == "win32":
             subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
         elif sys.platform == "darwin":
             subprocess.Popen(["open", "-R", path])
         else:
-            subprocess.Popen(["xdg-open", os.path.dirname(path) or "."])
+            abs_path = os.path.abspath(path)
+            if shutil.which("dolphin"):
+                subprocess.Popen(["dolphin", "--select", abs_path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(abs_path) or "."])
     except OSError:
         pass
 
@@ -57,6 +63,8 @@ def open_folder(path: str) -> None:
             subprocess.Popen(["explorer", os.path.normpath(folder)])
         elif sys.platform == "darwin":
             subprocess.Popen(["open", folder])
+        elif shutil.which("dolphin"):
+            subprocess.Popen(["dolphin", folder])
         else:
             subprocess.Popen(["xdg-open", folder])
     except OSError:
@@ -588,9 +596,9 @@ def _compress_pdf(src: str, dst: str, level: str = "recommended",
         fd, p = tempfile.mkstemp(suffix=".pdf"); os.close(fd)
         save_kw = dict(garbage=4, deflate=True, deflate_fonts=True, clean=True)
         try:
-            doc.save(p, **save_kw, use_objstms=True)
+            cast(Any, doc).save(p, **save_kw, use_objstms=True)
         except TypeError:
-            doc.save(p, **save_kw)
+            cast(Any, doc).save(p, **save_kw)
         if _is_valid_pdf(p):
             temps.append(p)
             p = None

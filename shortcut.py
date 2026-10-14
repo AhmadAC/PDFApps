@@ -5,6 +5,8 @@ Creates application shortcuts and registers file associations for PDFApps
 on Windows 10/11 and Fedora Kinoite (KDE Plasma) without compiling to an executable.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import shutil
@@ -12,6 +14,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def get_pythonw_executable() -> str:
@@ -68,14 +71,24 @@ def find_entry_script(project_root: Path) -> Path:
 
 
 def register_windows_association(
-    app_name: str, python_exe: str, target_script: Path, icon_path: Path
+    app_name: str, python_exe: str, target_script: Path, icon_path: Path | None
 ):
     """
     Registers PDFApps under HKCU so Windows recognizes it as a valid handler
     for .pdf files without needing compilation or administrator rights.
     """
-    import winreg
+    if sys.platform != "win32":
+        return
+
     import ctypes
+    try:
+        import winreg as _winreg  # type: ignore[import-not-found]
+        winreg: Any = _winreg
+    except ImportError:
+        winreg = None  # type: ignore
+
+    if winreg is None:
+        return
 
     prog_id = f"{app_name}.Assoc"
     # %1 tells Windows to forward the double-clicked PDF file path to the script
@@ -138,9 +151,11 @@ def register_windows_association(
         # 4. Notify the Windows Shell to immediately refresh associations
         SHCNE_ASSOCCHANGED = 0x08000000
         SHCNF_IDLIST = 0x0000
-        ctypes.windll.shell32.SHChangeNotify(
-            SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
-        )
+        windll: Any = getattr(ctypes, "windll", None)
+        if windll:
+            windll.shell32.SHChangeNotify(
+                SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
+            )
 
         print(
             f"[SUCCESS] Registered Windows default app capabilities for {app_name}"
@@ -154,7 +169,7 @@ def create_windows_shortcut(
     python_exe: str,
     target_script: Path,
     working_dir: Path,
-    icon_path: Path,
+    icon_path: Path | None,
 ):
     """Creates a Windows .lnk shortcut in the project folder, Desktop, and Start Menu."""
     destinations = [
@@ -219,7 +234,7 @@ def create_linux_shortcut(
     python_exe: str,
     target_script: Path,
     working_dir: Path,
-    icon_path: Path,
+    icon_path: Path | None,
 ):
     desktop_entry = f"""[Desktop Entry]
 Version=1.0
@@ -227,7 +242,7 @@ Type=Application
 Name={app_name}
 GenericName=PDF Editor
 Comment=Fast desktop PDF editor
-Exec="{python_exe}" "{target_script}" %F
+Exec=env QT_USE_PORTAL=1 "{python_exe}" "{target_script}" %F
 Path={working_dir}
 Icon={icon_path if icon_path and icon_path.exists() else 'application-pdf'}
 Terminal=false

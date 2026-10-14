@@ -7,12 +7,26 @@ import os
 import sys
 from pathlib import Path
 
+# Configure environment for native KDE Plasma 6 / Dolphin file picker dialogs on Linux / Fedora Kinoite
+# via XDG desktop portal integration before PySide6/Qt initializes.
+if sys.platform.startswith("linux"):
+    os.environ["QT_USE_PORTAL"] = "1"
+    _desktop = (
+        os.environ.get("XDG_CURRENT_DESKTOP", "")
+        + ":"
+        + os.environ.get("DESKTOP_SESSION", "")
+    ).upper()
+    if "KDE" in _desktop or "PLASMA" in _desktop or os.environ.get("KDE_FULL_SESSION"):
+        if not os.environ.get("QT_QPA_PLATFORMTHEME") or os.environ.get("QT_QPA_PLATFORMTHEME") == "kde":
+            os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
+
 # Ensure the project directory is always the first lookup path in sys.path,
 # preventing ModuleNotFoundError when Windows launches the script from another folder.
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -150,6 +164,8 @@ def main():
     QImageReader.setAllocationLimit(0)
 
     app = QApplication(sys.argv)
+    # Ensure Qt explicitly uses platform native dialogs rather than built-in widget dialogs
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
 
     # Synchronize icon assets from pdfapps.svg if missing or modified
     _ensure_icons()

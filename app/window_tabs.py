@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -309,6 +310,8 @@ class WindowTabsMixin(_Base):
                 reveal_label = "Reveal in File Explorer"
             elif sys.platform == "darwin":
                 reveal_label = "Reveal in Finder"
+            elif shutil.which("dolphin"):
+                reveal_label = "Reveal in Dolphin"
             else:
                 reveal_label = "Reveal in File Manager"
 

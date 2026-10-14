@@ -1,4 +1,4 @@
-"""PDFApps – TabOCR: OCR text recognition tool using EasyOCR."""
+"""PDFApps – TabOCR: OCR text recognition tool supporting RapidOCR (ONNX) and EasyOCR."""
 
 from __future__ import annotations
 
@@ -33,9 +33,27 @@ from app.worker import TaskRunner, run_task
 from app.constants import TEXT_SEC, DESKTOP
 from app.widgets import DropFileEdit, FocusComboBox
 
+# Check for RapidOCR availability
+try:
+    from rapidocr_onnxruntime import RapidOCR
+    HAS_RAPID_OCR = True
+except ImportError:
+    RapidOCR = None  # type: ignore
+    HAS_RAPID_OCR = False
+
+# Check for EasyOCR availability
+try:
+    import easyocr
+    import easyocr.utils
+    HAS_EASY_OCR = True
+except ImportError:
+    easyocr = None  # type: ignore
+    HAS_EASY_OCR = False
+
 
 class TabOCR(BasePage):
-    """OCR tool powered by EasyOCR, outputting searchable PDFs or extracted plain text."""
+    """OCR tool supporting RapidOCR (ultra-fast ONNX) and EasyOCR (multilingual),
+    outputting searchable PDFs or extracted plain text."""
 
     _LANG_KEYS = [
         ("tool.ocr.lang.en",    ["en"]),
@@ -45,6 +63,12 @@ class TabOCR(BasePage):
         ("tool.ocr.lang.fr",    ["fr", "en"]),
         ("tool.ocr.lang.de",    ["de", "en"]),
         ("tool.ocr.lang.it",    ["it", "en"]),
+    ]
+
+    _ENGINE_MODES = [
+        ("Auto (RapidOCR if available, else EasyOCR)", "auto"),
+        ("RapidOCR (Ultra-fast ONNX / CPU)", "rapid"),
+        ("EasyOCR (PyTorch / Multilingual)", "easy"),
     ]
 
     @property
@@ -75,6 +99,19 @@ class TabOCR(BasePage):
         f.addWidget(self.lbl_info)
 
         f.addWidget(section(t("tool.ocr.options")))
+
+        # Engine selector
+        row_engine = QHBoxLayout()
+        lbl_engine = QLabel("OCR Engine:")
+        lbl_engine.setStyleSheet(f"color:{TEXT_SEC};")
+        self.cmb_engine = FocusComboBox()
+        for label, _ in self._ENGINE_MODES:
+            self.cmb_engine.addItem(label)
+        row_engine.addWidget(lbl_engine)
+        row_engine.addWidget(self.cmb_engine)
+        row_engine.addStretch()
+        f.addLayout(row_engine)
+
         row_lang = QHBoxLayout()
         lbl_lang = QLabel(t("tool.ocr.lang_label"))
         lbl_lang.setStyleSheet(f"color:{TEXT_SEC};")
@@ -177,7 +214,44 @@ class TabOCR(BasePage):
         idx = max(0, min(self.cmb_lang.currentIndex(), len(codes) - 1))
         selected_lang_list = list(codes[idx])
         fmt = self.cmb_fmt.currentIndex()
+        engine_mode = self._ENGINE_MODES[self.cmb_engine.currentIndex()][1]
         pwd = self._pdf_password
+
+        # Determine active engine
+        use_rapid = False
+        if engine_mode == "rapid":
+            if not HAS_RAPID_OCR:
+                QMessageBox.critical(
+                    self,
+                    t("msg.missing_dep"),
+                    "RapidOCR is not installed.\nInstall it using: pip install rapidocr_onnxruntime",
+                )
+                return
+            use_rapid = True
+        elif engine_mode == "easy":
+            if not HAS_EASY_OCR:
+                QMessageBox.critical(
+                    self,
+                    t("msg.missing_dep"),
+                    "EasyOCR is not installed.\nInstall it using: pip install easyocr",
+                )
+                return
+            use_rapid = False
+        else:  # "auto"
+            if HAS_RAPID_OCR and selected_lang_list == ["en"]:
+                use_rapid = True
+            elif HAS_EASY_OCR:
+                use_rapid = False
+            elif HAS_RAPID_OCR:
+                use_rapid = True
+            else:
+                QMessageBox.critical(
+                    self,
+                    t("msg.missing_dep"),
+                    "No OCR engine found.\nPlease install RapidOCR or EasyOCR:\n\n"
+                    "pip install rapidocr_onnxruntime\n  or\npip install easyocr",
+                )
+                return
 
         try:
             with self._open_fitz(pdf_path) as _doc:
@@ -187,7 +261,7 @@ class TabOCR(BasePage):
             return
 
         progress = QProgressDialog(
-            "Initializing OCR model...",
+            "Initializing OCR engine...",
             t("progress.cancel"),
             0,
             100,
@@ -224,53 +298,65 @@ class TabOCR(BasePage):
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
-                _self.progress.emit(5, "Checking EasyOCR models...")
-                import easyocr
-                import easyocr.utils
+                reader = None
+                rapid_engine = None
 
-                orig_print_bar = getattr(easyocr.utils, "printProgressBar", None)
+                if use_rapid:
+                    _self.progress.emit(10, "Initializing RapidOCR (ONNX engine)...")
+                    try:
+                        rapid_engine = RapidOCR()
+                    except Exception as exc:
+                        raise RuntimeError(f"Failed to initialize RapidOCR: {exc}") from exc
+                else:
+                    _self.progress.emit(5, "Checking EasyOCR models...")
+                    import easyocr
+                    import easyocr.utils
 
-                def _custom_progress_bar(prefix='', suffix='', length=50):
-                    def reporthook(block_num, block_size, total_size):
-                        if _self.is_cancelled():
-                            raise CancelledError("OCR cancelled by user")
-                        if total_size > 0:
-                            downloaded = block_num * block_size
-                            pct = max(0, min(100, int((downloaded / total_size) * 100)))
-                            cur_mb = downloaded / (1024 * 1024)
-                            tot_mb = total_size / (1024 * 1024)
-                            _self.progress.emit(
-                                pct,
-                                f"Downloading OCR model: {pct}% ({cur_mb:.1f}/{tot_mb:.1f} MB)",
-                            )
-                    return reporthook
+                    orig_print_bar = getattr(easyocr.utils, "printProgressBar", None)
 
-                if hasattr(easyocr.utils, "printProgressBar"):
-                    easyocr.utils.printProgressBar = _custom_progress_bar
+                    def _custom_progress_bar(prefix='', suffix='', length=50):
+                        def reporthook(block_num, block_size, total_size):
+                            if _self.is_cancelled():
+                                raise CancelledError("OCR cancelled by user")
+                            if total_size > 0:
+                                downloaded = block_num * block_size
+                                pct = max(0, min(100, int((downloaded / total_size) * 100)))
+                                cur_mb = downloaded / (1024 * 1024)
+                                tot_mb = total_size / (1024 * 1024)
+                                _self.progress.emit(
+                                    pct,
+                                    f"Downloading OCR model: {pct}% ({cur_mb:.1f}/{tot_mb:.1f} MB)",
+                                )
+                        return reporthook
 
-                try:
-                    import torch
-                    use_gpu = bool(torch.cuda.is_available())
-                except Exception:
-                    use_gpu = False
+                    if hasattr(easyocr.utils, "printProgressBar"):
+                        easyocr.utils.printProgressBar = _custom_progress_bar
 
-                try:
-                    reader = easyocr.Reader(selected_lang_list, gpu=use_gpu, verbose=True)
-                finally:
-                    if orig_print_bar is not None and hasattr(easyocr.utils, "printProgressBar"):
-                        easyocr.utils.printProgressBar = orig_print_bar
+                    try:
+                        import torch
+                        use_gpu = bool(torch.cuda.is_available())
+                    except Exception:
+                        use_gpu = False
+
+                    try:
+                        reader = easyocr.Reader(selected_lang_list, gpu=use_gpu, verbose=True)
+                    finally:
+                        if orig_print_bar is not None and hasattr(easyocr.utils, "printProgressBar"):
+                            easyocr.utils.printProgressBar = orig_print_bar
 
                 if _self.is_cancelled():
                     return None
 
-                _self.progress.emit(20, "OCR models ready. Loading PDF...")
+                _self.progress.emit(20, "OCR engine ready. Scanning PDF pages...")
 
                 doc = fitz.open(pdf_path)
                 if doc.needs_pass:
                     if not (pwd and doc.authenticate(pwd)):
                         raise WrongPasswordError(t("tool.err.wrong_password"))
+
                 try:
                     if fmt == 1:
+                        # Text Output (.txt)
                         texts = []
                         for i in range(len(doc)):
                             if _self.is_cancelled():
@@ -283,13 +369,22 @@ class TabOCR(BasePage):
                             )
                             pix = page.get_pixmap(dpi=150)
                             img_bytes = pix.tobytes("png")
-                            raw_lines: Any = reader.readtext(img_bytes, detail=0)
 
-                            page_lines = [
-                                str(line).strip()
-                                for line in raw_lines
-                                if str(line).strip()
-                            ]
+                            page_lines = []
+                            if use_rapid and rapid_engine is not None:
+                                ocr_results, _ = rapid_engine(img_bytes)
+                                if ocr_results:
+                                    for item in ocr_results:
+                                        t_line = str(item[1]).strip()
+                                        if t_line:
+                                            page_lines.append(t_line)
+                            elif reader is not None:
+                                raw_lines: Any = reader.readtext(img_bytes, detail=0)
+                                for line in raw_lines:
+                                    t_line = str(line).strip()
+                                    if t_line:
+                                        page_lines.append(t_line)
+
                             texts.append("\n".join(page_lines))
 
                         _self.progress.emit(98, "Writing extracted text...")
@@ -305,7 +400,9 @@ class TabOCR(BasePage):
                                 with contextlib.suppress(OSError):
                                     os.unlink(_tmp)
                             raise
+
                     else:
+                        # Searchable PDF Output (.pdf)
                         for i in range(len(doc)):
                             if _self.is_cancelled():
                                 return None
@@ -320,20 +417,23 @@ class TabOCR(BasePage):
                             scale_x = page.rect.width / max(1.0, float(pix.width))
                             scale_y = page.rect.height / max(1.0, float(pix.height))
 
-                            raw_results: Any = reader.readtext(img_bytes)
+                            parsed_entries = []
+                            if use_rapid and rapid_engine is not None:
+                                ocr_results, _ = rapid_engine(img_bytes)
+                                if ocr_results:
+                                    for item in ocr_results:
+                                        parsed_entries.append((item[0], item[1], float(item[2])))
+                            elif reader is not None:
+                                raw_results: Any = reader.readtext(img_bytes)
+                                for entry in raw_results:
+                                    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                                        bbox = entry[0]
+                                        t_clean = str(entry[1]).strip()
+                                        p_val = float(entry[2]) if len(entry) >= 3 else 1.0
+                                        parsed_entries.append((bbox, t_clean, p_val))
 
-                            for entry in raw_results:
-                                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                                    bbox = entry[0]
-                                    text_clean = str(entry[1]).strip()
-                                    prob = float(entry[2]) if len(entry) >= 3 else 1.0
-                                elif isinstance(entry, dict):
-                                    bbox = entry.get("boxes", [])
-                                    text_clean = str(entry.get("text", "")).strip()
-                                    prob = float(entry.get("confident", 1.0))
-                                else:
-                                    continue
-
+                            for (bbox, text_clean, prob) in parsed_entries:
+                                text_clean = str(text_clean).strip()
                                 if not text_clean or prob < 0.2:
                                     continue
 
@@ -351,6 +451,7 @@ class TabOCR(BasePage):
                                 h = max(6.0, box_rect.height)
                                 font_size = max(4.0, min(72.0, h * 0.85))
 
+                                # Insert invisible text overlay for native search and selection
                                 rc = page.insert_textbox(
                                     box_rect,
                                     text_clean,
