@@ -2,6 +2,7 @@
 # pdfapps.py
 import argparse
 import ctypes
+import importlib.util
 import logging
 import os
 import sys
@@ -30,21 +31,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QImageReader
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-try:
-    # Defensive import — surfaces the missing-dependency dialog before
-    # the rest of app.* drags pypdf in via tools/*.py and crashes with
-    # an opaque traceback. The names are intentionally unused here.
-    from pypdf import PdfReader, PdfWriter  # noqa: F401
-except ImportError:
+# Fast non-importing dependency availability checks
+if importlib.util.find_spec("pypdf") is None:
     _app = QApplication(sys.argv)
     QMessageBox.critical(None, "Missing dependency",
                          "Install the pypdf library:\n\npip install pypdf")
     sys.exit(1)
 
-try:
-    import fitz  # PyMuPDF — used by viewer render, editor, most tools
-    del fitz
-except ImportError:
+if importlib.util.find_spec("pymupdf") is None and importlib.util.find_spec("fitz") is None:
     _app = QApplication(sys.argv)
     QMessageBox.critical(None, "Missing dependency",
                          "Install PyMuPDF:\n\npip install pymupdf")
@@ -137,8 +131,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main():
-    # Fix Windows Taskbar grouping: Assign a unique AppUserModelID so Windows
-    # displays PDFApps's custom icon rather than grouping it under pythonw.exe.
     if sys.platform == "win32":
         try:
             myappid = "pdfapps.desktop.editor.release"
@@ -147,7 +139,6 @@ def main():
             pass
 
     setup_logging()
-    print("[PDFApps] Initializing application...")
     sys.excepthook = _excepthook
     args = _parse_args(sys.argv[1:])
 
@@ -155,22 +146,18 @@ def main():
         os.path.abspath(f) for f in (args.files or [])
         if os.path.isfile(f) and f.lower().endswith(".pdf")
     ]
+
+    QImageReader.setAllocationLimit(0)
+    app = QApplication(sys.argv)
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
+
     if pdf_files:
         from app.single_instance import send_to_existing
         if send_to_existing(pdf_files):
             sys.exit(0)
 
-    # Disable Qt's default 256 MB memory allocation limit for image readers
-    QImageReader.setAllocationLimit(0)
-
-    app = QApplication(sys.argv)
-    # Ensure Qt explicitly uses platform native dialogs rather than built-in widget dialogs
-    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
-
-    # Synchronize icon assets from pdfapps.svg if missing or modified
     _ensure_icons()
 
-    # Set application & taskbar icon
     ico_path = PROJECT_ROOT / "icon.ico"
     png_path = PROJECT_ROOT / "icon_512.png"
     svg_path = PROJECT_ROOT / "pdfapps.svg"
@@ -193,7 +180,7 @@ def main():
 
     for pdf_arg in args.files:
         abs_arg = os.path.abspath(pdf_arg)
-        if os.path.isfile(abs_arg) and abs_arg.lower().endswith(".pdf"):
+        if os.path.isfile(abs_arg):
             window._load_and_track(abs_arg)
 
     sys.exit(app.exec())

@@ -1,10 +1,8 @@
-
-
 # app/window.py
 """PDFApps – MainWindow: application main window facade."""
 import os
 import json
-from typing import cast
+from typing import cast, Any
 
 from PySide6.QtCore import Qt, QSize, QTimer, QRect, QModelIndex
 from PySide6.QtGui import (
@@ -31,10 +29,6 @@ from app.viewer.panel import PdfViewerPanel
 from app.viewer.thumbnails import ThumbnailPanel
 from app.viewer.canvas_1 import _SelectCanvas
 from app.base import BasePage
-from app.tools.rotate import TabRotar
-from app.tools.crop import TabCortar
-from app.tools.reorder import TabReordenar
-from app.tools.page_numbers import TabPageNumbers
 from app.workspace_bar import WorkspaceBar
 from app.nav_config import _NAV_GROUPS, _NAV_KEYS, NAV_ITEMS
 
@@ -53,6 +47,11 @@ def _get_nav_icon(icon_name: str, color: str) -> QIcon:
         ico = qta.icon(icon_name, color=color)
         _NAV_ICON_CACHE[key] = ico
     return ico
+
+
+class _LazyPlaceholderWidget(QWidget):
+    """Placeholder widget used in QStackedWidget until a tool is activated."""
+    _is_lazy_placeholder: bool = True
 
 
 class NavItemDelegate(QStyledItemDelegate):
@@ -246,11 +245,18 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
         bh.setSpacing(8)
         ico_lbl = QLabel()
         _svg_path = resource_path("pdfapps.svg")
+        _png_path = resource_path("icon_512.png")
         _h = 36
         dpr = self.devicePixelRatioF() if hasattr(self, 'devicePixelRatioF') else 1.0
         if dpr <= 0:
             dpr = 1.0
-        if os.path.exists(_svg_path):
+        if os.path.exists(_png_path):
+            _app_pix = QPixmap(_png_path).scaled(
+                int(_h * dpr), int(_h * dpr), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            _app_pix.setDevicePixelRatio(dpr)
+            _w = _h
+        elif os.path.exists(_svg_path):
             renderer = QSvgRenderer(_svg_path)
             vb = renderer.viewBox()
             ratio = vb.width() / vb.height() if vb.height() else 1.0
@@ -340,7 +346,7 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
             hdr.setSizeHint(QSize(0, 26))
             self.nav.addItem(hdr)
             for key, icon_name, _ in tools:
-                item = QListWidgetItem(qta.icon(icon_name, color=TEXT_SEC), t(key))
+                item = QListWidgetItem(_get_nav_icon(icon_name, TEXT_SEC), t(key))
                 item.setData(Qt.ItemDataRole.UserRole, tool_idx)
                 desc_key = key.replace("nav.", "tool.") + ".desc"
                 tip = t(desc_key)
@@ -372,11 +378,11 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
             pass
         self._qapp: QApplication = cast(QApplication, QApplication.instance())
 
-        # ── Tool Stack & Right Tool Container ────────────────────────────────
+        # ── Tool Stack with Lazy Widget Placeholders ─────────────────────────
         self.stack = QStackedWidget()
         self.stack.setObjectName("content_area")
-        for _, __, cls in NAV_ITEMS:
-            self.stack.addWidget(cls(self._set_status))
+        for _ in NAV_ITEMS:
+            self.stack.addWidget(_LazyPlaceholderWidget())
         self.stack.setVisible(False)
 
         self._right_tool_container = QWidget()
@@ -394,7 +400,6 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
         tc_lay.setContentsMargins(0, 0, 0, 0)
         tc_lay.setSpacing(0)
 
-        # Tab bar sits at the top of content area to remain visible across all tools
         tab_row = QHBoxLayout()
         tab_row.setContentsMargins(0, 0, 0, 0)
         tab_row.setSpacing(0)
@@ -464,26 +469,6 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
 
         self._current_tool = -1
         self.nav.itemClicked.connect(self._on_nav_clicked)
-        for i in range(self.stack.count()):
-            for dfe in self.stack.widget(i).findChildren(DropFileEdit):
-                if not dfe._save:
-                    dfe.path_changed.connect(lambda p: self._load_and_track(p) if (p and os.path.isfile(p)) else None)
-
-        for i in range(self.stack.count()):
-            w = self.stack.widget(i)
-            if isinstance(w, BasePage):
-                w.pipeline_done.connect(self._on_pipeline_done)
-                w.pipeline_save_requested.connect(self._save_pipeline)
-            if isinstance(w, TabRotar):
-                w.rotations_changed.connect(self._on_rotations_changed)
-            if isinstance(w, TabCortar):
-                w.crop_changed.connect(self._on_crop_changed)
-                w.crops_changed.connect(self._on_crops_changed)
-                w.crop_mode_toggled.connect(self._on_crop_mode_toggled)
-            if isinstance(w, TabReordenar):
-                w.order_changed.connect(self._on_order_changed)
-            if isinstance(w, TabPageNumbers):
-                w.numbers_preview_changed.connect(self._on_numbers_preview_changed)
 
         self._pipeline_state: dict[int, dict] = {}
 
@@ -529,6 +514,50 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
         self._instance_server = SingleInstanceServer(self)
         self._instance_server.new_paths.connect(self._on_second_instance)
 
+    def _get_or_create_tool(self, index: int) -> QWidget | None:
+        """On-demand lazy instantiation of tool panels."""
+        if not (0 <= index < len(NAV_ITEMS)):
+            return None
+        w = self.stack.widget(index)
+        if isinstance(w, _LazyPlaceholderWidget) or getattr(w, "_is_lazy_placeholder", False):
+            _, __, loader = NAV_ITEMS[index]
+            real_widget = loader(self._set_status)
+            self._connect_tool_signals(real_widget)
+            fn = getattr(real_widget, "update_theme", None)
+            if callable(fn):
+                fn(self._dark_mode)
+            self.stack.removeWidget(w)
+            w.deleteLater()
+            self.stack.insertWidget(index, real_widget)
+            return real_widget
+        return w
+
+    def _connect_tool_signals(self, w: Any) -> None:
+        """Wire signals for lazily instantiated tool widgets using safe dynamic reflection."""
+        for dfe in w.findChildren(DropFileEdit):
+            if not getattr(dfe, "_save", False):
+                dfe.path_changed.connect(lambda p: self._load_and_track(p) if (p and os.path.isfile(p)) else None)
+
+        pipeline_done = getattr(w, "pipeline_done", None)
+        if pipeline_done is not None and hasattr(pipeline_done, "connect"):
+            pipeline_done.connect(self._on_pipeline_done)
+
+        pipeline_save = getattr(w, "pipeline_save_requested", None)
+        if pipeline_save is not None and hasattr(pipeline_save, "connect"):
+            pipeline_save.connect(self._save_pipeline)
+
+        for sig_name, handler in (
+            ("rotations_changed", self._on_rotations_changed),
+            ("crop_changed", self._on_crop_changed),
+            ("crops_changed", self._on_crops_changed),
+            ("crop_mode_toggled", self._on_crop_mode_toggled),
+            ("order_changed", self._on_order_changed),
+            ("numbers_preview_changed", self._on_numbers_preview_changed),
+        ):
+            sig = getattr(w, sig_name, None)
+            if sig is not None and hasattr(sig, "connect"):
+                sig.connect(handler)
+
     def closeEvent(self, event):
         for v in self._viewers:
             if self._viewer_has_unsaved(v):
@@ -546,7 +575,7 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
         edit_idx = self._edit_tool_idx()
         if edit_idx >= 0:
             edit_w = self.stack.widget(edit_idx)
-            if edit_w and getattr(edit_w, "_user_pending", None):
+            if edit_w and not isinstance(edit_w, _LazyPlaceholderWidget) and getattr(edit_w, "_user_pending", None):
                 ans = QMessageBox.question(
                     self, t("msg.warning"), t("pipeline.unsaved_prompt"),
                     QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
@@ -580,4 +609,3 @@ class MainWindow(_WindowTabsMixin, _WindowPipelineMixin, _WindowActionsMixin, QM
         except Exception:
             pass
         super().closeEvent(event)
-

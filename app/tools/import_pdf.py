@@ -15,6 +15,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+import importlib.util
 from typing import Any
 
 import fitz
@@ -47,15 +48,10 @@ from app.widgets import DropFileEdit
 
 _log = logging.getLogger(__name__)
 
-# Office COM support on Windows
-try:
-    import pythoncom
-    import win32com.client
-    HAS_WIN32COM = True
-except ImportError:
-    pythoncom = None  # type: ignore
-    win32com = None    # type: ignore
-    HAS_WIN32COM = False
+
+def _has_win32com() -> bool:
+    return sys.platform == "win32" and importlib.util.find_spec("win32com") is not None
+
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif", ".ico", ".heic", ".heif", ".svg")
 DOC_EXTS = (".docx", ".doc")
@@ -183,23 +179,28 @@ def convert_docx_to_pdf(doc_path: str, pdf_path: str) -> None:
     abs_doc = os.path.abspath(doc_path)
     abs_pdf = os.path.abspath(pdf_path)
 
-    if sys.platform == "win32" and HAS_WIN32COM and pythoncom is not None and win32com is not None:
+    if _has_win32com():
         try:
-            pythoncom.CoInitialize()
-            word = win32com.client.Dispatch("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0  # wdAlertsNone
+            import pythoncom
+            import win32com.client
             try:
-                doc = word.Documents.Open(abs_doc, ReadOnly=True, ConfirmConversions=False)
-                doc.SaveAs2(abs_pdf, FileFormat=17)  # 17 = wdFormatPDF
-                doc.Close(SaveChanges=0)  # 0 = wdDoNotSaveChanges
-                if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                    return
-            finally:
-                word.Quit()
-                pythoncom.CoUninitialize()
-        except Exception as com_err:
-            _log.warning("Word COM conversion failed for %s: %s; falling back to internal converter.", doc_path, com_err)
+                pythoncom.CoInitialize()
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
+                word.DisplayAlerts = 0  # wdAlertsNone
+                try:
+                    doc = word.Documents.Open(abs_doc, ReadOnly=True, ConfirmConversions=False)
+                    doc.SaveAs2(abs_pdf, FileFormat=17)  # 17 = wdFormatPDF
+                    doc.Close(SaveChanges=0)  # 0 = wdDoNotSaveChanges
+                    if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+                        return
+                finally:
+                    word.Quit()
+                    pythoncom.CoUninitialize()
+            except Exception as com_err:
+                _log.warning("Word COM conversion failed for %s: %s; falling back to internal converter.", doc_path, com_err)
+        except ImportError:
+            pass
 
     if _convert_via_onlyoffice(doc_path, pdf_path):
         return
@@ -226,24 +227,29 @@ def convert_pptx_to_pdf(ppt_path: str, pdf_path: str) -> None:
     abs_ppt = os.path.abspath(ppt_path)
     abs_pdf = os.path.abspath(pdf_path)
 
-    if sys.platform == "win32" and HAS_WIN32COM and pythoncom is not None and win32com is not None:
+    if _has_win32com():
         try:
-            pythoncom.CoInitialize()
-            powerpoint = win32com.client.Dispatch("PowerPoint.Application")
+            import pythoncom
+            import win32com.client
             try:
+                pythoncom.CoInitialize()
+                powerpoint = win32com.client.Dispatch("PowerPoint.Application")
                 try:
-                    presentation = powerpoint.Presentations.Open(abs_ppt, ReadOnly=True, WithWindow=False)
-                except Exception:
-                    presentation = powerpoint.Presentations.Open(abs_ppt, ReadOnly=True)
-                presentation.SaveAs(abs_pdf, FileFormat=32)  # 32 = ppSaveAsPDF
-                presentation.Close()
-                if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                    return
-            finally:
-                powerpoint.Quit()
-                pythoncom.CoUninitialize()
-        except Exception as com_err:
-            _log.warning("PowerPoint COM conversion failed for %s: %s; falling back to internal converter.", ppt_path, com_err)
+                    try:
+                        presentation = powerpoint.Presentations.Open(abs_ppt, ReadOnly=True, WithWindow=False)
+                    except Exception:
+                        presentation = powerpoint.Presentations.Open(abs_ppt, ReadOnly=True)
+                    presentation.SaveAs(abs_pdf, FileFormat=32)  # 32 = ppSaveAsPDF
+                    presentation.Close()
+                    if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+                        return
+                finally:
+                    powerpoint.Quit()
+                    pythoncom.CoUninitialize()
+            except Exception as com_err:
+                _log.warning("PowerPoint COM conversion failed for %s: %s; falling back to internal converter.", ppt_path, com_err)
+        except ImportError:
+            pass
 
     if _convert_via_onlyoffice(ppt_path, pdf_path):
         return
@@ -270,23 +276,28 @@ def convert_xlsx_to_pdf(xlsx_path: str, pdf_path: str) -> None:
     abs_xlsx = os.path.abspath(xlsx_path)
     abs_pdf = os.path.abspath(pdf_path)
 
-    if sys.platform == "win32" and HAS_WIN32COM and pythoncom is not None and win32com is not None:
+    if _has_win32com():
         try:
-            pythoncom.CoInitialize()
-            excel = win32com.client.Dispatch("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = False
+            import pythoncom
+            import win32com.client
             try:
-                wb = excel.Workbooks.Open(abs_xlsx, ReadOnly=True, UpdateLinks=0)
-                wb.ExportAsFixedFormat(0, abs_pdf)  # 0 = xlTypePDF
-                wb.Close(SaveChanges=False)
-                if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
-                    return
-            finally:
-                excel.Quit()
-                pythoncom.CoUninitialize()
-        except Exception as com_err:
-            _log.warning("Excel COM conversion failed for %s: %s; falling back to internal converter.", xlsx_path, com_err)
+                pythoncom.CoInitialize()
+                excel = win32com.client.Dispatch("Excel.Application")
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                try:
+                    wb = excel.Workbooks.Open(abs_xlsx, ReadOnly=True, UpdateLinks=0)
+                    wb.ExportAsFixedFormat(0, abs_pdf)  # 0 = xlTypePDF
+                    wb.Close(SaveChanges=False)
+                    if os.path.isfile(abs_pdf) and os.path.getsize(abs_pdf) > 0:
+                        return
+                finally:
+                    excel.Quit()
+                    pythoncom.CoUninitialize()
+            except Exception as com_err:
+                _log.warning("Excel COM conversion failed for %s: %s; falling back to internal converter.", xlsx_path, com_err)
+        except ImportError:
+            pass
 
     if _convert_via_onlyoffice(xlsx_path, pdf_path):
         return

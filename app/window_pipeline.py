@@ -1,4 +1,3 @@
-
 # app/window_pipeline.py
 """PDFApps – Pipeline processing, state saving, and security wiping mixin."""
 from __future__ import annotations
@@ -39,6 +38,7 @@ class WindowPipelineMixin(_Base):
         _pipeline_state: dict[int, dict[str, Any]]
         _sb: QStatusBar
 
+        def _get_or_create_tool(self, index: int) -> QWidget | None: ...
         def _edit_tool_idx(self) -> int: ...
         def _crop_tool_idx(self) -> int: ...
         def _rotate_tool_idx(self) -> int: ...
@@ -61,7 +61,7 @@ class WindowPipelineMixin(_Base):
             target_idx = page_numbers_idx
 
         if target_idx >= 0:
-            w = self.stack.widget(target_idx)
+            w = self._get_or_create_tool(target_idx)
             fn = getattr(w, "_undo", None)
             if callable(fn):
                 fn()
@@ -85,7 +85,7 @@ class WindowPipelineMixin(_Base):
             target_idx = page_numbers_idx
 
         if target_idx >= 0:
-            w = self.stack.widget(target_idx)
+            w = self._get_or_create_tool(target_idx)
             fn = getattr(w, "_redo", None)
             if callable(fn):
                 fn()
@@ -109,7 +109,7 @@ class WindowPipelineMixin(_Base):
         self._tab_bar.setTabToolTip(idx, f"{ps['original_path']} (modified)")
         self._sb.showMessage(t("pipeline.applied"))
         if self._current_tool >= 0:
-            w = self.stack.widget(self._current_tool)
+            w = self._get_or_create_tool(self._current_tool)
             fn = getattr(w, "auto_load", None)
             if callable(fn):
                 for attr in ("drop_in", "drop_out"):
@@ -182,7 +182,7 @@ class WindowPipelineMixin(_Base):
                 os.unlink(temp_path)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
-            if isinstance(w, BasePage):
+            if w and not getattr(w, "_is_lazy_placeholder", False) and isinstance(w, BasePage):
                 w.cleanup_pipeline()
 
     def _viewer_has_unsaved(self, viewer=None) -> bool:
@@ -201,7 +201,7 @@ class WindowPipelineMixin(_Base):
         if ps and ps.get("temp_path"):
             self._save_pipeline()
         elif self._current_tool >= 0:
-            w = self.stack.widget(self._current_tool)
+            w = self._get_or_create_tool(self._current_tool)
             fn = getattr(w, "_run", None)
             if callable(fn):
                 fn()
@@ -216,7 +216,7 @@ class WindowPipelineMixin(_Base):
     def _wait_for_workers_on_all_pages(self) -> None:
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
-            if page is not None:
+            if page is not None and not getattr(page, "_is_lazy_placeholder", False):
                 with contextlib.suppress(Exception):
                     wait_fn = getattr(page, "wait_for_workers", None)
                     if callable(wait_fn):
@@ -226,8 +226,9 @@ class WindowPipelineMixin(_Base):
         holders: list[Any] = [
             self.stack.widget(i)
             for i in range(self.stack.count())
-            if self.stack.widget(i) is not None
+            if self.stack.widget(i) is not None and not getattr(self.stack.widget(i), "_is_lazy_placeholder", False)
         ]
         holders += list(self._viewers)
         for holder in holders:
             self._wipe_password_holder(holder)
+

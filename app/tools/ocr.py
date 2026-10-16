@@ -1,3 +1,4 @@
+# app/tools/ocr.py
 """PDFApps – TabOCR: OCR text recognition tool supporting RapidOCR (ONNX) and EasyOCR."""
 
 from __future__ import annotations
@@ -6,6 +7,7 @@ import contextlib
 import os
 import tempfile
 import warnings
+import importlib.util
 from typing import Any
 
 import fitz
@@ -33,22 +35,13 @@ from app.worker import TaskRunner, run_task
 from app.constants import TEXT_SEC, DESKTOP
 from app.widgets import DropFileEdit, FocusComboBox
 
-# Check for RapidOCR availability
-try:
-    from rapidocr_onnxruntime import RapidOCR
-    HAS_RAPID_OCR = True
-except ImportError:
-    RapidOCR = None  # type: ignore
-    HAS_RAPID_OCR = False
 
-# Check for EasyOCR availability
-try:
-    import easyocr
-    import easyocr.utils
-    HAS_EASY_OCR = True
-except ImportError:
-    easyocr = None  # type: ignore
-    HAS_EASY_OCR = False
+def _has_rapidocr() -> bool:
+    return importlib.util.find_spec("rapidocr_onnxruntime") is not None
+
+
+def _has_easyocr() -> bool:
+    return importlib.util.find_spec("easyocr") is not None
 
 
 class TabOCR(BasePage):
@@ -220,7 +213,7 @@ class TabOCR(BasePage):
         # Determine active engine
         use_rapid = False
         if engine_mode == "rapid":
-            if not HAS_RAPID_OCR:
+            if not _has_rapidocr():
                 QMessageBox.critical(
                     self,
                     t("msg.missing_dep"),
@@ -229,7 +222,7 @@ class TabOCR(BasePage):
                 return
             use_rapid = True
         elif engine_mode == "easy":
-            if not HAS_EASY_OCR:
+            if not _has_easyocr():
                 QMessageBox.critical(
                     self,
                     t("msg.missing_dep"),
@@ -238,11 +231,11 @@ class TabOCR(BasePage):
                 return
             use_rapid = False
         else:  # "auto"
-            if HAS_RAPID_OCR and selected_lang_list == ["en"]:
+            if _has_rapidocr() and selected_lang_list == ["en"]:
                 use_rapid = True
-            elif HAS_EASY_OCR:
+            elif _has_easyocr():
                 use_rapid = False
-            elif HAS_RAPID_OCR:
+            elif _has_rapidocr():
                 use_rapid = True
             else:
                 QMessageBox.critical(
@@ -304,6 +297,7 @@ class TabOCR(BasePage):
                 if use_rapid:
                     _self.progress.emit(10, "Initializing RapidOCR (ONNX engine)...")
                     try:
+                        from rapidocr_onnxruntime import RapidOCR
                         rapid_engine = RapidOCR()
                     except Exception as exc:
                         raise RuntimeError(f"Failed to initialize RapidOCR: {exc}") from exc

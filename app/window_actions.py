@@ -1,4 +1,3 @@
-
 # app/window_actions.py
 """PDFApps – Navigation, themes, UI interactions, and page control mixin."""
 from __future__ import annotations
@@ -25,11 +24,6 @@ from app.utils import _make_palette, show_error
 from app.widgets import DropFileEdit, MultiDropWidget
 from app.viewer.presentation import PresentationWidget
 from app.nav_config import NAV_ITEMS, _NAV_KEYS
-from app.editor.tab import TabEditar
-from app.tools.crop import TabCortar
-from app.tools.page_numbers import TabPageNumbers
-from app.tools.reorder import TabReordenar
-from app.tools.rotate import TabRotar
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import (
@@ -96,10 +90,22 @@ class WindowActionsMixin(_Base):
         _sb: QStatusBar
         _fullscreen: bool
 
+        def _get_or_create_tool(self, index: int) -> QWidget | None: ...
         def _add_viewer_tab(self, path: str = ...) -> PdfViewerPanel: ...
         def _update_tab_bar_visibility(self) -> None: ...
         def _wait_for_workers_on_all_pages(self) -> None: ...
         def _wipe_all_pdf_passwords(self) -> None: ...
+
+    @staticmethod
+    def _get_canvas_page_count(canvas: Any) -> int:
+        """Safely extract page_count as integer from dynamic canvas objects without Pylance typing issues."""
+        fn = getattr(canvas, "page_count", None)
+        if callable(fn):
+            try:
+                return int(cast(Any, fn)())
+            except Exception:
+                return 0
+        return 0
 
     def _zoom_in_current(self):
         pres = getattr(self, "_presentation", None)
@@ -107,14 +113,17 @@ class WindowActionsMixin(_Base):
             return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
             canvas = getattr(edit_w, "_canvas", None)
             if canvas is not None:
                 if getattr(canvas, "_selected_overlay_idx", -1) >= 0:
-                    canvas.scale_selected_overlay(1.10)
-                    return
-                if hasattr(canvas, "zoom_in"):
-                    canvas.zoom_in()
+                    scale_fn = getattr(canvas, "scale_selected_overlay", None)
+                    if callable(scale_fn):
+                        scale_fn(1.10)
+                        return
+                zoom_in_fn = getattr(canvas, "zoom_in", None)
+                if callable(zoom_in_fn):
+                    zoom_in_fn()
                     return
         if self._viewer:
             canvas = getattr(self._viewer, "_canvas", None)
@@ -127,14 +136,17 @@ class WindowActionsMixin(_Base):
             return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
             canvas = getattr(edit_w, "_canvas", None)
             if canvas is not None:
                 if getattr(canvas, "_selected_overlay_idx", -1) >= 0:
-                    canvas.scale_selected_overlay(0.90)
-                    return
-                if hasattr(canvas, "zoom_out"):
-                    canvas.zoom_out()
+                    scale_fn = getattr(canvas, "scale_selected_overlay", None)
+                    if callable(scale_fn):
+                        scale_fn(0.90)
+                        return
+                zoom_out_fn = getattr(canvas, "zoom_out", None)
+                if callable(zoom_out_fn):
+                    zoom_out_fn()
                     return
         if self._viewer:
             canvas = getattr(self._viewer, "_canvas", None)
@@ -147,43 +159,46 @@ class WindowActionsMixin(_Base):
             return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
             canvas = getattr(edit_w, "_canvas", None)
-            if canvas is not None and hasattr(canvas, "zoom_reset"):
-                canvas.zoom_reset()
-                return
+            if canvas is not None:
+                reset_fn = getattr(canvas, "zoom_reset", None)
+                if callable(reset_fn):
+                    reset_fn()
+                    return
         if self._viewer:
             canvas = getattr(self._viewer, "_canvas", None)
             if canvas is not None and hasattr(canvas, "zoom_reset"):
                 canvas.zoom_reset()
 
-    def _tool_idx_for_class(self, cls) -> int:
-        for idx, (_, _, tool_cls) in enumerate(_NAV_KEYS):
-            if tool_cls is cls:
+    def _tool_idx_for_key(self, target_key: str) -> int:
+        for idx, (key, _, _) in enumerate(_NAV_KEYS):
+            if key == target_key:
                 return idx
         return -1
 
     def _edit_tool_idx(self) -> int:
-        return self._tool_idx_for_class(TabEditar)
+        return self._tool_idx_for_key("nav.edit")
 
     def _rotate_tool_idx(self) -> int:
-        return self._tool_idx_for_class(TabRotar)
+        return self._tool_idx_for_key("nav.rotate")
 
     def _crop_tool_idx(self) -> int:
-        return self._tool_idx_for_class(TabCortar)
+        return self._tool_idx_for_key("nav.crop")
 
     def _reorder_tool_idx(self) -> int:
-        return self._tool_idx_for_class(TabReordenar)
+        return self._tool_idx_for_key("nav.reorder")
 
     def _page_numbers_tool_idx(self) -> int:
-        return self._tool_idx_for_class(TabPageNumbers)
+        return self._tool_idx_for_key("nav.page_numbers")
 
     def _toggle_pages_sidebar(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar) and hasattr(edit_w, "toggle_pages_sidebar"):
-                edit_w.toggle_pages_sidebar()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            toggle_fn = getattr(edit_w, "toggle_pages_sidebar", None)
+            if callable(toggle_fn):
+                toggle_fn()
                 return
         viewer = self._viewer
         if viewer:
@@ -195,9 +210,10 @@ class WindowActionsMixin(_Base):
     def _toggle_right_pane(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                edit_w.toggle_controls()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            toggle_fn = getattr(edit_w, "toggle_controls", None)
+            if callable(toggle_fn):
+                toggle_fn()
             return
         if self._right_tool_container.isVisible():
             self._saved_right_width = max(260, self._right_tool_container.width())
@@ -272,17 +288,15 @@ class WindowActionsMixin(_Base):
         elif self._current_tool == edit_idx:
             self._undo_top_btn.setVisible(True)
             self._redo_top_btn.setVisible(True)
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                self._undo_top_btn.setEnabled(bool(edit_w._pending))
-                self._redo_top_btn.setEnabled(bool(edit_w._redo_stack))
-            else:
-                self._undo_top_btn.setEnabled(False)
-                self._redo_top_btn.setEnabled(False)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            pending = getattr(edit_w, "_pending", None)
+            redo_stack = getattr(edit_w, "_redo_stack", None)
+            self._undo_top_btn.setEnabled(bool(pending))
+            self._redo_top_btn.setEnabled(bool(redo_stack))
         elif self._current_tool in (crop_idx, page_numbers_idx):
             self._undo_top_btn.setVisible(True)
             self._redo_top_btn.setVisible(True)
-            tool_w = self.stack.widget(self._current_tool)
+            tool_w: Any = self._get_or_create_tool(self._current_tool)
             btn_u = getattr(tool_w, "btn_undo", None)
             btn_r = getattr(tool_w, "btn_redo", None)
             self._undo_top_btn.setEnabled(btn_u.isEnabled() if btn_u else False)
@@ -298,9 +312,10 @@ class WindowActionsMixin(_Base):
             return
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                inline_edit = getattr(edit_w._canvas, "_inline_edit", None)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None:
+                inline_edit = getattr(canvas, "_inline_edit", None)
                 if inline_edit and inline_edit.isVisible():
                     inline_edit.selectAll()
                     return
@@ -326,7 +341,7 @@ class WindowActionsMixin(_Base):
             from app.i18n import _update_config
             usage = dict(self._tool_usage)
             _update_config(lambda cfg: cfg.__setitem__("tool_usage", usage))
-        widget = self.stack.widget(index)
+        widget: Any = self._get_or_create_tool(index)
         if widget is None:
             return
         viewer = self._viewer
@@ -355,8 +370,9 @@ class WindowActionsMixin(_Base):
                     pass
         if canvas is None and hasattr(self, "_edit_tool_idx"):
             edit_idx = self._edit_tool_idx()
-            if edit_idx >= 0:
-                canvas = getattr(self.stack.widget(edit_idx), '_canvas', None)
+            if edit_idx >= 0 and self._current_tool == edit_idx:
+                edit_w: Any = self._get_or_create_tool(edit_idx)
+                canvas = getattr(edit_w, '_canvas', None)
         viewer = self._viewer
         if canvas is None and viewer:
             canvas = getattr(viewer, '_canvas', None)
@@ -434,6 +450,7 @@ class WindowActionsMixin(_Base):
         else:
             self._setup_zoom_bar(False)
             self._current_tool = row
+            tool_widget: Any = self._get_or_create_tool(row)
             self.stack.setCurrentIndex(row)
             self._right_tool_container.setVisible(True)
             self.stack.setVisible(True)
@@ -447,9 +464,9 @@ class WindowActionsMixin(_Base):
                 self._tab_container.setVisible(False)
                 self._pages_toggle_btn.setVisible(True)
                 self._setup_zoom_bar(True)
-                edit_w = self.stack.widget(edit_idx)
-                if isinstance(edit_w, TabEditar):
-                    edit_w._ctrl_scroll.setVisible(True)
+                ctrl_scroll = getattr(tool_widget, "_ctrl_scroll", None)
+                if ctrl_scroll is not None:
+                    ctrl_scroll.setVisible(True)
                 if viewer:
                     viewer.set_page_rotations({})
                     viewer.set_crop_mode(False)
@@ -469,39 +486,49 @@ class WindowActionsMixin(_Base):
                 self._splitter.setSizes([max(260, total - tool_w), tool_w])
 
                 if row == rotate_idx:
-                    rot_w = self.stack.widget(rotate_idx)
-                    if isinstance(rot_w, TabRotar) and viewer:
-                        viewer.set_page_rotations(rot_w._rotations)
+                    rot_w = tool_widget
+                    rotations = getattr(rot_w, "_rotations", None)
+                    if rotations is not None and viewer:
+                        viewer.set_page_rotations(rotations)
                 elif viewer:
                     viewer.set_page_rotations({})
 
                 if row == crop_idx:
-                    crop_w = self.stack.widget(crop_idx)
-                    if isinstance(crop_w, TabCortar):
-                        active = crop_w.btn_draw_crop.isChecked()
+                    crop_w = tool_widget
+                    btn_draw = getattr(crop_w, "btn_draw_crop", None)
+                    if btn_draw is not None:
+                        active = btn_draw.isChecked()
                         if viewer:
                             viewer.set_crop_mode(active)
-                            crop_w._emit_preview()
-                            viewer.set_page_crops(crop_w._applied_crops)
+                            emit_fn = getattr(crop_w, "_emit_preview", None)
+                            if callable(emit_fn):
+                                emit_fn()
+                            applied_crops = getattr(crop_w, "_applied_crops", None)
+                            if applied_crops is not None:
+                                viewer.set_page_crops(applied_crops)
                 elif viewer:
                     viewer.set_crop_mode(False)
                     viewer.set_crop_preview(None)
                     viewer.set_page_crops({})
 
                 if row == page_numbers_idx:
-                    pn_w = self.stack.widget(page_numbers_idx)
-                    if isinstance(pn_w, TabPageNumbers):
-                        pn_w._emit_preview()
-                        pn_w._update_undo_redo_state()
+                    pn_w = tool_widget
+                    emit_fn = getattr(pn_w, "_emit_preview", None)
+                    if callable(emit_fn):
+                        emit_fn()
+                    update_fn = getattr(pn_w, "_update_undo_redo_state", None)
+                    if callable(update_fn):
+                        update_fn()
                 elif viewer:
                     viewer.set_numbers_preview(None)
 
                 if row == reorder_idx:
-                    reorder_w = self.stack.widget(reorder_idx)
-                    if isinstance(reorder_w, TabReordenar):
-                        order = reorder_w.get_order()
+                    reorder_w = tool_widget
+                    get_order_fn = getattr(reorder_w, "get_order", None)
+                    if callable(get_order_fn):
+                        order = get_order_fn()
                         if order and viewer:
-                            viewer.set_page_order(order)
+                            viewer.set_page_order(cast(list[int] | None, order))
                 elif viewer:
                     viewer.set_page_order(None)
 
@@ -511,7 +538,6 @@ class WindowActionsMixin(_Base):
         self._update_undo_redo_buttons()
 
     def _open_pdf(self):
-        """Open files via Ctrl+O or Toolbar button, supporting all files and auto-conversion."""
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             t("btn.open_pdf"),
@@ -553,16 +579,16 @@ class WindowActionsMixin(_Base):
     def _set_status(self, msg: str):
         self._sb.showMessage(msg)
 
-    # ── Page navigation ───────────────────────────────────────────────────
     def _update_page_nav(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                n = edit_w._canvas.page_count()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None:
+                n = self._get_canvas_page_count(canvas)
                 if n > 0:
                     self._page_nav_widget.setVisible(True)
-                    idx = edit_w._page_idx
+                    idx = int(cast(Any, getattr(edit_w, "_page_idx", 0) or 0))
                     self._page_input.setText(str(idx + 1))
                     self._page_total_lbl.setText(f"/ {n}")
                     self._first_pg_btn.setEnabled(idx > 0)
@@ -588,8 +614,8 @@ class WindowActionsMixin(_Base):
         sb_scroll = getattr(viewer, "_canvas_scroll", None)
         sb = sb_scroll.verticalScrollBar() if sb_scroll else None
         sb_val = sb.value() if sb else 0
-        idx = canvas.page_at_y(sb_val)
-        total = len(entries)
+        idx = int(canvas.page_at_y(sb_val))
+        total = int(len(entries))
         self._page_input.setText(str(idx + 1))
         self._page_total_lbl.setText(f"/ {total}")
         self._first_pg_btn.setEnabled(idx > 0)
@@ -601,9 +627,10 @@ class WindowActionsMixin(_Base):
     def _goto_first_page(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                edit_w._scroll_to(0)
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            scroll_fn = getattr(edit_w, "_scroll_to", None)
+            if callable(scroll_fn):
+                scroll_fn(0)
                 return
         viewer = self._viewer
         if not viewer:
@@ -622,9 +649,10 @@ class WindowActionsMixin(_Base):
     def _goto_prev_page(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                edit_w._prev_page()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            prev_fn = getattr(edit_w, "_prev_page", None)
+            if callable(prev_fn):
+                prev_fn()
                 return
         viewer = self._viewer
         if not viewer:
@@ -645,9 +673,10 @@ class WindowActionsMixin(_Base):
     def _goto_next_page(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                edit_w._next_page()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            next_fn = getattr(edit_w, "_next_page", None)
+            if callable(next_fn):
+                next_fn()
                 return
         viewer = self._viewer
         if not viewer:
@@ -668,11 +697,14 @@ class WindowActionsMixin(_Base):
     def _goto_last_page(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                n = edit_w._canvas.page_count()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None:
+                n = self._get_canvas_page_count(canvas)
                 if n > 0:
-                    edit_w._scroll_to(n - 1)
+                    scroll_fn = getattr(edit_w, "_scroll_to", None)
+                    if callable(scroll_fn):
+                        scroll_fn(n - 1)
                 return
         viewer = self._viewer
         if not viewer:
@@ -691,15 +723,18 @@ class WindowActionsMixin(_Base):
     def _goto_input_page(self):
         edit_idx = self._edit_tool_idx()
         if self._current_tool == edit_idx:
-            edit_w = self.stack.widget(edit_idx)
-            if isinstance(edit_w, TabEditar):
-                n = edit_w._canvas.page_count()
+            edit_w: Any = self._get_or_create_tool(edit_idx)
+            canvas = getattr(edit_w, "_canvas", None)
+            if canvas is not None:
+                n = self._get_canvas_page_count(canvas)
                 try:
                     p = int(self._page_input.text())
                 except ValueError:
                     return
                 p = max(1, min(p, n))
-                edit_w._scroll_to(p - 1)
+                scroll_fn = getattr(edit_w, "_scroll_to", None)
+                if callable(scroll_fn):
+                    scroll_fn(p - 1)
                 return
         viewer = self._viewer
         if not viewer:
@@ -835,7 +870,6 @@ class WindowActionsMixin(_Base):
             self._toc_top_btn.setVisible(False)
             self._night_top_btn.setChecked(False)
 
-    # ── Fullscreen & Presentation ──────────────────────────────────────────
     def _toggle_fullscreen(self):
         self._fullscreen = not self._fullscreen
         if self._fullscreen:
@@ -960,17 +994,16 @@ class WindowActionsMixin(_Base):
             v.update_theme(self._dark_mode)
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
-            fn = getattr(w, "update_theme", None)
-            if callable(fn):
-                fn(self._dark_mode)
-        for i in range(self.stack.count()):
-            w = self.stack.widget(i)
-            for cls in (DropFileEdit, MultiDropWidget):
-                for child in w.findChildren(cls):
-                    child_fn = getattr(child, "update_theme", None)
-                    if callable(child_fn):
-                        with contextlib.suppress(RuntimeError):
-                            child_fn(self._dark_mode)
+            if w and not getattr(w, "_is_lazy_placeholder", False):
+                fn = getattr(w, "update_theme", None)
+                if callable(fn):
+                    fn(self._dark_mode)
+                for cls in (DropFileEdit, MultiDropWidget):
+                    for child in w.findChildren(cls):
+                        child_fn = getattr(child, "update_theme", None)
+                        if callable(child_fn):
+                            with contextlib.suppress(RuntimeError):
+                                child_fn(self._dark_mode)
         pres = getattr(self, "_presentation", None)
         if pres is not None and isValid(pres):
             pres.update_theme(self._dark_mode)
